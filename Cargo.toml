@@ -1,0 +1,31 @@
+[package]
+name = "hermes-blitz-browser"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+blitz-dom = "0.3.0-beta.4"
+blitz-html = "0.3.0-beta.4"
+blitz-paint = "0.3.0-beta.4"
+blitz-traits = "0.3.0-beta.4"
+anyrender = "0.14"
+anyrender_vello = "0.15"
+winit = "0.30.13"
+pollster = "0.4"
+png = "0.17"
+blitz-net = "0.3.0-beta.4"
+url = "2"
+tokio = { version = "1.54.1", features = ["rt", "net", "time", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+markup5ever = "0.40"
+
+[build-dependencies]
+cc = "1.2"
+
+# The document specifies release-quality rendering; debug builds of the Stylo
+# CSS engine are unusably slow, so even the dev profile gets optimised deps.
+[profile.dev.package."*"]
+opt-level = 3
