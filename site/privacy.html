@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="application-name" content="Walkaway"/>
+<meta name="description" content="Walkaway privacy policy"/>
+<title>Privacy policy — Walkaway</title>
+<style>
+body{background:#10161f;color:#f2f5f9;font:17px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0}
+main{max-width:760px;margin:0 auto;padding:40px 22px 64px}
+h1{font-size:30px} h2{font-size:20px;margin-top:32px} a{color:#6fd598}
+code{background:#1a2331;padding:2px 6px;border-radius:4px;font-size:14px}
+li{margin:6px 0} .muted{color:#a8b3c2}
+</style></head><body><main><h1>Walkaway Privacy Policy</h1>
+<p>Effective: 2026-11-03. Walkaway is self-hosted software. The developer operates no Walkaway servers and receives no user data.</p>
+<h2>What runs where</h2>
+<ul>
+<li>The companion relay and browser agent run on the user&#x27;s own machine.</li>
+<li>The Muse Connector endpoint run by the user accepts task goals and returns</li>
+</ul>
+<p>task status as text: goal, page title, page URL, proposed action, step counts, elapsed time, and model names.</p>
+<ul>
+<li>Browser screenshots are sent only from the user&#x27;s companion relay to the</li>
+</ul>
+<p>user&#x27;s own glasses Web App session. Screenshots are never returned through the Muse Connector and are never stored by Walkaway.</p>
+<h2>Data shared with model providers</h2>
+<p>To choose steps, the companion sends page text, the visible element list, the goal, and recent actions to the model provider the user configured (Meta Model API when <code>MODEL_API_KEY</code> is set; otherwise the fallback provider named in the user&#x27;s local configuration). That provider&#x27;s privacy policy governs data sent to the provider. Walkaway does not send screenshots to model providers.</p>
+<h2>Authentication</h2>
+<p>The connector requires a bearer token chosen by the user (<code>WALKAWAY_CONNECTOR_TOKEN</code>). Tokens are stored only in the user&#x27;s environment.</p>
+<h2>Retention</h2>
+<p>Walkaway stores no task history on disk. State lives in memory in the relay process and ends when the process stops or the user stops the task.</p>
+<h2>Contact</h2>
+<p>Open an issue in the Walkaway GitHub repository.</p></main></body></html>

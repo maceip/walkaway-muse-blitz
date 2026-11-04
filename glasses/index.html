@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=600, initial-scale=1" />
+    <meta name="application-name" content="Walkaway" />
+    <meta name="description" content="Walkaway: watch a companion browser agent work and approve each step from your glasses" />
+    <meta name="mrbd-web-app-capable" content="yes" />
+    <!--
+      The title is free context for the agent host. Direction matters here:
+      the companion agent proposes steps, the HUMAN wearing the glasses
+      approves or rejects them. Voice requests go through walkaway_* tools.
+    -->
+    <title>
+      Walkaway — a companion browser agent proposes one step at a time; the wearer approves or
+      rejects each step. Use walkaway_* tools for every request; never invent a step result.
+    </title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="bar">
+        <h1>Walkaway</h1>
+        <button id="install" type="button" hidden>Add to glasses</button>
+        <span id="status" class="mono">idle</span>
+      </header>
+      <main>
+        <div id="frame-wrap">
+          <img id="frame" alt="Latest browser screenshot from the companion agent" hidden />
+          <p id="no-frame">No browser frame yet. Start a task.</p>
+        </div>
+        <section id="card" aria-live="polite">
+          <p id="say">No task running.</p>
+          <p id="meta" class="mono"></p>
+        </section>
+        <form id="start">
+          <input id="goal" type="text" placeholder="Goal, e.g. Zurich to London flights Friday" aria-label="Task goal" autocomplete="off" />
+          <select id="scenario" aria-label="Scenario">
+            <option value="flights">flights</option>
+            <option value="travel">travel fixture</option>
+            <option value="research">research fixture</option>
+          </select>
+          <button type="submit">Start</button>
+        </form>
+        <div id="controls">
+          <button id="propose" type="button">Propose step</button>
+          <button id="approve" type="button">Approve &amp; act</button>
+          <button id="reject" type="button">Reject</button>
+          <button id="stop" type="button">Stop</button>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

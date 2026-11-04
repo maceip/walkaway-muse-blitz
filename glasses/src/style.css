@@ -1,0 +1,109 @@
+/**
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+:root {
+  color-scheme: dark;
+  --ink: #f2f5f9;
+  --muted: #a8b3c2;
+  --panel: #10161f;
+  --line: #2a3648;
+  --accent: #57c785;
+  --warn: #e8b44a;
+  --danger: #e8736a;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+:focus { outline: none; }
+button:focus, input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: #04060a;
+  color: var(--ink);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+#app {
+  width: 600px;
+  height: 600px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+#bar h1 { font-size: 22px; margin: 0; font-weight: 700; letter-spacing: 0; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+#status { color: var(--muted); text-transform: uppercase; }
+#status[data-status="predicted"] { color: var(--warn); }
+#status[data-status="done"] { color: var(--accent); }
+#status[data-status="blocked"], #status[data-status="error"] { color: var(--danger); }
+
+main { display: flex; flex-direction: column; gap: 10px; padding: 12px 18px 16px; flex: 1; }
+
+#frame-wrap {
+  height: 252px;
+  background: #000;
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+#frame { width: 100%; height: 100%; object-fit: cover; object-position: top center; }
+#no-frame { color: var(--muted); margin: 0; padding: 0 24px; text-align: center; }
+
+#card { min-height: 86px; }
+#say { font-size: 19px; font-weight: 600; margin: 0 0 4px; }
+#meta { color: var(--muted); margin: 0; white-space: pre-wrap; word-break: break-word; }
+
+#start { display: flex; gap: 8px; }
+#start input { flex: 1; min-width: 0; }
+input, select, button {
+  background: #1a2331;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 15px;
+}
+button { cursor: pointer; font-weight: 600; }
+button[disabled] { opacity: 0.4; cursor: default; }
+#controls { display: flex; gap: 8px; }
+#controls button { flex: 1; }
+#approve { border-color: var(--accent); }
+#reject { border-color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none; animation: none; }
+}
+
+/* Phone browsers: same approval page, full-viewport layout.
+   The 600x600 box remains the default for the glasses runtime. */
+@media (max-width: 640px), (pointer: coarse) and (max-width: 900px) {
+  body { align-items: stretch; justify-content: stretch; }
+  #app { width: 100vw; height: 100dvh; }
+  #frame-wrap { height: 38dvh; }
+  #controls { flex-wrap: wrap; }
+  #controls button { flex: 1 1 44%; padding: 13px 10px; }
+  #start { flex-wrap: wrap; }
+  #start input { flex: 1 1 100%; }
+}

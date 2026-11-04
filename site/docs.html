@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="application-name" content="Walkaway"/>
+<meta name="description" content="Walkaway MCP connector documentation"/>
+<title>Connector documentation — Walkaway</title>
+<style>
+body{background:#10161f;color:#f2f5f9;font:17px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0}
+main{max-width:760px;margin:0 auto;padding:40px 22px 64px}
+h1{font-size:30px} h2{font-size:20px;margin-top:32px} a{color:#6fd598}
+code{background:#1a2331;padding:2px 6px;border-radius:4px;font-size:14px}
+li{margin:6px 0} .muted{color:#a8b3c2}
+</style></head><body><main>
+<h1>Walkaway Connector documentation</h1>
+<p>Existing MCP over streamable HTTP. Endpoint: <code>POST /mcp</code> on
+<code>muse.secure.build</code>. Protocol <code>2025-03-26</code>. Authentication:
+Bearer token (<code>WALKAWAY_CONNECTOR_TOKEN</code> on the host).</p>
+<h2>Tools</h2>
+<ul>
+<li><code>walkaway_start_task</code> (write, open-world): start a task from the user's verbatim goal.</li>
+<li><code>walkaway_status</code> (read-only): status, page title/URL, proposed step, approval state.</li>
+<li><code>walkaway_propose_step</code> (write, open-world): propose one step. Never executes.</li>
+<li><code>walkaway_request_approval</code> (write): put a proposal on the user's glasses. Cannot approve.</li>
+<li><code>walkaway_reject_step</code> (write): discard the proposal permanently.</li>
+<li><code>walkaway_stop_task</code> (destructive): stop and close the browser.</li>
+</ul>
+<h2>Data rules</h2>
+<ul>
+<li>Connector results are text only. Screenshots never transit the connector.</li>
+<li>Executing a step requires approval recorded on the glasses Web App.</li>
+<li>No task history is stored on disk.</li>
+</ul>
+<h2>Errors</h2>
+<p>Tool failures return MCP <code>isError</code> text results. HTTP 401 means a
+missing or wrong bearer token. HTTP 413 means the request body exceeded 64 KiB.</p>
+</main></body></html>
