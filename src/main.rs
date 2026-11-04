@@ -20,6 +20,7 @@ mod control;
 mod dom_ffi;
 mod observe;
 mod page_endpoint;
+mod recall;
 mod vault;
 
 use anyrender::WindowRenderer;
@@ -866,7 +867,7 @@ impl BrowserApp {
             "engine": {"name": "hermes-blitz", "version": env!("CARGO_PKG_VERSION")},
             "operations": [
                 "observe", "click", "scroll", "navigate", "back", "forward", "reload",
-                "type", "select", "fill_form", "submit"
+                "type", "select", "fill_form", "replay_recipe", "submit"
             ],
             "remote_page_script": "unsupported",
             "trusted_aot_script": "partial",
@@ -876,6 +877,7 @@ impl BrowserApp {
             "fill_form": "supported",
             "submit": "supported",
             "vault": "supported",
+            "recall": "supported",
             "cookies_persistent": "unsupported",
             "passkeys": "unsupported",
             "screenshot_png": "supported",
@@ -1209,6 +1211,8 @@ impl BrowserApp {
             "text": snapshot.text,
             "elements": serde_json::to_value(&snapshot.elements).unwrap_or(Value::Array(vec![])),
             "focused_element_id": snapshot.focused_element_id,
+            "form_signature": snapshot.form_signature,
+            "matched_recipe_id": snapshot.matched_recipe_id,
             "screenshot_png_b64": screenshot_b64,
             "screenshot_hash": screenshot_hash,
             "frame_id": screenshot_frame,
@@ -1462,6 +1466,26 @@ impl BrowserApp {
                             return;
                         }
                     }
+                }
+            }
+            "replay_recipe" => {
+                let Some(PageCommand::ReplayRecipe { recipe_id }) =
+                    PageCommand::from_operation(&operation)
+                else {
+                    self.refused(conn_id, frame, "internal");
+                    return;
+                };
+                let matched = if !recipe_id.is_empty() {
+                    recall::get_recipe_by_id(&recipe_id)
+                } else {
+                    recall::find_matching_recipe(&snapshot.url, snapshot.form_signature.as_deref())
+                };
+                let Some(recipe) = matched else {
+                    self.refused(conn_id, frame, "target_missing");
+                    return;
+                };
+                if recipe.fields.iter().any(|rf| rf.action == "fill_secret") {
+                    sensitive_target = true;
                 }
             }
             "submit" => {
@@ -2021,6 +2045,46 @@ impl BrowserApp {
                         f.value.as_deref(),
                         f.origin.as_deref(),
                         f.username.as_deref(),
+                    );
+                }
+                tab.instance.page.resolve();
+                tab.bump_generation();
+                if let Some(ref sig) = snapshot.form_signature {
+                    recall::record_recipe(&snapshot.url, sig, fields, snapshot);
+                }
+            }
+            PageCommand::ReplayRecipe { recipe_id } => {
+                let matched = if !recipe_id.is_empty() {
+                    recall::get_recipe_by_id(recipe_id)
+                } else {
+                    recall::find_matching_recipe(&snapshot.url, snapshot.form_signature.as_deref())
+                };
+                let Some(recipe) = matched else {
+                    return;
+                };
+                let tab = self.tab_mut();
+                for rf in &recipe.fields {
+                    let Some(element) = snapshot
+                        .elements
+                        .iter()
+                        .filter(|e| matches!(e.tag.as_str(), "input" | "select" | "textarea"))
+                        .find(|e| {
+                            (rf.dom_id.is_some() && e.dom_id == rf.dom_id)
+                                || (rf.name.is_some() && e.name == rf.name)
+                                || (!rf.label.is_empty() && e.label == rf.label)
+                        })
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    apply_dom_field_action(
+                        tab.instance.page.doc_mut(),
+                        element.node_id,
+                        &element.tag,
+                        &rf.action,
+                        rf.value.as_deref(),
+                        rf.origin.as_deref(),
+                        rf.username.as_deref(),
                     );
                 }
                 tab.instance.page.resolve();

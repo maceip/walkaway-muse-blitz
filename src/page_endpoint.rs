@@ -118,6 +118,9 @@ pub enum PageCommand {
     FillForm {
         fields: Vec<FormFieldCommand>,
     },
+    ReplayRecipe {
+        recipe_id: String,
+    },
     Submit {
         target_id: String,
         target_ref: Option<String>,
@@ -186,6 +189,13 @@ impl PageCommand {
                 }
                 Some(Self::FillForm { fields })
             }
+            "replay_recipe" => Some(Self::ReplayRecipe {
+                recipe_id: operation
+                    .get("recipe_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            }),
             "submit" => Some(Self::Submit {
                 target_id: operation
                     .get("target_id")
@@ -220,6 +230,7 @@ impl PageCommand {
             Self::Type { .. } => "type",
             Self::Select { .. } => "select",
             Self::FillForm { .. } => "fill_form",
+            Self::ReplayRecipe { .. } => "replay_recipe",
             Self::Submit { .. } => "submit",
             Self::Scroll { .. } => "scroll",
             Self::Navigate { .. } => "navigate",
@@ -274,6 +285,10 @@ impl PageCommand {
             Self::FillForm { fields } => json!({
                 "kind": "fill_form",
                 "fields": fields.iter().map(FormFieldCommand::to_value).collect::<Vec<_>>(),
+            }),
+            Self::ReplayRecipe { recipe_id } => json!({
+                "kind": "replay_recipe",
+                "recipe_id": recipe_id,
             }),
             Self::Submit {
                 target_id,

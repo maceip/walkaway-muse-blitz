@@ -43,6 +43,10 @@ pub struct PageSnapshot {
     pub text: String,
     pub elements: Vec<ElementSnapshot>,
     pub focused_element_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_recipe_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -490,6 +494,10 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
         .max(root.scrollable_overflow().y1)
         .max(metadata.viewport_height as f64);
     let fingerprint = fingerprint(&metadata, &elements);
+    let form_signature = crate::recall::compute_form_signature(&elements);
+    let matched_recipe_id =
+        crate::recall::find_matching_recipe(&metadata.url, form_signature.as_deref())
+            .map(|r| r.recipe_id);
 
     PageSnapshot {
         snapshot_id: metadata.snapshot_id,
@@ -512,5 +520,7 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
         text: collect_visible_text(doc),
         elements,
         focused_element_id,
+        form_signature,
+        matched_recipe_id,
     }
 }
