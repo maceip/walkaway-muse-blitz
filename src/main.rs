@@ -20,12 +20,15 @@ mod control;
 mod dom_ffi;
 mod observe;
 mod page_endpoint;
+mod vault;
 
 use anyrender::WindowRenderer;
 use anyrender_vello::VelloWindowRenderer;
-use blitz_dom::{DocumentConfig, LocalName, NodeData, Point};
+use blitz_dom::{DocumentConfig, LocalName, Namespace, NodeData, Point, QualName};
 use blitz_html::HtmlDocument;
+use blitz_traits::node_id::NodeId;
 use blitz_traits::shell::{ColorScheme, Viewport};
+use markup5ever::local_name;
 use browser::{Browser, SharedProvider};
 use chrome::{CHROME_HEIGHT, ChromeState, SupervisionInfo, TabInfo, Theme};
 use control::{ControlHub, Role};
@@ -225,7 +228,12 @@ impl Page {
         // Parsing may kick off stylesheet/image fetches; they are spawned onto
         // the Tokio runtime, so the runtime context must be entered here.
         let _guard = browser::enter_runtime();
-        let mut ua = vec![blitz_dom::UserAgentStylesheet::default_sheet()];
+        let mut ua = vec![
+            blitz_dom::UserAgentStylesheet::default_sheet(),
+            blitz_dom::UserAgentStylesheet::parse(
+                "select { display: inline-block; min-width: 80px; min-height: 24px; }",
+            ),
+        ];
         if let Some(css) = extra_ua {
             ua.push(blitz_dom::UserAgentStylesheet::parse(css));
         }
@@ -820,7 +828,22 @@ impl BrowserApp {
             "surface": surface,
             "result": result,
         });
-        session.audit.push(record);
+        session.audit.push(record.clone());
+        if let Ok(path) = std::env::var("HERMES_AUDIT_PATH") {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                if let Ok(line) = serde_json::to_string(&record) {
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(trimmed)
+                    {
+                        use std::io::Write;
+                        let _ = writeln!(f, "{line}");
+                    }
+                }
+            }
+        }
     }
 
     fn refused(&mut self, conn_id: u64, frame: &Value, reason: &str) {
@@ -841,11 +864,18 @@ impl BrowserApp {
         json!({
             "v": 1, "type": "capabilities", "protocol": 1,
             "engine": {"name": "hermes-blitz", "version": env!("CARGO_PKG_VERSION")},
-            "operations": ["observe", "click", "scroll", "navigate", "back", "forward", "reload"],
+            "operations": [
+                "observe", "click", "scroll", "navigate", "back", "forward", "reload",
+                "type", "select", "fill_form", "submit"
+            ],
             "remote_page_script": "unsupported",
             "trusted_aot_script": "partial",
-            "text_input": "unsupported",
-            "forms": "unsupported",
+            "text_input": "supported",
+            "forms": "supported",
+            "select": "supported",
+            "fill_form": "supported",
+            "submit": "supported",
+            "vault": "supported",
             "cookies_persistent": "unsupported",
             "passkeys": "unsupported",
             "screenshot_png": "supported",
@@ -1295,14 +1325,17 @@ impl BrowserApp {
             Some(target_ref) => snapshot.elements.iter().find(|e| e.node_ref == target_ref),
             None => target_id.and_then(|id| snapshot.elements.iter().find(|e| e.id == id)),
         };
-        let sensitive_target = target.is_some_and(|e| {
-            e.value_state == observe::ValueState::Sensitive || {
-                let label = e.label.to_ascii_lowercase();
-                ["password", "delete", "purchase", "credit card", "one-time"]
-                    .iter()
-                    .any(|w| label.contains(w))
-            }
-        });
+        let is_el_sensitive = |e: &observe::ElementSnapshot| {
+            e.value_state == observe::ValueState::Sensitive
+                || e.input_type.as_deref() == Some("password")
+                || {
+                    let label = e.label.to_ascii_lowercase();
+                    ["password", "delete", "purchase", "credit card", "one-time"]
+                        .iter()
+                        .any(|w| label.contains(w))
+                }
+        };
+        let mut sensitive_target = target.is_some_and(is_el_sensitive);
 
         match op_kind {
             "click" => {
@@ -1366,10 +1399,85 @@ impl BrowserApp {
                     let detail = target.map(|e| e.label.clone()).unwrap_or_default();
                     self.refused(conn_id, frame, "sensitive_requires_human");
                     self.raise_action_required("password", &detail);
-                } else {
-                    self.refused(conn_id, frame, "capability_unsupported");
+                    return;
                 }
-                return;
+                let Some(element) = target else {
+                    self.refused(conn_id, frame, "target_missing");
+                    return;
+                };
+                if !element.visible {
+                    self.refused(conn_id, frame, "target_not_visible");
+                    return;
+                }
+                if !element.enabled {
+                    self.refused(conn_id, frame, "target_disabled");
+                    return;
+                }
+                if PageCommand::from_operation(&operation).is_none() {
+                    self.refused(conn_id, frame, "internal");
+                    return;
+                }
+            }
+            "fill_form" => {
+                let Some(PageCommand::FillForm { fields }) = PageCommand::from_operation(&operation)
+                else {
+                    self.refused(conn_id, frame, "internal");
+                    return;
+                };
+                for f in &fields {
+                    if let Some(ref tr) = f.target_ref {
+                        if !tab.instance.known_node_refs.contains(tr) {
+                            self.refused(conn_id, frame, "target_missing");
+                            return;
+                        }
+                        if !snapshot.elements.iter().any(|e| &e.node_ref == tr) {
+                            self.refused(conn_id, frame, "stale_fingerprint");
+                            return;
+                        }
+                    }
+                    let el = match f.target_ref.as_deref() {
+                        Some(tr) => snapshot.elements.iter().find(|e| e.node_ref == tr),
+                        None => f
+                            .target_id
+                            .as_deref()
+                            .and_then(|id| snapshot.elements.iter().find(|e| e.id == id)),
+                    };
+                    let Some(element) = el else {
+                        self.refused(conn_id, frame, "target_missing");
+                        return;
+                    };
+                    if !element.visible {
+                        self.refused(conn_id, frame, "target_not_visible");
+                        return;
+                    }
+                    if !element.enabled {
+                        self.refused(conn_id, frame, "target_disabled");
+                        return;
+                    }
+                    if is_el_sensitive(element) {
+                        sensitive_target = true;
+                        if f.action != "fill_secret" {
+                            self.refused(conn_id, frame, "sensitive_requires_human");
+                            self.raise_action_required("password", &element.label.clone());
+                            return;
+                        }
+                    }
+                }
+            }
+            "submit" => {
+                let Some(element) = target else {
+                    self.refused(conn_id, frame, "target_missing");
+                    return;
+                };
+                if !element.visible {
+                    self.refused(conn_id, frame, "target_not_visible");
+                    return;
+                }
+                if !element.enabled {
+                    self.refused(conn_id, frame, "target_disabled");
+                    return;
+                }
+                sensitive_target = true;
             }
             _ => {
                 self.refused(conn_id, frame, "capability_unsupported");
@@ -1834,6 +1942,151 @@ impl BrowserApp {
                     tab.instance.page.ctx.dirty = false;
                 }
                 tab.bump_generation();
+            }
+            PageCommand::Type {
+                target_id,
+                target_ref,
+                text,
+            } => {
+                let Some(element) = snapshot
+                    .elements
+                    .iter()
+                    .find(|e| {
+                        target_ref.as_deref() == Some(e.node_ref.as_str()) || &e.id == target_id
+                    })
+                    .cloned()
+                else {
+                    return;
+                };
+                let tab = self.tab_mut();
+                apply_dom_field_action(
+                    tab.instance.page.doc_mut(),
+                    element.node_id,
+                    &element.tag,
+                    "type",
+                    Some(text.as_str()),
+                    None,
+                    None,
+                );
+                tab.instance.page.resolve();
+                tab.bump_generation();
+            }
+            PageCommand::Select {
+                target_id,
+                target_ref,
+                value,
+            } => {
+                let Some(element) = snapshot
+                    .elements
+                    .iter()
+                    .find(|e| {
+                        target_ref.as_deref() == Some(e.node_ref.as_str()) || &e.id == target_id
+                    })
+                    .cloned()
+                else {
+                    return;
+                };
+                let tab = self.tab_mut();
+                apply_dom_field_action(
+                    tab.instance.page.doc_mut(),
+                    element.node_id,
+                    &element.tag,
+                    "select",
+                    Some(value.as_str()),
+                    None,
+                    None,
+                );
+                tab.instance.page.resolve();
+                tab.bump_generation();
+            }
+            PageCommand::FillForm { fields } => {
+                let tab = self.tab_mut();
+                for f in fields {
+                    let Some(element) = snapshot
+                        .elements
+                        .iter()
+                        .find(|e| {
+                            f.target_ref.as_deref() == Some(e.node_ref.as_str())
+                                || f.target_id.as_deref() == Some(e.id.as_str())
+                        })
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    apply_dom_field_action(
+                        tab.instance.page.doc_mut(),
+                        element.node_id,
+                        &element.tag,
+                        &f.action,
+                        f.value.as_deref(),
+                        f.origin.as_deref(),
+                        f.username.as_deref(),
+                    );
+                }
+                tab.instance.page.resolve();
+                tab.bump_generation();
+            }
+            PageCommand::Submit {
+                target_id,
+                target_ref,
+            } => {
+                let Some(element) = snapshot
+                    .elements
+                    .iter()
+                    .find(|e| {
+                        target_ref.as_deref() == Some(e.node_ref.as_str()) || &e.id == target_id
+                    })
+                    .cloned()
+                else {
+                    return;
+                };
+                let base_url = self
+                    .tab()
+                    .canonical
+                    .browser
+                    .current()
+                    .map(|e| e.url.clone())
+                    .unwrap_or_else(|| Url::parse(START_URL).expect("start url"));
+                let (action_url, method, entries) = collect_form_submission(
+                    self.tab().instance.page.doc(),
+                    &base_url,
+                    element.node_id,
+                );
+                self.session_event(
+                    OutTarget::Both,
+                    "nav.started",
+                    json!({"url": action_url.to_string()}),
+                );
+                let provider = self.provider.clone();
+                let viewport = page_viewport(self.size, self.scale, self.theme);
+                let theme = self.theme;
+                match browser::submit_form(&provider, &action_url, &method, &entries) {
+                    Ok((final_url, html)) => {
+                        let tab = self.tab_mut();
+                        tab.canonical.browser.commit(final_url.clone(), html.clone());
+                        tab.replace_page(Page::load(
+                            &html,
+                            Some(final_url.clone()),
+                            Some(provider),
+                            viewport,
+                            theme,
+                        ));
+                        tab.canonical.browser.error = None;
+                        tab.canonical.title = title_for(&final_url, tab.instance.page.doc());
+                        self.session_event(
+                            OutTarget::Both,
+                            "nav.committed",
+                            json!({"tab_id": tab_id.0, "url": final_url.to_string()}),
+                        );
+                    }
+                    Err(e) => {
+                        let tab = self.tab_mut();
+                        tab.canonical.browser.fail(e.clone());
+                        let html = error_page(&e);
+                        tab.replace_page(Page::load(&html, None, None, viewport, theme));
+                        tab.canonical.title = "Error".to_string();
+                    }
+                }
             }
             PageCommand::Scroll { dy } => {
                 self.scroll_page(*dy);
@@ -2858,6 +3111,255 @@ fn error_page(message: &str) -> String {
     )
 }
 
+fn qual_name(local: &str) -> QualName {
+    QualName::new(None, Namespace::from(""), LocalName::from(local))
+}
+
+fn apply_dom_field_action(
+    doc: &mut HtmlDocument,
+    node_id: NodeId,
+    tag: &str,
+    action: &str,
+    value: Option<&str>,
+    origin: Option<&str>,
+    username: Option<&str>,
+) {
+    match action {
+        "type" => {
+            let val = value.unwrap_or_default();
+            if tag == "textarea" {
+                let existing_text_child = doc.get_node(node_id).and_then(|n| {
+                    n.children.iter().copied().find(|child| {
+                        matches!(
+                            doc.get_node(*child).map(|c| &c.data),
+                            Some(NodeData::Text(_))
+                        )
+                    })
+                });
+                let mut mutator = doc.mutate();
+                if let Some(text_node) = existing_text_child {
+                    mutator.set_node_text(text_node, val);
+                } else {
+                    let created = mutator.create_text_node(val);
+                    mutator.append_children(node_id, &[created]);
+                }
+                mutator.set_attribute(node_id, qual_name("value"), val);
+            } else {
+                let mut mutator = doc.mutate();
+                mutator.set_attribute(node_id, qual_name("value"), val);
+            }
+        }
+        "fill_secret" => {
+            let (Some(origin), Some(username)) = (origin, username) else {
+                return;
+            };
+            if let Ok(acct) = vault::get_or_create_secret(origin, username) {
+                let mut mutator = doc.mutate();
+                mutator.set_attribute(node_id, qual_name("value"), &acct.secret);
+            }
+        }
+        "select" => {
+            let wanted = value.unwrap_or_default();
+            let options: Vec<(NodeId, bool)> = doc
+                .get_node(node_id)
+                .map(|node| {
+                    node.children
+                        .iter()
+                        .copied()
+                        .filter_map(|child_id| {
+                            let child = doc.get_node(child_id)?;
+                            let data = child.element_data()?;
+                            if data.name.local.to_string().to_ascii_lowercase() != "option" {
+                                return None;
+                            }
+                            let opt_val = data
+                                .attr(local_name!("value"))
+                                .map(str::to_string)
+                                .unwrap_or_else(|| child.text_content().trim().to_string());
+                            let opt_text = child.text_content().trim().to_string();
+                            let matches = opt_val == wanted || opt_text == wanted;
+                            Some((child_id, matches))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut mutator = doc.mutate();
+            for (opt_id, is_match) in options {
+                if is_match {
+                    mutator.set_attribute(opt_id, qual_name("selected"), "selected");
+                } else {
+                    mutator.clear_attribute(opt_id, qual_name("selected"));
+                }
+            }
+            mutator.set_attribute(node_id, qual_name("value"), wanted);
+        }
+        "check" => {
+            let checked = matches!(
+                value.unwrap_or_default().to_ascii_lowercase().as_str(),
+                "true" | "1" | "yes" | "checked" | "on"
+            );
+            let mut mutator = doc.mutate();
+            if checked {
+                mutator.set_attribute(node_id, qual_name("checked"), "true");
+            } else {
+                mutator.clear_attribute(node_id, qual_name("checked"));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_form_submission(
+    doc: &HtmlDocument,
+    base_url: &Url,
+    submitter_id: NodeId,
+) -> (Url, String, Vec<(String, String)>) {
+    // Walk up from submitter_id to find the enclosing <form>, or fall back to root.
+    let mut form_id = None;
+    if let Some(sub_node) = doc.get_node(submitter_id) {
+        if let Some(form_attr) = sub_node
+            .element_data()
+            .and_then(|d| d.attr(local_name!("form")))
+        {
+            form_id = doc.get_element_by_id(form_attr);
+        }
+    }
+    if form_id.is_none() {
+        let mut cur = Some(submitter_id);
+        while let Some(nid) = cur {
+            let Some(node) = doc.get_node(nid) else {
+                break;
+            };
+            if node
+                .element_data()
+                .is_some_and(|d| d.name.local.to_string().eq_ignore_ascii_case("form"))
+            {
+                form_id = Some(nid);
+                break;
+            }
+            cur = node.parent;
+        }
+    }
+    let root_id = form_id.unwrap_or_else(|| doc.root_node().id);
+    let (action_raw, method) = doc
+        .get_node(root_id)
+        .and_then(|n| n.element_data())
+        .map(|d| {
+            let action = d.attr(local_name!("action")).unwrap_or_default().to_string();
+            let method = d
+                .attr(local_name!("method"))
+                .unwrap_or("GET")
+                .to_ascii_uppercase();
+            (action, method)
+        })
+        .unwrap_or_else(|| (String::new(), "GET".to_string()));
+
+    let action_url = if action_raw.trim().is_empty() {
+        base_url.clone()
+    } else {
+        base_url
+            .join(action_raw.trim())
+            .unwrap_or_else(|_| base_url.clone())
+    };
+
+    let mut entries = Vec::new();
+    let mut stack = vec![root_id];
+    while let Some(nid) = stack.pop() {
+        let Some(node) = doc.get_node(nid) else {
+            continue;
+        };
+        for child in node.children.iter().rev() {
+            stack.push(*child);
+        }
+        let Some(data) = node.element_data() else {
+            continue;
+        };
+        if data.attr(local_name!("disabled")).is_some() {
+            continue;
+        }
+        let tag = data.name.local.to_string().to_ascii_lowercase();
+        let Some(name) = data
+            .attr(local_name!("name"))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        match tag.as_str() {
+            "input" => {
+                let input_type = data
+                    .attr(local_name!("type"))
+                    .unwrap_or("text")
+                    .to_ascii_lowercase();
+                match input_type.as_str() {
+                    "checkbox" | "radio" => {
+                        let is_checked = data
+                            .checkbox_input_checked()
+                            .unwrap_or_else(|| data.attr(local_name!("checked")).is_some());
+                        if is_checked {
+                            let val = data.attr(local_name!("value")).unwrap_or("on").to_string();
+                            entries.push((name, val));
+                        }
+                    }
+                    "submit" | "button" | "reset" | "image" | "file" => {
+                        if nid == submitter_id {
+                            if let Some(val) = data.attr(local_name!("value")) {
+                                entries.push((name, val.to_string()));
+                            }
+                        }
+                    }
+                    _ => {
+                        let val = data
+                            .text_input_data()
+                            .map(|d| d.editor.text().to_string())
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| data.attr(local_name!("value")).map(str::to_string))
+                            .unwrap_or_default();
+                        entries.push((name, val));
+                    }
+                }
+            }
+            "select" => {
+                let selected_val = node
+                    .children
+                    .iter()
+                    .copied()
+                    .find_map(|cid| {
+                        let cnode = doc.get_node(cid)?;
+                        let cdata = cnode.element_data()?;
+                        if !cdata.name.local.to_string().eq_ignore_ascii_case("option")
+                            || cdata.attr(local_name!("disabled")).is_some()
+                            || cdata.attr(local_name!("selected")).is_none()
+                        {
+                            return None;
+                        }
+                        Some(
+                            cdata
+                                .attr(local_name!("value"))
+                                .map(str::to_string)
+                                .unwrap_or_else(|| cnode.text_content().trim().to_string()),
+                        )
+                    })
+                    .or_else(|| data.attr(local_name!("value")).map(str::to_string))
+                    .unwrap_or_default();
+                entries.push((name, selected_val));
+            }
+            "textarea" => {
+                let val = data
+                    .text_input_data()
+                    .map(|d| d.editor.text().to_string())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| data.attr(local_name!("value")).map(str::to_string))
+                    .unwrap_or_else(|| node.text_content());
+                entries.push((name, val));
+            }
+            _ => {}
+        }
+    }
+
+    (action_url, method, entries)
+}
+
 /// `--exit-after <seconds>`: run the real event loop for N seconds, then exit.
 fn parse_exit_after() -> Option<Duration> {
     let mut args = std::env::args().skip(1);
@@ -3439,7 +3941,7 @@ fn supervisortest() -> i32 {
         "session starts in agent state",
     );
 
-    // Capabilities are honest about unsupported input.
+    // Capabilities report form/text input support honestly.
     let out = send(
         &mut app,
         2,
@@ -3448,9 +3950,10 @@ fn supervisortest() -> i32 {
     );
     let caps = find(&out, "capabilities").cloned().unwrap_or(Value::Null);
     check(
-        caps.get("text_input").and_then(Value::as_str) == Some("unsupported")
+        caps.get("text_input").and_then(Value::as_str) == Some("supported")
+            && caps.get("forms").and_then(Value::as_str) == Some("supported")
             && caps.get("passkeys").and_then(Value::as_str) == Some("unsupported"),
-        "capabilities report text input and passkeys unsupported",
+        "capabilities report text input and forms supported, passkeys unsupported",
     );
 
     // Observe, propose, and approve through the native supervision bar.
@@ -4038,8 +4541,8 @@ fn supervisortest() -> i32 {
                "rationale": "Type the name"}),
     );
     check(
-        refused(&out).as_deref() == Some("capability_unsupported"),
-        "non-sensitive type refused capability_unsupported until page input lands",
+        find(&out, "proposal.pending").is_some(),
+        "non-sensitive type proposal pends for host approval",
     );
 
     if failures == 0 {

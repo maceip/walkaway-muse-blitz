@@ -62,6 +62,12 @@ pub struct ScrollSnapshot {
 #[derive(Clone, Debug, Serialize)]
 pub struct ElementSnapshot {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dom_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_type: Option<String>,
     /// Stable reference for this node within its page instance, in the
     /// WebDriver sense: the same node keeps the same reference across
     /// snapshots until the document is replaced or the node is removed.
@@ -255,7 +261,12 @@ fn current_value(
     };
 
     let value = if let Some(data) = node.element_data().and_then(|data| data.text_input_data()) {
-        Some(data.editor.text().to_string())
+        let editor_text = data.editor.text().to_string();
+        if !editor_text.is_empty() {
+            Some(editor_text)
+        } else {
+            attr(node, local_name!("value")).map(str::to_string)
+        }
     } else if tag == "select" {
         node.children.iter().copied().find_map(|child_id| {
             let child = doc.get_node(child_id)?;
@@ -312,6 +323,9 @@ fn fingerprint(metadata: &SnapshotMetadata, elements: &[ElementSnapshot]) -> Str
         push_field(&mut index, &format!("{:?}", element.checked));
         push_field(&mut index, &format!("{:?}", element.selected));
         push_field(&mut index, &format!("{:?}", element.value_state));
+        if let Some(val) = &element.value {
+            push_field(&mut index, val);
+        }
     }
     let index_digest = index.finalize();
 
@@ -419,8 +433,25 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
                 .map(|url| url.to_string())
                 .or_else(|| Some(href.to_string()))
         });
+        let dom_id = attr(node, local_name!("id"))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let name = attr(node, local_name!("name"))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let input_type_opt = if tag == "input" {
+            Some(input_type.clone())
+        } else {
+            None
+        };
+        let checked = data
+            .checkbox_input_checked()
+            .or_else(|| (tag == "input" && matches!(input_type.as_str(), "checkbox" | "radio")).then(|| attr(node, local_name!("checked")).is_some()));
         elements.push(ElementSnapshot {
             id: format!("el_{}", elements.len() + 1),
+            dom_id,
+            name,
+            input_type: input_type_opt,
             node_ref: format!("n{}_{}", metadata.page_id, node_id.as_u64()),
             node_id,
             kind: kind.to_string(),
@@ -437,7 +468,7 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
             visible,
             value,
             value_state,
-            checked: data.checkbox_input_checked(),
+            checked,
             selected,
             href,
         });

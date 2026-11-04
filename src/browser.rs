@@ -210,3 +210,47 @@ pub fn fetch(provider: &SharedProvider, url: &Url) -> Result<String, String> {
         Err(e) => Err(format!("{e}")),
     }
 }
+
+/// Blocking HTTP form submission (`GET` or `POST` `application/x-www-form-urlencoded`).
+pub fn submit_form(
+    provider: &SharedProvider,
+    url: &Url,
+    method: &str,
+    entries: &[(String, String)],
+) -> Result<(Url, String), String> {
+    let mut target_url = url.clone();
+    let request = if method.eq_ignore_ascii_case("POST") {
+        let mut req = blitz_traits::net::Request::get(target_url.clone());
+        req.method = blitz_traits::net::Method::POST;
+        req.content_type = Some("application/x-www-form-urlencoded".to_string());
+        let form_data = blitz_traits::net::FormData(
+            entries
+                .iter()
+                .map(|(k, v)| blitz_traits::net::Entry {
+                    name: k.clone(),
+                    value: blitz_traits::net::EntryValue::String(v.clone()),
+                })
+                .collect(),
+        );
+        req.body = blitz_traits::net::Body::Form(form_data);
+        req
+    } else {
+        {
+            let mut qp = target_url.query_pairs_mut();
+            for (k, v) in entries {
+                qp.append_pair(k, v);
+            }
+        }
+        blitz_traits::net::Request::get(target_url.clone())
+    };
+    match runtime().block_on(provider.fetch_async(request)) {
+        Ok((final_url_str, bytes)) => {
+            if bytes.is_empty() {
+                return Err("empty response".to_string());
+            }
+            let final_url = Url::parse(&final_url_str).unwrap_or(target_url);
+            Ok((final_url, String::from_utf8_lossy(&bytes).into_owned()))
+        }
+        Err(e) => Err(format!("{e}")),
+    }
+}
