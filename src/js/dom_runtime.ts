@@ -41,19 +41,56 @@
     node: c_size_t,
     text: c_ptr
   ): void {});
+  const _set_attr = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_set_attribute(
+    node: c_size_t,
+    name: c_ptr,
+    value: c_ptr
+  ): void {});
   const _mark_dirty = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_mark_dirty(): void {});
 
-  /* Allocate an ASCIIZ copy of `s`. Caller frees. */
-  function toAsciiz(s: string): c_ptr {
+  /* Allocate a NUL-terminated UTF-8 copy of `s`. Caller frees.
+   * Supports full Unicode (1-, 2-, 3-, and 4-byte UTF-8 sequences including
+   * UTF-16 surrogate pairs). */
+  function toUtf8z(s: string): c_ptr {
     let n: number = s.length;
-    let buf: c_ptr = _malloc(n + 1);
+    /* Worst-case UTF-8 expansion is 3 bytes per UTF-16 code unit + 1 NUL byte. */
+    let buf: c_ptr = _malloc(n * 3 + 1);
+    let outIdx: number = 0;
     let i: number = 0;
-    for (; i < n; i++) {
-      let code: number = s.charCodeAt(i);
-      if (code > 127) throw Error("non-ASCII string on the FFI boundary");
-      _write_char(buf, i, code);
+    while (i < n) {
+      let c: number = s.charCodeAt(i);
+      i = i + 1;
+      if (c < 0x80) {
+        _write_char(buf, outIdx, c);
+        outIdx = outIdx + 1;
+      } else if (c < 0x800) {
+        _write_char(buf, outIdx, 0xc0 | (c >> 6));
+        _write_char(buf, outIdx + 1, 0x80 | (c & 0x3f));
+        outIdx = outIdx + 2;
+      } else if (c >= 0xd800 && c <= 0xdbff && i < n) {
+        let low: number = s.charCodeAt(i);
+        if (low >= 0xdc00 && low <= 0xdfff) {
+          i = i + 1;
+          let cp: number = ((c - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
+          _write_char(buf, outIdx, 0xf0 | (cp >> 18));
+          _write_char(buf, outIdx + 1, 0x80 | ((cp >> 12) & 0x3f));
+          _write_char(buf, outIdx + 2, 0x80 | ((cp >> 6) & 0x3f));
+          _write_char(buf, outIdx + 3, 0x80 | (cp & 0x3f));
+          outIdx = outIdx + 4;
+        } else {
+          _write_char(buf, outIdx, 0xe0 | (c >> 12));
+          _write_char(buf, outIdx + 1, 0x80 | ((c >> 6) & 0x3f));
+          _write_char(buf, outIdx + 2, 0x80 | (c & 0x3f));
+          outIdx = outIdx + 3;
+        }
+      } else {
+        _write_char(buf, outIdx, 0xe0 | (c >> 12));
+        _write_char(buf, outIdx + 1, 0x80 | ((c >> 6) & 0x3f));
+        _write_char(buf, outIdx + 2, 0x80 | (c & 0x3f));
+        outIdx = outIdx + 3;
+      }
     }
-    _write_char(buf, i, 0);
+    _write_char(buf, outIdx, 0);
     return buf;
   }
 
@@ -67,41 +104,71 @@
     }
 
     setStyleProperty(name: string, value: string): void {
-      let n: c_ptr = toAsciiz(name);
-      let v: c_ptr = toAsciiz(value);
+      let n: c_ptr = toUtf8z(name);
+      let v: c_ptr = toUtf8z(value);
       _set_style(this.id, n, v);
       _free(n);
       _free(v);
+      _mark_dirty();
     }
 
     setInnerText(value: string): void {
-      let t: c_ptr = toAsciiz(value);
+      let t: c_ptr = toUtf8z(value);
       _set_text(this.id, t);
       _free(t);
+      _mark_dirty();
+    }
+
+    setAttribute(name: string, value: string): void {
+      let n: c_ptr = toUtf8z(name);
+      let v: c_ptr = toUtf8z(value);
+      _set_attr(this.id, n, v);
+      _free(n);
+      _free(v);
+      _mark_dirty();
     }
   }
 
   /* Resolve an element id to a node id. 0 means "not present": NodeId 0 is the
    * null id and never resolves, so absence needs no separate channel. */
   function getElementById(id: string): c_size_t {
-    let c: c_ptr = toAsciiz(id);
+    let c: c_ptr = toUtf8z(id);
     let node: c_size_t = _find(c);
     _free(c);
     return node;
   }
 
-  /* ---- Application state ----
+  /* ---- Application state & general DOM API ----
    * Node handles are kept as raw ids rather than nullable objects: typed mode
    * does not narrow a mutable module-level binding, and an id is also what the
    * native event dispatch hands back. */
   let buttonId: c_size_t = 0;
   let labelId: c_size_t = 0;
   let clicks: number = 0;
+  let customClickHandlers: any = {};
+
+  /* Expose a general DOM surface on globalThis.document so any page or
+   * evaluated script can query and mutate Blitz DOM nodes via $SHBuiltin.extern_c. */
+  (globalThis as any).document = {
+    getElementById: function (id: string): any {
+      let nid: c_size_t = getElementById(id);
+      if ((nid as any) === 0) return null;
+      return new BlitzElement(nid);
+    },
+  };
+
+  (globalThis as any).__registerClickHandler = function (id: string, fn: any): void {
+    let nid: c_size_t = getElementById(id);
+    if ((nid as any) !== 0) {
+      customClickHandlers[nid as any] = fn;
+    }
+  };
 
   /* Called once by the host, after the unit has been instantiated. */
   (globalThis as any).__initBlitzContext = function (): void {
     buttonId = getElementById("action-btn");
     labelId = getElementById("status-label");
+    customClickHandlers = {};
   };
 
   /* Called by the host for every dispatched event. `nodeId` is the bubble
@@ -114,6 +181,14 @@
     y: number
   ): void {
     if (eventType !== "click") return;
+
+    let customFn: any = customClickHandlers[nodeId];
+    if (customFn) {
+      customFn(new BlitzElement(nodeId as any), x, y);
+      _mark_dirty();
+      return;
+    }
+
     if ((buttonId as any) === 0) return;
     if (nodeId !== (buttonId as any)) return;
 

@@ -128,49 +128,83 @@ extern "C" HermesAppRuntime *hermes_app_init(void *blitz_ctx_ptr) {
   }
 
   /* Hand control to the DOM runtime so it can bind its listeners. */
-  {
+  try {
     facebook::jsi::Runtime &j = *app->rt;
     facebook::jsi::Function init =
         j.global().getPropertyAsFunction(j, "__initBlitzContext");
     init.call(j);
     j.drainMicrotasks();
+  } catch (const facebook::jsi::JSIException &e) {
+    std::fprintf(stderr, "[hermes] __initBlitzContext threw JSIException: %s\n", e.what());
+    _sh_done(app->shr);
+    delete app;
+    return nullptr;
+  } catch (const std::exception &e) {
+    std::fprintf(stderr, "[hermes] __initBlitzContext threw std::exception: %s\n", e.what());
+    _sh_done(app->shr);
+    delete app;
+    return nullptr;
   }
 
   return app;
 }
 
-extern "C" void hermes_app_dispatch_event(
+extern "C" bool hermes_app_dispatch_event(
     HermesAppRuntime *app,
     const char *event_type,
     uint64_t hit_node_id,
     float x,
     float y) {
-  if (!app || !app->rt) return;
+  if (!app || !app->rt) return false;
   ScopedCurrentApp current(app);
   facebook::jsi::Runtime &j = *app->rt;
 
-  facebook::jsi::Function dispatch =
-      j.global().getPropertyAsFunction(j, "__dispatchBlitzEvent");
-  dispatch.call(
-      j,
-      facebook::jsi::String::createFromUtf8(j, event_type),
-      facebook::jsi::Value(static_cast<double>(hit_node_id)),
-      facebook::jsi::Value(static_cast<double>(x)),
-      facebook::jsi::Value(static_cast<double>(y)));
+  try {
+    facebook::jsi::Function dispatch =
+        j.global().getPropertyAsFunction(j, "__dispatchBlitzEvent");
+    dispatch.call(
+        j,
+        facebook::jsi::String::createFromUtf8(j, event_type ? event_type : ""),
+        facebook::jsi::Value(static_cast<double>(hit_node_id)),
+        facebook::jsi::Value(static_cast<double>(x)),
+        facebook::jsi::Value(static_cast<double>(y)));
 
-  j.drainMicrotasks();
+    j.drainMicrotasks();
+    return true;
+  } catch (const facebook::jsi::JSIException &e) {
+    std::fprintf(stderr, "[hermes] event dispatch threw JSIException: %s\n", e.what());
+    return false;
+  } catch (const std::exception &e) {
+    std::fprintf(stderr, "[hermes] event dispatch threw std::exception: %s\n", e.what());
+    return false;
+  } catch (...) {
+    std::fprintf(stderr, "[hermes] event dispatch threw unknown exception\n");
+    return false;
+  }
 }
 
-extern "C" void hermes_app_eval_script(
+extern "C" bool hermes_app_eval_script(
     HermesAppRuntime *app,
     const char *script_utf8,
     const char *source_url) {
-  if (!app || !app->rt) return;
+  if (!app || !app->rt || !script_utf8) return false;
   ScopedCurrentApp current(app);
   facebook::jsi::Runtime &j = *app->rt;
-  auto buf = std::make_shared<facebook::jsi::StringBuffer>(script_utf8);
-  j.evaluateJavaScript(buf, source_url ? source_url : "<eval>");
-  j.drainMicrotasks();
+  try {
+    auto buf = std::make_shared<facebook::jsi::StringBuffer>(script_utf8);
+    j.evaluateJavaScript(buf, source_url ? source_url : "<eval>");
+    j.drainMicrotasks();
+    return true;
+  } catch (const facebook::jsi::JSIException &e) {
+    std::fprintf(stderr, "[hermes] eval threw JSIException: %s\n", e.what());
+    return false;
+  } catch (const std::exception &e) {
+    std::fprintf(stderr, "[hermes] eval threw std::exception: %s\n", e.what());
+    return false;
+  } catch (...) {
+    std::fprintf(stderr, "[hermes] eval threw unknown exception\n");
+    return false;
+  }
 }
 
 extern "C" void hermes_app_destroy(HermesAppRuntime *app) {

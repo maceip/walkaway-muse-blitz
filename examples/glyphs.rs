@@ -4,7 +4,7 @@
 //!
 //!   cargo run --example glyphs -- /tmp/glyphs.png
 
-use anyrender::{ImageRenderer, WindowRenderer};
+use anyrender::ImageRenderer;
 use anyrender_vello::VelloImageRenderer;
 use blitz_dom::DocumentConfig;
 use blitz_html::HtmlDocument;
