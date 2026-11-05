@@ -1,4 +1,5 @@
 # Walkaway — Wearable-Supervised Parallel Browser Agent
+<img width="701" alt="Blitz Lightspeed Browser Demo" src="https://github.com/user-attachments/assets/bdaa2a50-5acb-4d5c-9f77-2dbfdb24a85f" />
 
 ## The Problem
 Today's browser agents force an impossible choice between reckless autonomy and babysitting a screen: either you hand over raw credentials and let an unverified model click submit on live web forms, or you sit trapped at your desk approving every trivial keystroke until approval fatigue sets in. On top of that, shipping an agent inside a heavyweight Chromium instance makes parallel multi-site workflows painfully slow, bloated, and impossible to supervise once you step away from your laptop.
