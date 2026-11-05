@@ -1,0 +1,13 @@
+{
+  "name": "walkaway-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Wrapper monorepo for the Walkaway supervised local browser demo",
+  "license": "BSD-3-Clause",
+  "workspaces": [
+    "apps/glasses-web",
+    "apps/phone-approval-web",
+    "packages/*"
+  ]
+}

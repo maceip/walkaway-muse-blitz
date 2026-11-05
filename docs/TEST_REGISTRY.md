@@ -191,11 +191,18 @@ hop works across devices.
   DAT hop and worn Ray-Ban Display glasses.
 - Asserts: `executed` receipts for `p2-fill` and `p2-submit` in bridge
   `GET /decisions`, and one account row in SQLite.
-- Last observed: **PARTIAL (not passed)** on 2026-11-04. Bridge bound card
-  #9 to the real `p2-fill` proposal; bus recorded `received` 00:46:33Z and
-  `dat_sent` 00:46:36Z; the run then timed out waiting for the glasses tap
-  (150s window), so no `executed` receipt and `accounts == 0`. Rerun with
-  the script's 600s windows and the wearer tapping both cards.
+- Earlier observed: partial. Bridge bound card #9 to the real `p2-fill`
+  proposal; bus recorded `received` 00:46:33Z and `dat_sent` 00:46:36Z; the
+  run then timed out waiting for the glasses tap (150s window), so no
+  `executed` receipt and `accounts == 0`.
+- Last observed: **PASS** on 2026-11-04 (rerun with 600s windows, wearer
+  tapping both cards). Card #10 (`p2-fill`): `dat_sent` 01:17:11Z, physical
+  ack `approve`/`glasses_dat` 01:21:57Z. Card #11 (`p2-submit`): `dat_sent`
+  01:22:01Z, physical ack `approve`/`glasses_dat` 01:22:10Z. Bridge logged
+  `receipt executed` for both proposals; Hermes audit records both as
+  `result=executed, decided_by=user, surface=glasses` (01:21:57.695Z and
+  01:22:10.881Z); SQLite `accounts == 1` (`Ryan MacArthur`,
+  `ryan@zunftmax.secure.build`). Script result: `P2 PHYSICAL CHAIN PASS`.
 
 ### T-ZONE-X-SUPERPOWERS (Zone X — Headed Commit-Only Gating, Semantic X-Ray HUD, and P-256 WebAuthn Vault)
 
@@ -230,3 +237,46 @@ hop works across devices.
   3. Ignores non-glasses acks (`received`, `dat_sent`, `dat_failed`) and duplicate acks; rejecting Card #3 leaves Portals #2–#10 uncommitted (`total_submissions == 1`), while approving Card #3 commits all 10 portals (`total_submissions == 10`).
   4. `reset_demo.py --reset-demo` resets SQLite, workbench state, vault, recall, and audit logs in `~3ms` (`< 2000ms` gate), with zero secret or private-key leaks.
 - Last observed: **PASS** (3 tests in `16.695s` on 2026-11-04; full 9-test discovery suite `python3 -m unittest discover -s tests/e2e -p "test_*.py" -v` PASS in `37.271s`).
+
+
+### T-TRANSPORT-FREEZE-001 (P3 Frozen USB Transport + Recovery)
+
+- Command: `adb reverse --remove tcp:19099`, then
+  `services/hermes-host/start-transport.sh`, then POST one bus message.
+- Real components: laptop bus on 19099, USB `adb reverse`, installed
+  Walkaway Bridge on Pixel `67080DLDV009AD`.
+- Asserts: script restores `tcp:19099 -> tcp:19099`, reports the single
+  device and installed app, and the next message is `received` by Android.
+- Last observed: **PASS** 2026-11-04. Message #12 `received` ~0.5s after
+  posting; `dat_failed` followed with `SESSION_ENDED_BY_DEVICE` because the
+  glasses were not worn (eligibility signal, not a transport failure).
+- Frozen path: USB + adb reverse only. LAN procedure is documented in
+  `services/hermes-host/README.md` as UNVERIFIED and requires a P1 re-run
+  on LAN before any demo use.
+
+### T-ANDROID-P4-001 (P4 4-State Demo-Safe UI + Dedupe)
+
+- Commands: `./gradlew :app:testDebugUnitTest` and
+  `./gradlew :app:connectedDebugAndroidTest` in
+  `apps/android-notification-bridge/`, plus install/launch on the Pixel.
+- Real components: `BridgeState.kt` (phase derivation + `IdDedupe`),
+  `BridgeStatusPanel.kt`, rewired `BridgeScreen.kt`, laptop bus on 19099.
+- Asserts:
+  1. Unit: all 4 `BridgePhase` mappings; dedupe marks each id exactly once
+     across instances over the same persisted set; eligibility hint mapping
+     (`SESSION_ENDED_BY_DEVICE` / `NO_ELIGIBLE_DEVICE`).
+  2. Instrumented: all 4 phase labels render; no `Approve`/`Reject` nodes
+     exist in the panel composition.
+  3. On-device: real app shows `DISCONNECTED`, then `CONNECTED — WAITING`
+     after Connect; `Latest card #13` renders with zero phone decision
+     buttons; after the test-run data wipe, bus backlog #9-#13 was carded
+     exactly once each (one `dat_failed` per id in the new install).
+- Last observed: **PASS** 2026-11-04 (unit + instrumented BUILD SUCCESSFUL;
+  device states read via UIAutomator). `CARD_ON_GLASSES` and `DECIDED` on
+  the real screen are NOT yet observed: DAT re-registration (wiped by the
+  instrumented run) plus a worn-glasses tap are required; the phase logic
+  and labels for those states are covered by the unit + instrumented tests.
+- Cleanup in the same change: the unreachable template stack
+  (`Navigation.kt`, `NavigationKeys.kt`, `ui/main/*`, `data/*` + template
+  tests) was deleted; `MainActivity` renders `BridgeScreen` directly and
+  nothing referenced the template stack except its own tests.

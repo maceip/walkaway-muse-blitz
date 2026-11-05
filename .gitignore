@@ -1,0 +1,21 @@
+# Build output
+**/dist/
+**/target/
+**/.gradle/
+**/build/
+
+# Dependencies
+**/node_modules/
+
+# Local environment and machine configuration
+.env
+.env.*
+!.env.example
+**/local.properties
+
+# Logs and operating-system files
+*.log
+.DS_Store
+
+**/__pycache__/
+*.pyc
