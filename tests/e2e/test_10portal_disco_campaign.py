@@ -423,11 +423,14 @@ class TenPortalDiscoCampaignE2ETest(unittest.TestCase):
                 self.assertEqual(r2["vault_mode"], "0o600")
                 self.assertEqual(r1["recall_state"], {"recipes": []})
                 self.assertEqual(r1["recall_state"], r2["recall_state"])
-                self.assertEqual(
+                self.assertGreaterEqual(len(r1["vault_state"]["socon_speaker_pw"]), 20)
+                self.assertGreaterEqual(len(r2["vault_state"]["socon_speaker_pw"]), 20)
+                self.assertNotEqual(
                     r1["vault_state"]["socon_speaker_pw"],
-                    "S0c0n!Vault#2026_Secret",
+                    r2["vault_state"]["socon_speaker_pw"],
                 )
-                self.assertEqual(r1["vault_state"], r2["vault_state"])
+                self.assertEqual(r1["vault_state"]["accounts"], [])
+                self.assertEqual(r2["vault_state"]["accounts"], [])
 
                 _, cfp_raw = _http_request(f"{origin}/api/cfp_submissions")
                 self.assertEqual(json.loads(cfp_raw)["cfp_submissions"], [])
@@ -455,7 +458,8 @@ class TenPortalDiscoCampaignE2ETest(unittest.TestCase):
                 cli_out = json.loads(cli_proc.stdout)
                 self.assertTrue(cli_out["ok"])
                 self.assertLess(cli_out["reset_ms"], 2000.0)
-                self.assertEqual(cli_out["vault_state"], r1["vault_state"])
+                self.assertGreaterEqual(len(cli_out["vault_state"]["socon_speaker_pw"]), 20)
+                self.assertEqual(cli_out["vault_state"]["accounts"], [])
             finally:
                 server.shutdown()
                 server.server_close()

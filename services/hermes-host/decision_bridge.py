@@ -11,12 +11,15 @@ routes human decisions:
   In `immediate` card mode a glasses card is posted to the message bus at
   once. In `held` card mode the campaign driver creates cards explicitly via
   `POST /cards` (single proposal or an explicit batch manifest).
-- Only bus acks with `source == "glasses_dat"` and `action` of `approve` or
-  `reject` become Hermes `decision` frames, bound to the exact
+- Human bus acks become Hermes `decision` frames, bound to the exact
   `(session_id, proposal_id, fingerprint, generation)` captured from
-  `proposal.pending`. `received` / `dat_sent` / `dat_failed` acks and every
-  other source are ignored. Consumed cards and decided proposals are never
-  decided twice (Hermes `decision_used` is the backstop).
+  `proposal.pending`: `source == "glasses_dat"` -> `surface="glasses"`, and
+  `source == "android_app"` -> `surface="android_app"` while
+  `--allow-android-approval` is on (default; `--no-allow-android-approval`
+  restores glasses-only). First human tap wins; the other surface's ack for
+  the consumed card is ignored. `received` / `dat_sent` / `dat_failed` and
+  every non-human source are always ignored. Cards are domain-first
+  (`<domain>: <operation>`, title <=80 chars, body <=160 chars).
 
 HTTP API (default 127.0.0.1:19101, `X-Bus-Token` required except /health):
 - `GET /health`    -> sockets, session ids, counts
@@ -39,6 +42,7 @@ import json
 import os
 import socket
 import threading
+from urllib.parse import urlparse
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -91,6 +95,7 @@ class HostClient:
         self.token = token
         self.seq = 0
         self.session_id = None
+        self.start_url = None
         self._send_lock = threading.Lock()
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.connect(str(sock_path))
@@ -104,6 +109,7 @@ class HostClient:
             self.sock.sendall((json.dumps(frame) + "\n").encode())
 
     def open_session(self, title, start_url):
+        self.start_url = start_url
         self.send(
             {
                 "type": "session.open",
@@ -144,10 +150,19 @@ class HostClient:
             self.bridge.on_host_frame(self, frame)
 
 
+def format_card(binding):
+    """Domain-first card text within DAT limits (title <=80, body <=160)."""
+    domain = binding.get("domain") or ""
+    kind = binding.get("operation_kind") or "act"
+    title = f"{domain}: {kind}" if domain else f"Approve {kind}"
+    return title[:80], str(binding.get("rationale") or "Approve action")[:160]
+
+
 class Bridge:
-    def __init__(self, bus, card_mode):
+    def __init__(self, bus, card_mode, allow_android_approval=True):
         self.bus = bus
         self.card_mode = card_mode
+        self.allow_android_approval = allow_android_approval
         self.lock = threading.Lock()
         self.clients = []            # HostClient per Hermes socket
         self.pending = {}            # (session_id, proposal_id) -> binding
@@ -182,8 +197,14 @@ class Bridge:
             "rationale": proposal.get("rationale", "Approve action"),
             "operation_kind": (proposal.get("operation") or {}).get("kind", "act"),
             "requires_glasses": bool(proposal.get("requires_glasses", False)),
+            "page_url": (
+                proposal.get("url") or frame.get("url")
+                or (proposal.get("operation") or {}).get("url")
+                or getattr(client, "start_url", None) or ""
+            ),
             "client": client,
         }
+        binding["domain"] = urlparse(binding["page_url"]).netloc or binding["page_url"][:40]
         key = (binding["session_id"], binding["proposal_id"])
         if not binding["requires_glasses"]:
             with self.lock:
@@ -202,9 +223,10 @@ class Bridge:
         log(f"glasses-pending {key} kind={binding['operation_kind']}")
         if self.card_mode == "immediate":
             try:
+                title, body = format_card(binding)
                 self.create_card(
-                    title=f"Approve {binding['operation_kind']}",
-                    body=binding["rationale"],
+                    title=title,
+                    body=body,
                     entries=[self._manifest_entry(binding)],
                 )
             except ValueError as e:
@@ -242,7 +264,7 @@ class Bridge:
                     raise ValueError(f"binding mismatch for {key}")
                 keys.append(key)
             kind = self.pending[keys[0]]["classification"] if len(keys) == 1 else "batch_commit"
-        message = self.bus.post_card(title, body, kind, batch_proposals=entries)
+        message = self.bus.post_card(str(title)[:80], str(body)[:160], kind, batch_proposals=entries)
         with self.lock:
             self.cards[message["id"]] = {"keys": keys, "consumed": False}
             self.carded.update(keys)
@@ -256,17 +278,21 @@ class Bridge:
                 if stamp in self.seen_acks:
                     continue
                 self.seen_acks.add(stamp)
-            if ack.get("source") != "glasses_dat" or ack.get("action") not in ("approve", "reject"):
+            surfaces = {"glasses_dat": "glasses"}
+            if self.allow_android_approval:
+                surfaces["android_app"] = "android_app"
+            surface = surfaces.get(ack.get("source"))
+            if surface is None or ack.get("action") not in ("approve", "reject"):
                 with self.lock:
                     self.ignored_acks += 1
                 continue
-            self._apply_glasses_ack(ack)
+            self._apply_human_ack(ack, surface)
 
-    def _apply_glasses_ack(self, ack):
+    def _apply_human_ack(self, ack, surface):
         with self.lock:
             card = self.cards.get(ack.get("message_id"))
             if card is None or card["consumed"]:
-                log(f"glasses ack for unknown/consumed card #{ack.get('message_id')} ignored")
+                log(f"human ack ({surface}) for unknown/consumed card #{ack.get('message_id')} ignored")
                 return
             card["consumed"] = True
             bindings = []
@@ -276,13 +302,14 @@ class Bridge:
                     self.decided.add(key)
                     bindings.append(binding)
                     self.decisions.append(
-                        {"at": now(), "via": "glasses_dat", "decision": ack["action"],
+                        {"at": now(), "via": ack.get("source"), "surface": surface,
+                         "decision": ack["action"],
                          "card_message_id": ack.get("message_id"),
                          "session_id": key[0], "proposal_id": key[1]}
                     )
         for binding in bindings:
-            binding["client"].decide(binding, ack["action"], "user", "glasses")
-            log(f"glasses {ack['action']} -> decision {(binding['session_id'], binding['proposal_id'])}")
+            binding["client"].decide(binding, ack["action"], "user", surface)
+            log(f"{surface} {ack['action']} -> decision {(binding['session_id'], binding['proposal_id'])}")
 
     def ack_loop(self):
         while True:
@@ -321,6 +348,7 @@ class Bridge:
                 "ok": True,
                 "server": "hermes-decision-bridge",
                 "card_mode": self.card_mode,
+                "allow_android_approval": self.allow_android_approval,
                 "sockets": [str(c.sock_path) for c in self.clients],
                 "sessions": [c.session_id for c in self.clients],
                 "pending": len(self.pending),
@@ -431,13 +459,16 @@ def main():
     parser.add_argument("--http-host", default="127.0.0.1")
     parser.add_argument("--http-port", type=int, default=19101)
     parser.add_argument("--card-mode", choices=["immediate", "held"], default="immediate")
+    parser.add_argument("--allow-android-approval", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="accept android_app phone decisions as human surface (default on)")
     parser.add_argument("--start-url", default=None, help="open a session on the first socket")
     parser.add_argument("--session-title", default="Walkaway Hermes Host Bridge")
     args = parser.parse_args()
     if not BUS_TOKEN:
         raise SystemExit("WALKAWAY_BUS_TOKEN is required")
 
-    bridge = Bridge(Bus(args.bus_url, BUS_TOKEN), args.card_mode)
+    bridge = Bridge(Bus(args.bus_url, BUS_TOKEN), args.card_mode, args.allow_android_approval)
     for sock_path in args.sockets:
         token = read_host_token(args, sock_path)
         if not token:

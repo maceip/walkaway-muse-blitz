@@ -422,7 +422,14 @@ class WalkawayDat(private val appContext: Context) {
     synchronized(sessionLock) { display = null }
   }
 
+  /** Dismiss the live DAT card because the phone surface decided (Track B sync). */
+  fun dismissActiveCard() {
+    awaitingAction = false
+    scope.launch { dismissAndPowerOff() }
+  }
+
   private suspend fun dismissAndPowerOff() {
+    awaitingAction = false
     val currentDisplay = synchronized(sessionLock) { display }
     if (currentDisplay != null) {
       runCatching {

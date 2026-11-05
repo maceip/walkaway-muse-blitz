@@ -4,7 +4,7 @@
 Resets:
 1. SQLite & Disco Workbench state via `POST /api/reset` on `fixture_url` (and optional direct SQLite truncation).
 2. `HERMES_RECALL_PATH` (`recall.json`) to an empty `{"recipes": []}` store (`0600`).
-3. `HERMES_VAULT_PATH` (`vault.json`) to clean initial state `{"socon_speaker_pw": "S0c0n!Vault#2026_Secret", "accounts": []}` (`0600`).
+3. `HERMES_VAULT_PATH` (`vault.json`) to clean initial state with a fresh cryptographic password (`0600`).
 4. Measures exact wall-clock reset latency in milliseconds via `time.perf_counter()`.
 """
 
@@ -14,6 +14,7 @@ import argparse
 import contextlib
 import json
 import os
+import secrets
 import sqlite3
 import stat
 import time
@@ -22,10 +23,13 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-INITIAL_VAULT_PAYLOAD: dict[str, Any] = {
-    "socon_speaker_pw": "S0c0n!Vault#2026_Secret",
-    "accounts": [],
-}
+
+def _fresh_vault_payload() -> dict[str, Any]:
+    return {
+        "socon_speaker_pw": secrets.token_urlsafe(18),
+        "accounts": [],
+    }
+
 
 INITIAL_RECALL_PAYLOAD: dict[str, Any] = {
     "recipes": [],
@@ -75,7 +79,7 @@ def reset_demo_state(
     vault_p = Path(vault_path)
 
     _write_0600_json(recall_p, INITIAL_RECALL_PAYLOAD)
-    _write_0600_json(vault_p, INITIAL_VAULT_PAYLOAD)
+    _write_0600_json(vault_p, _fresh_vault_payload())
 
     if db_path is not None:
         _reset_sqlite_direct(Path(db_path))

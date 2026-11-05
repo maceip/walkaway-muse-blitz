@@ -16,6 +16,7 @@ import argparse
 import fcntl
 import json
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -26,7 +27,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-ROOT = Path("/Users/mac/walkaway-monorepo")
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "demo-fixtures"))
 sys.path.insert(0, str(ROOT / "services" / "agent-driver"))
 
@@ -95,7 +96,7 @@ def main() -> int:
     parser.add_argument("--bridge-port", type=int, default=19101)
     parser.add_argument(
         "--bus-token",
-        default=os.environ.get("WALKAWAY_BUS_TOKEN", "walkaway-dev-bus-token"),
+        default=os.environ.get("WALKAWAY_BUS_TOKEN", ""),
     )
     parser.add_argument(
         "--detach",
@@ -209,8 +210,13 @@ def main() -> int:
     qwen = parallel_campaign_driver.get_resident_qwen_driver()
     print(f"[PRE-FLIGHT] Resident Qwen3-4B READY (loaded in {qwen.load_ms:.0f}ms)", flush=True)
 
-    host_token = "host-secret-token-live-demo"
-    agent_token = "agent-secret-token-live-demo"
+    if not args.bus_token:
+        if args.auto_approve:
+            args.bus_token = secrets.token_urlsafe(18)
+        else:
+            raise SystemExit("WALKAWAY_BUS_TOKEN or --bus-token is required for live runs")
+    host_token = os.environ.get("HERMES_HOST_TOKEN") or secrets.token_urlsafe(18)
+    agent_token = os.environ.get("HERMES_AGENT_TOKEN") or secrets.token_urlsafe(18)
     env = os.environ.copy()
     env["HERMES_HOST_TOKEN"] = host_token
     env["HERMES_AGENT_TOKEN"] = agent_token
@@ -340,6 +346,7 @@ def main() -> int:
             glasses_timeout_s=900.0,
             show_workbench_in_primary=True,
             decision_bridge_url=decision_bridge_url,
+            decision_provenance="synthetic_dry_run" if args.auto_approve else "physical_glasses",
         )
         _banner(
             "CAMPAIGN COMPLETE — 10/10 CONFERENCES SUBMITTED!",

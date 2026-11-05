@@ -75,6 +75,67 @@ hop works across devices.
 - Last observed: pass. The user then saw six tools listed in Meta's form.
 
 
+### T-MARKETING-SURFACE-001
+
+- Command: `/tmp/fontenv/bin/python scripts/verify-marketing-site.py` from the
+  repo root (fontTools 4.68.0 + brotli 1.2.1 required for the metric checks;
+  plain `python3` runs the asset checks only and warns).
+- Real components: `apps/marketing-site/index.html`, `assets/css/site.css`,
+  the four shipped `assets/fonts/*.woff2` faces, and all 16 generated
+  creatives in `apps/marketing-site/assets/posters/` and
+  `apps/marketing-site/assets/banners/`.
+- Asserts: every local `src`/`href` in `index.html` exists on disk; every
+  `@font-face` URL resolves; each creative's `viewBox` matches the intrinsic
+  size advertised for it in `index.html`; no `<text>` node overflows its
+  canvas horizontally or vertically, measured with the real advance widths of
+  the shipped faces and per-glyph fallback through the declared font stack;
+  every non-ASCII character on the page and in the creatives is covered by at
+  least one shipped font.
+- Last observed: pass — 61 local references resolved, 4 font URLs resolved, 16
+  creative viewBoxes matched, 89 creative text nodes fitted, 2 non-ASCII
+  classes covered. Negative control: inflating one display line's `font-size`
+  by 1.6x makes the script exit 1 naming the offending label
+  (`'A LOCAL' (width 1888 > available 1800)`).
+- Scope: static-asset integrity for the marketing surface only. It is not part
+  of the demo path and proves nothing about a device hop. The browser-side
+  check is a local render at `http://127.0.0.1:8099/` (preview server,
+  `python3 -m http.server 8099 --bind 127.0.0.1` rooted at
+  `apps/marketing-site/`): in-browser console query returned 0 entries and the
+  in-browser network query returned 44/44 requests at HTTP 200 with 0
+  failed/4xx/5xx, and the paid-placement filter was verified to show only the
+  Square creatives when the Square tab is active.
+- Responsive overflow sweep: the page is loaded in a same-origin iframe of
+  fixed width (360, 390, 480, 768, 1024, 1280, 1600 CSS px) and every
+  element's `scrollWidth`/`clientWidth` and bounding right edge are compared
+  against the frame width. Last observed: zero overflowing elements and
+  `documentElement.scrollWidth == clientWidth` at all seven widths (re-verified
+  after the copy, artwork and mobile pass, and again after the mascot family and
+  the baked hero square were added). Display
+  type is sized by container-query units (`cqw`) from the headline's measured
+  Druk Wide advance width, so it scales to its container instead of being
+  guessed; measured hero size at a 390 px viewport is 33.02 px
+  (0.94 × 346 px ÷ 9.851 em).
+
+
+- Browser-measured creative fit: all 16 creatives are loaded into Chrome and
+  every `<text>` node is measured with `getComputedTextLength()` and
+  `getBBox()`. Last observed: 89 text nodes measured, 0 nodes with ink outside
+  the artboard canvas in either axis (the largest deviations are 3-5 px of
+  ascender / side-bearing ink past the declared `data-box`, which is ink
+  overhang, not overflow). This is a real browser engine check, not a model of
+  the font metrics.
+- Hero artwork build: `/tmp/fontenv/bin/python scripts/build-hero-art.py` from
+  the repo root (Pillow required). Real components:
+  `apps/marketing-site/assets/download/hero-winged-chips.png` (source of the
+  real Hermes browser crop), `muse-mascot.png`, `muse-chips.png`,
+  `mark-walkaway.png`. Asserts: the script writes `hero-muse.png` (1920x1080),
+  `hero-muse-flight.png` (1920x1080), `og-walkaway.png` (1200x630) and
+  `square-muse.png` (1080x1080) into `assets/download/`, and every hero PNG
+  re-rendered in Chrome shows the real Hermes window with the mascot and chips
+  and no overlap on the baked green supervision square. Last observed: pass,
+  6 files written, all four heroes re-rendered in Chrome without overlap.
+
+
 ### T-WALKAWAY-DAT-001
 
 - Command: build/install Walkaway Bridge, start the laptop bus on `19099`,
@@ -101,6 +162,7 @@ hop works across devices.
 
 - Command:
   `apps/glasses-web/install-debug.sh --name Walkaway --url https://walkaway.secure.build/app/`.
+- Note 2026-11-05: `apps/glasses-web/` deleted as vapor stub; this entry is historical (script recoverable from git history).
 - Real components: ADB, Pixel, Meta AI (`com.facebook.stella`).
 - Last observed: deep link launched successfully and Meta AI became the
   focused app. In-app confirmation and glasses-side installation were not
@@ -312,20 +374,95 @@ hop works across devices.
   3. Campaign driver + `HighBacklogThreadingHTTPServer` (`request_queue_size=128`): Card #3 fanout across 9 concurrent worker browsers commits all 10 SQLite CFP rows (`cfp_submissions == 10`), while rejecting Card #3 leaves Portals #2–#10 uncommitted (`cfp_submissions == 1`).
 - Last observed: **PASS** 2026-11-04 21:06 PT (`test_decision_bridge_e2e.py` 3/3 in `9.061s`; `test_message_bus_lock.py` 1/1 in `0.172s`; `test_10portal_disco_campaign.py` 3/3 in `14.466s`; full 9-test `tests/e2e` discovery suite 9/9 in `29.783s`; `--supervisortest` 54/54 PASS).
 
-### T-SALVAGE-WS3 (Android Hardening — Device Verification Pending)
+### T-SALVAGE-WS3 (Android Hardening — Device Verification)
 
-- Commands: `./gradlew :app:testDebugUnitTest :app:assembleDebug` in
-  `apps/android-notification-bridge/` (host side, complete);
-  `:app:connectedDebugAndroidTest` + install/launch checks (device side,
-  PENDING — Pixel was disconnected from USB mid-verification 2026-11-04
-  21:00 PT, `adb devices` empty after daemon restart).
-- Host-side last observed: **PASS** — `BridgeStateTest` 8/8 (phases,
-  dedupe mark/forget across instances, reuse predicate, eligibility hint),
-  fresh debug APK assembled.
-- Code under test when device returns: `BridgeKeepAliveService` foreground
-  keep-alive on Connect, guarded DAT session reuse
-  (`shouldReuseDatSession`), `onCardGone` dismissal detection, dedupe
-  `forget` on failed send + `Resend card` control. Device assertions owed:
-  FGS notification/service present while connected; polling continues with
-  app backgrounded (bus `received` ack); failed send surfaces Resend;
-  panel instrumented suite green (re-run wipes DAT registration again).
+- Commands: `./gradlew :app:testDebugUnitTest :app:assembleDebug
+  :app:installDebug :app:connectedDebugAndroidTest` in
+  `apps/android-notification-bridge/` + ADB-driven checks on Pixel
+  `67080DLDV009AD` against the live 19099 bus.
+- Last observed: **PASS** 2026-11-05 07:23-07:26 PT.
+  1. Install/launch: `installDebug` (upgrade in place, DAT registration
+     preserved), auto-connect shows `CONNECTED — WAITING`.
+  2. Foreground service: `dumpsys activity services` shows
+     `BridgeKeepAliveService isForeground=true foregroundId=4101`
+     (channel `walkaway_bridge_service`).
+  3. Background polling: with the launcher in front, bus message #45 was
+     `received` ~0.2s after posting; process state `cur=FGS cached=false
+     isFrozen=false` (Android 15 freezer defeated while connected).
+  4. Resend: #45 `dat_failed` (glasses not eligible) surfaced
+     `Resend card #45`; tapping Resend produced a second `dat_failed`
+     attempt for #45 (dedupe `forget` works; Resend re-offered).
+  5. Instrumented: `:app:connectedDebugAndroidTest` BUILD SUCCESSFUL
+     (panel: 4 phase labels, zero Approve/Reject nodes). Unit:
+     `BridgeStateTest` 8/8.
+- Aftermath (expected): the instrumented run uninstalls the app, so DAT
+  registration read `AVAILABLE devices=0` after reinstall. One user
+  re-registration via Connect Meta AI is owed before any glasses card.
+- Not exercised (needs worn glasses): live DAT session REUSE path
+  (both-STARTED predicate is unit-covered) and dismissal-after-sent
+  `onCardGone` (send-failure Resend path above IS device-proven).
+
+### T-ALIGNMENT-KILL-001 (Dead Controls + Vapor Folders Removal)
+
+- Commands: `./gradlew :app:testDebugUnitTest :app:installDebug` in
+  `apps/android-notification-bridge/` + ADB verification on Pixel
+  `67080DLDV009AD` against live bus 19099.
+- Last observed: **PASS** 2026-11-05. Notification for bus #46 carries zero
+  actions (`dumpsys notification`); receiver + `notification_action` ack
+  path deleted (no source references remain). Fresh-install blank bus
+  token fails visibly (`HTTP 401` in `walkaway.poll` log + status);
+  seeding `shared_prefs/walkaway_bus.xml` restored polling (#46
+  `received` + `dat_failed`, DAT then `AVAILABLE`). Vapor folders
+  `apps/glasses-web`, `apps/phone-approval-web`,
+  `apps/desktop-supervision`, `packages/*` deleted with zero code
+  references; STATUS/source-map updated same change. Diagnostic poll
+  logging that found the 401 was reduced to effect-start + failure lines.
+
+### T-TRACKB-DUAL-001 (Track B Dual-Surface Approval: Glasses OR Phone)
+
+- Commands: `HERMES_HIDDEN_WINDOW=1 python3 services/hermes-host/test_decision_bridge_e2e.py`
+  (4 cases) and `HERMES_HIDDEN_WINDOW=1 python3 /tmp/trackb_phone_e2e.py`
+  (real Pixel UI taps) plus
+  `apps/android-notification-bridge/scripts/run-device-tests-preserve-data.sh`.
+- Last observed: **PASS** 2026-11-05.
+  - Bridge suite 4/4 (12.738s): glasses-only mode still rejects
+    `android_app`; dual mode commits from `android_app` and from
+    `glasses_dat`, first tap wins (loser ack ignored), domain-first card
+    title <=80 / body <=160, Hermes audit surfaces asserted per proposal.
+  - Phone E2E: `TRACK B PHONE SURFACE PASS` — cards #47/#48 decided by
+    tapping the real **Approve on Phone** Compose button via ADB input
+    with glasses unused (DAT unavailable); `accounts == 1`; audit +
+    bridge surfaces both `android_app`.
+  - Preserve-data runner: instrumentation `OK (1 test)`,
+    `firstInstallTime` unchanged, `dat_registration.xml` intact — device
+    tests no longer wipe Meta DAT registration. Identity pin:
+    `scripts/verify-app-identity.sh` PASS (package + cert SHA-256
+    `abdf2c3a...`, keystore created 2026-05-02, unchanged).
+- Not exercised: phone-dismisses-live-DAT-card sync with glasses worn
+  (`dismissActiveCard` shipped; needs a worn-glasses pass).
+
+### T-TRACKB-DUAL-002 (Track B Phone Approve + Reject, separate live cards)
+
+- Command: `HERMES_HIDDEN_WINDOW=1 python3 /tmp/trackb_phone_reject_e2e.py`
+  (throwaway harness over the maintained bridge/Hermes/Android surfaces;
+  real Compose buttons tapped through ADB input on Pixel `67080DLDV009AD`).
+- Last observed: **PASS** 2026-11-05. Card #52 fill approved on phone;
+  card #53 rejected on phone (`proposal.invalidated`, bridge decision
+  `reject`/`android_app`, audit `result=rejected surface=android_app`,
+  accounts stayed 0); card #54 re-proposed and approved on phone
+  (`executed`, accounts became 1). Per-tap responsiveness was sampled over
+  successive post-tap UI frames: input dispatch 146-152 ms, with the second
+  button-absent frame observed at 2,598-2,649 ms under the 250 ms dump cadence;
+  screenshots in `/tmp/trackb_reject/` show both live phone buttons and the
+  final `Card #54 decided via android_app: approve` state. No product code
+  changed during the verification rerun; one over-broad harness assertion was
+  narrowed from all audit rows to the audit row whose result is `rejected`.
+
+### T-MUSE-MCP-REAL-BROWSER (Track A — Muse MCP -> Real Hermes Browser + Live HTTPS Webpage + Glasses/Phone Dual Approval)
+
+- Command: `HERMES_HIDDEN_WINDOW=1 python3 /Users/mac/walkaway-monorepo/tests/e2e/test_muse_mcp_real_browser.py`
+- Real components: `services/muse-connector/mcp_server.py`, `services/agent-driver/hermes_task_relay.py` (`:8790`), `services/agent-driver/hermes_agent_driver.py` (`plan_general_web_form_with_local_llm` + local `mlx-community/Qwen3-4B-Instruct-2507-4bit`), `services/hermes-host/decision_bridge.py` (`--allow-android-approval`), `services/hermes-host/message_bus.py`, and release `apps/hermes-browser` (`--control-socket`, hidden window).
+- Asserts:
+  1. `test_muse_mcp_drives_real_hermes_browser_and_commits_on_glasses_or_android_approval`: Invokes `mcp_server.py` JSON-RPC `tools/call` (`walkaway_start_task` with `url` + `goal`, `walkaway_get_state`), verifies real Hermes navigates, stages form fields via local `Qwen3-4B` (`llm_calls == 1`), pauses at `waiting_for_human` with a domain-first card (`<=80` title, `<=160` body), and commits only after either a `glasses_dat` (`surface="glasses"`) or `android_app` (`surface="android_app"`) approval ack (`0` rows before approval, `1` row after approval).
+  2. `test_live_internet_https_httpbin_form_via_muse_mcp`: Drives live external `https://httpbin.org/forms/post` over HTTPS through `mcp_server.py` (`walkaway_start_task`), fills customer/pizza fields via local `Qwen3-4B`, emits `COMMIT httpbin.org: ...`, approves via `source="android_app"`, and verifies the real HTTPS POST response from `https://httpbin.org/post` inside Hermes (`"custname": "Ryan MacArthur"`).
+- Last observed: **PASS** 2026-11-05 (`2/2` tests in `10.704s`, 100% headless with zero visible desktop windows).

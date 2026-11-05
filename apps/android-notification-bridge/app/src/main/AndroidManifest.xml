@@ -50,9 +50,6 @@
                 <data android:scheme="walkawaybridge" />
             </intent-filter>
         </activity>
-        <receiver
-            android:name=".NotificationActionReceiver"
-            android:exported="false" />
         <service
             android:name=".BridgeKeepAliveService"
             android:exported="false"

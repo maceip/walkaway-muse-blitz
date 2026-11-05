@@ -33,14 +33,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "services" / "demo-fixtures"))
+sys.path.insert(0, str(ROOT / "services" / "agent-driver"))
+import hermes_agent_driver  # noqa: E402
 import signup_fixture  # noqa: E402
 
-HERMES_BIN = Path(
-    os.environ.get(
-        "HERMES_BROWSER_BIN",
-        "/Users/mac/hermes-blitz-browser/target/release/hermes-blitz-browser",
-    )
-)
+HERMES_BIN = hermes_agent_driver.resolve_hermes_binary()
 
 
 class ControlClient:

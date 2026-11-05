@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Walkaway Root Product CLI (`./walkaway`).
+
+Usage:
+  1. Run a supervised task on any real live webpage (sends approval card to glasses & Android app):
+       ./walkaway https://httpbin.org/forms/post --goal "Order a medium bacon pizza for Ryan MacArthur"
+  2. Start the persistent Muse MCP + Hermes Task Relay daemon (`:8890` -> `:8790` -> `:19101` -> `:19099`):
+       ./walkaway --serve-mcp
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO_ROOT / "services" / "agent-driver"))
+
+from hermes_task_relay import HermesTaskManager, RelayHTTPServer, make_handler  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Walkaway — Wearable & Phone Supervised Browser Agent")
+    parser.add_argument("url", nargs="?", default=None, help="Target https:// or http:// URL to open")
+    parser.add_argument("--goal", default="", help="Natural-language goal for the browser agent")
+    parser.add_argument("--serve-mcp", action="store_true", help="Run persistent Hermes Task Relay (:8790) + Muse MCP (:8890)")
+    parser.add_argument("--bus-url", default=os.environ.get("WALKAWAY_BUS_URL", "http://127.0.0.1:19099"))
+    parser.add_argument("--bus-token", default=os.environ.get("WALKAWAY_BUS_TOKEN", ""))
+    parser.add_argument("--bridge-url", default=os.environ.get("WALKAWAY_BRIDGE_URL", "http://127.0.0.1:19101"))
+    parser.add_argument("--show-window", action="store_true", help="Show the native Hermes browser window")
+    parser.add_argument("--timeout", type=float, default=300.0, help="Seconds to wait for glasses or Android approval")
+    args = parser.parse_args()
+
+    manager = HermesTaskManager(
+        bus_url=args.bus_url,
+        bus_token=args.bus_token,
+        bridge_url=args.bridge_url,
+        show_window=args.show_window,
+    )
+
+    if args.serve_mcp:
+        manager.ensure_bus_and_bridge()
+        relay_server = RelayHTTPServer(("127.0.0.1", 8790), make_handler(manager))
+        mcp_env = os.environ.copy()
+        mcp_env["WALKAWAY_RELAY_URL"] = "http://127.0.0.1:8790"
+        mcp_proc = subprocess.Popen(
+            [sys.executable, str(REPO_ROOT / "services" / "muse-connector" / "mcp_server.py")],
+            env=mcp_env,
+        )
+        print("Walkaway Relay (:8790) + Muse MCP (:8890) active. Press Ctrl+C to stop.", flush=True)
+        try:
+            relay_server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            mcp_proc.terminate()
+            relay_server.server_close()
+            manager.close()
+        return 0
+
+    if not args.url and not args.goal:
+        parser.print_help()
+        return 1
+
+    try:
+        goal = args.goal or f"Complete and submit form on {args.url}"
+        start_state = manager.start_task(goal=goal, url=args.url)
+        print(f"[walkaway] {start_state['say']}", flush=True)
+        pred_state = manager.predict_next_step()
+        print(f"[walkaway] {pred_state['say']}", flush=True)
+
+        if not pred_state.get("decision"):
+            print(json.dumps(pred_state, indent=2), flush=True)
+            return 0
+
+        deadline = time.monotonic() + args.timeout
+        while time.monotonic() < deadline:
+            cur = manager.get_state()
+            if cur.get("status") in {"committed", "rejected", "stopped"}:
+                print(f"[walkaway] {cur['say']}", flush=True)
+                print(json.dumps(cur, indent=2), flush=True)
+                return 0 if cur.get("status") == "committed" else 2
+            time.sleep(0.2)
+
+        print("[walkaway] Timed out waiting for glasses or Android approval.", flush=True)
+        return 3
+    finally:
+        manager.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

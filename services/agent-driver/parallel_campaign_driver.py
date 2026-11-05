@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -32,20 +33,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-MLX_PYTHON = Path(
-    os.environ.get(
-        "HERMES_MLX_PYTHON",
-        "/Users/mac/.local/share/uv/tools/mlx-lm/bin/python3",
-    )
-)
+import hermes_agent_driver
+
+MLX_PYTHON = hermes_agent_driver.resolve_mlx_python()
 MODEL_ID = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 
-HERMES_BIN = Path(
-    os.environ.get(
-        "HERMES_BROWSER_BIN",
-        "/Users/mac/hermes-blitz-browser/target/release/hermes-blitz-browser",
-    )
-)
+HERMES_BIN = hermes_agent_driver.resolve_hermes_binary()
 
 DEFAULT_SPEAKER_PROFILE: dict[str, str] = {
     "speaker_name": "Ryan MacArthur",
@@ -438,7 +431,7 @@ def _http_json(
         return json.loads(raw) if raw.strip() else {}
 
 
-DECISION_BRIDGE_SCRIPT = Path("/Users/mac/walkaway-monorepo/services/hermes-host/decision_bridge.py")
+DECISION_BRIDGE_SCRIPT = hermes_agent_driver.REPO_ROOT / "services" / "hermes-host" / "decision_bridge.py"
 
 
 def _free_local_port() -> int:
@@ -727,6 +720,7 @@ def run_10portal_campaign(
     glasses_timeout_s: float = 30.0,
     show_workbench_in_primary: bool = False,
     decision_bridge_url: str | None = None,
+    decision_provenance: str = "physical_glasses",
 ) -> dict[str, Any]:
     """Execute the full 3-Act, 10-Portal Disco Campaign supervised by decision_bridge.py (held mode)."""
     t_campaign0 = time.perf_counter()
@@ -974,7 +968,11 @@ def run_10portal_campaign(
                     "before_fingerprint": pending_card1["fingerprint"],
                     "after_fingerprint": exec_card1.get("after_fingerprint", pending_card1["fingerprint"]),
                     "frame_hash": snap1_staged.get("screenshot_hash") or "",
-                    "decision_surface": "glasses_dat",
+                    "decision_surface": (
+                        "synthetic_dry_run"
+                        if decision_provenance == "synthetic_dry_run"
+                        else str(card1_ack.get("source") or "glasses_dat")
+                    ),
                 }
             )
 
@@ -1209,7 +1207,11 @@ def run_10portal_campaign(
                     "before_fingerprint": pending_card2["fingerprint"],
                     "after_fingerprint": exec_card2.get("after_fingerprint", pending_card2["fingerprint"]),
                     "frame_hash": snap2_repaired.get("screenshot_hash") or "",
-                    "decision_surface": "glasses_dat",
+                    "decision_surface": (
+                        "synthetic_dry_run"
+                        if decision_provenance == "synthetic_dry_run"
+                        else str(card2_ack.get("source") or "glasses_dat")
+                    ),
                 }
             )
 
@@ -1478,7 +1480,11 @@ def run_10portal_campaign(
                             "before_fingerprint": item["fingerprint"],
                             "after_fingerprint": res_frame.get("after_fingerprint", item["fingerprint"]),
                             "frame_hash": item["screenshot_hash"],
-                            "decision_surface": "glasses_dat",
+                            "decision_surface": (
+                                "synthetic_dry_run"
+                                if decision_provenance == "synthetic_dry_run"
+                                else str(card3_ack.get("source") or "glasses_dat")
+                            ),
                         }
                     )
                     _post_workbench_update(
@@ -1563,6 +1569,7 @@ def run_10portal_campaign(
                 "ok": True,
                 "session_id": session_id,
                 "decision_bridge_url": decision_bridge_url,
+                "decision_provenance": decision_provenance,
                 "total_llm_calls": total_llm_calls,
                 "llm_repair_ms": llm_repair_ms,
                 "total_recall_ms": total_recall_ms,
@@ -1619,15 +1626,17 @@ def main() -> int:
     parser.add_argument("--fixture-url", default="http://127.0.0.1:8795")
     parser.add_argument("--control-socket", type=Path, required=True)
     parser.add_argument("--bus-url", default="http://127.0.0.1:19099")
-    parser.add_argument("--bus-token", default=os.environ.get("WALKAWAY_BUS_TOKEN", "walkaway-dev-bus-token"))
+    parser.add_argument("--bus-token", default=os.environ.get("WALKAWAY_BUS_TOKEN", ""))
     parser.add_argument("--decision-bridge-url", default=None)
     parser.add_argument("--vault-path", type=Path, default=Path("/tmp/hermes-vault.json"))
     parser.add_argument("--recall-path", type=Path, default=Path("/tmp/hermes-recall.json"))
     parser.add_argument("--audit-path", type=Path, default=Path("/tmp/hermes-audit.jsonl"))
     args = parser.parse_args()
 
-    host_token = os.environ.get("HERMES_HOST_TOKEN", "host-secret-token-campaign-998877")
-    agent_token = os.environ.get("HERMES_AGENT_TOKEN", "agent-secret-token-campaign-112233")
+    if not args.bus_token:
+        raise SystemExit("WALKAWAY_BUS_TOKEN or --bus-token is required (fail-closed credential gate)")
+    host_token = os.environ.get("HERMES_HOST_TOKEN") or secrets.token_urlsafe(18)
+    agent_token = os.environ.get("HERMES_AGENT_TOKEN") or secrets.token_urlsafe(18)
 
     res = run_10portal_campaign(
         fixture_origin=args.fixture_url,

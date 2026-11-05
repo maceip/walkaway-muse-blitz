@@ -84,7 +84,7 @@ def wait_until(fn, timeout=15.0, interval=0.1):
 class Harness:
     """Fixture server + bus + N Hermes processes + one bridge."""
 
-    def __init__(self, test, tmp, hermes_count, card_mode, dynamic=False):
+    def __init__(self, test, tmp, hermes_count, card_mode, dynamic=False, allow_android=True):
         self.test = test
         self.tmp = Path(tmp)
         self.db = self.tmp / "db.sqlite3"
@@ -111,6 +111,7 @@ class Harness:
             socks.append(sock)
             henv = os.environ.copy()
             henv["HERMES_HOST_TOKEN"] = HOST_TOKEN
+            henv["HERMES_HIDDEN_WINDOW"] = "1"
             henv["HERMES_AGENT_TOKEN"] = f"agent-secret-token-bridge-{i}777"
             henv["HERMES_VAULT_PATH"] = str(self.tmp / f"vault{i}.json")
             henv["HERMES_RECALL_PATH"] = str(self.tmp / f"recall{i}.json")
@@ -128,7 +129,8 @@ class Harness:
         benv["WALKAWAY_BUS_TOKEN"] = BUS_TOKEN
         benv["HERMES_HOST_TOKEN"] = HOST_TOKEN
         cmd = [sys.executable, str(BRIDGE_SCRIPT), "--bus-url", self.bus,
-               "--http-port", str(self.bridge_port), "--card-mode", card_mode]
+               "--http-port", str(self.bridge_port), "--card-mode", card_mode,
+               "--allow-android-approval" if allow_android else "--no-allow-android-approval"]
         if not dynamic:
             for sock in socks:
                 cmd += ["--socket", str(sock)]
@@ -176,6 +178,19 @@ class Harness:
 
     def bus_ack(self, message_id, action, source):
         return http_json(f"{self.bus}/ack", {"message_id": message_id, "action": action, "source": source})
+
+    def audit_surfaces(self, index=0):
+        out = []
+        path = self.tmp / f"audit{index}.jsonl"
+        if path.exists():
+            for line in path.read_text().splitlines():
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("result") == "executed":
+                    out.append((rec.get("proposal_id"), rec.get("surface")))
+        return out
 
     def account_count(self):
         with sqlite3.connect(self.db) as c:
@@ -249,7 +264,7 @@ class BridgeImmediateE2ETest(unittest.TestCase):
     def test_policy_auto_glasses_only_reject_replay(self):
         self.assertTrue(HERMES_BIN.exists())
         with tempfile.TemporaryDirectory(prefix="walkaway-bridge-a-") as tmp:
-            h = Harness(self, tmp, hermes_count=1, card_mode="immediate")
+            h = Harness(self, tmp, hermes_count=1, card_mode="immediate", allow_android=False)
             try:
                 agent = h.agent(0)
                 session = h.session_id(0)
@@ -412,6 +427,57 @@ class BridgeDynamicAttachE2ETest(unittest.TestCase):
                 # Verbatim executed frame is readable by drivers (WS1 receipt contract).
                 self.assertEqual(receipts[0].get("type"), "executed")
                 self.assertIn("before_fingerprint", receipts[0])
+            finally:
+                h.stop()
+
+
+class BridgeDualSurfaceE2ETest(unittest.TestCase):
+    def test_android_app_and_glasses_both_commit_first_tap_wins(self):
+        self.assertTrue(HERMES_BIN.exists())
+        with tempfile.TemporaryDirectory(prefix="walkaway-bridge-d-") as tmp:
+            h = Harness(self, tmp, hermes_count=1, card_mode="immediate", allow_android=True)
+            try:
+                _, health = http_json(f"{h.bridge}/health", token="")
+                self.assertTrue(health["allow_android_approval"])
+                agent = h.agent(0)
+                session = h.session_id(0)
+                email = "ryan@zunftmax.secure.build"
+
+                # Fill approved from the PHONE surface (android_app).
+                snap = observe_until(agent, session, "password", "d-fill")
+                propose(agent, session, snap, "d-fill",
+                        {"kind": "fill_form", "fields": full_signup_fields(by_id(snap), h.origin, email)},
+                        "Stage account + blind vault password")
+                card = wait_card(h, 0)
+                self.assertLessEqual(len(card["title"]), 80)
+                self.assertLessEqual(len(card["body"]), 160)
+                self.assertIn("127.0.0.1", card["title"])  # domain-first
+                h.bus_ack(card["id"], "received", "android_app")  # non-human ack still ignored
+                time.sleep(1.2)
+                self.assertEqual(h.receipts("d-fill"), [])
+                h.bus_ack(card["id"], "approve", "android_app")
+                wait_until(lambda: h.receipts("d-fill"))
+                d = [x for x in h.decisions() if x.get("proposal_id") == "d-fill" and x.get("via")]
+                self.assertEqual(d[0]["surface"], "android_app")
+
+                # Submit: glasses tap wins; later phone ack on same card is ignored.
+                snap = observe_until(agent, session, "submit-btn", "d-sub")
+                propose(agent, session, snap, "d-submit",
+                        {"kind": "submit", "target_ref": by_id(snap)["submit-btn"]["node_ref"]},
+                        "Commit speaker account")
+                card2 = wait_card(h, card["id"])
+                h.bus_ack(card2["id"], "approve", "glasses_dat")
+                wait_until(lambda: h.receipts("d-submit"))
+                self.assertEqual(h.account_count(), 1)
+                h.bus_ack(card2["id"], "reject", "android_app")  # loser surface: must not decide twice
+                time.sleep(1.2)
+                decided = [x for x in h.decisions() if x.get("proposal_id") == "d-submit" and x.get("via")]
+                self.assertEqual(len(decided), 1)
+                self.assertEqual(decided[0]["surface"], "glasses")
+                # Hermes audit carries the same surface attribution.
+                surfaces = dict(h.audit_surfaces(0))
+                self.assertEqual(surfaces.get("d-fill"), "android_app")
+                self.assertEqual(surfaces.get("d-submit"), "glasses")
             finally:
                 h.stop()
 

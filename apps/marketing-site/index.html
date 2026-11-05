@@ -3,21 +3,25 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Walkaway × Muse Blitz — Supervised Batch Browser & Glasses Commit Gate</title>
+<title>Walkaway: A Local Intelligent Browser</title>
 <meta name="application-name" content="Walkaway" />
-<meta name="description" content="Delegate 10 conference portals at your desk, walk away to make coffee, and tap your Meta Ray-Ban Display glasses only 3 times when an irreversible commit is ready." />
-<meta name="theme-color" content="#080b0f" />
+<meta name="description" content="A local intelligent browser your phone and remote assistant can talk to. It holds your secrets, finishes the long work, and asks for one tap only when it has to." />
+<meta name="theme-color" content="#efede2" />
 
 <meta property="og:type" content="website" />
-<meta property="og:title" content="Walkaway × Muse Blitz — Supervised Batch Browser & Glasses Commit Gate" />
-<meta property="og:description" content="Delegate 10 conference portals at your desk, walk away to make coffee, and tap your glasses only 3 times when an irreversible commit is ready." />
-<meta property="og:image" content="assets/img/hero-winged-chips.webp" />
+<meta property="og:title" content="Walkaway: A Local Intelligent Browser" />
+<meta property="og:description" content="Your phone and your remote assistant can talk to it. It holds your secrets, finishes the long work, and asks for one tap only when it has to." />
+<meta property="og:image" content="assets/download/og-walkaway.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="The winged Muse mascot and the winged AI chips around a real Hermes browser window" />
 <meta name="twitter:card" content="summary_large_image" />
 
 <link rel="icon" href="assets/img/icon-ios-dark.webp" type="image/webp" />
 <link rel="apple-touch-icon" href="assets/img/icon-ios-dark.webp" />
 <link rel="preload" href="assets/fonts/DrukWide-Heavy.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="assets/fonts/GTPressuraMono-Bold.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="assets/fonts/DepartureMono-Regular.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="assets/css/site.css" />
 </head>
 <body>
@@ -25,29 +29,13 @@
 <!-- ============================== NAV ============================== -->
 <header class="nav" id="nav">
   <div class="shell nav-inner">
-    <a class="brand" href="#top" aria-label="Walkaway home">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#080b0f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12Z" />
-          <circle cx="12" cy="12" r="2.6" fill="#080b0f" stroke="none" />
-        </svg>
-      </span>
-      <span class="brand-name">Walk<span>away</span></span>
-    </a>
-
+    <a class="brand" href="#top" aria-label="Walkaway home">Walk<em>away</em></a>
     <nav class="nav-links" aria-label="Primary">
-      <a href="#story">How it works</a>
-      <a href="#control">In control</a>
-      <a href="#film">The film</a>
-      <a href="#kit">Asset kit</a>
-      <a href="#ads">Paid placements</a>
-      <a href="#proof">Proof</a>
+      <a href="#film">Film</a>
+      <a href="#set">Set</a>
+      <a href="#assets">Assets</a>
     </nav>
-
-    <a class="btn btn-primary" href="#film">
-      Watch the 3-min demo
-      <span class="arrow" aria-hidden="true">→</span>
-    </a>
+    <a class="btn" href="#assets">Download</a>
   </div>
 </header>
 
@@ -55,937 +43,381 @@
 
 <!-- ============================== HERO ============================== -->
 <section class="hero">
-  <div class="hero-sky" aria-hidden="true"></div>
-  <div class="hero-grid" aria-hidden="true"></div>
-  <div class="hero-glow" aria-hidden="true"></div>
+  <div class="shell">
+    <h1 class="d1 fit fit-hero">A local<br />intelligent<br />browser.</h1>
 
-  <div class="shell hero-inner">
-    <div class="hero-copy">
-      <span class="hero-tag"><span class="dot" aria-hidden="true"></span>Introducing Walkaway × Muse Blitz</span>
-
-      <h1 class="h-xl">Delegate ten portals.<br /><em>Walk away.</em></h1>
-    </div>
-
-    <div class="hero-lower">
-      <div class="hero-copy">
+    <div class="hero-grid">
+      <div class="hero-lead">
         <p class="hero-sub">
-          Delegate 10 conference portals at your desk, walk away to make coffee, and tap your
-          Meta Ray-Ban Display glasses only <b style="color:var(--solar)">3 times</b> when an
-          irreversible commit is ready.
+          Your phone and your remote assistant can talk to it. It holds your secrets,
+          finishes the long work, and asks for one tap only when it has to.
         </p>
-
-        <div class="hero-actions">
-          <a class="btn btn-primary" href="#film">
-            Watch the 3-minute demo <span class="arrow" aria-hidden="true">→</span>
-          </a>
-          <a class="btn btn-ghost" href="#kit">
-            Browse the asset kit <span class="arrow" aria-hidden="true">→</span>
-          </a>
-        </div>
+        <a class="btn btn-ghost" href="#film">See it work</a>
       </div>
 
-      <div class="hero-stage">
-        <div class="hero-frame">
-          <img src="assets/img/hero-winged-chips.webp" width="1448" height="1086"
-               alt="The Hermes browser engine running a supervised session, surrounded by winged AI chips and a terminal" />
-        </div>
-
-        <span class="chip-float a" aria-hidden="true">
-          <img src="assets/img/icon-ios-default.webp" width="74" height="74" alt="" />
-        </span>
-        <span class="chip-float b" aria-hidden="true">
-          <img src="assets/img/icon-signal.webp" width="58" height="58" alt="" />
-        </span>
-        <span class="chip-float c" aria-hidden="true">
-          <img src="assets/img/icon-device-sync.webp" width="64" height="64" alt="" />
-        </span>
-
-        <div class="telemetry" aria-label="Live engine telemetry">
-          <div class="t-head"><span>Static Hermes + Blitz</span><b><i class="live-dot" aria-hidden="true"></i> live</b></div>
-          <dl>
-            <dt>Layout + Observe</dt><dd class="hot">measured</dd>
-            <dt>Form signature</dt><dd>sig_c31d6574</dd>
-            <dt>Recipe recall</dt><dd class="good">0 LLM calls</dd>
-            <dt>Commit gate</dt><dd class="good">requires_glasses</dd>
-            <dt>Submissions</dt><dd>10 / 10</dd>
-          </dl>
-        </div>
-      </div>
+      <figure class="hero-art">
+        <img src="assets/img/hero-muse.webp" width="1920" height="1080"
+             alt="The Hermes browser engine running a supervised session, with the winged Muse mascot and winged AI chips flying around it" />
+      </figure>
     </div>
 
-    <div class="hero-stats">
-      <div class="hero-stat"><b>10</b><span>Portals delegated</span></div>
-      <div class="hero-stat"><b>3</b><span>Glasses taps</span></div>
-      <div class="hero-stat"><b>1</b><span>LLM call, total</span></div>
-      <div class="hero-stat"><b>0</b><span>Secrets leaked</span></div>
+    <div class="stat-strip">
+      <span><b>10</b> forms</span>
+      <span><b>3</b> taps</span>
+      <span><b>1</b> llm call</span>
+      <span><b>0</b> leaks</span>
+      <span>Local · open source</span>
     </div>
   </div>
 </section>
 
-<!-- ============================== MARQUEE ============================== -->
-<div class="marquee" aria-hidden="true">
-  <div class="marquee-track">
-    <span>SoCon 2026</span><span>KubeCon NA</span><span>BlackHat USA</span><span>RustConf</span>
-    <span>NeurIPS Systems</span><span>DEF CON AI</span><span>USENIX Security</span>
-    <span>AI Engineer Fair</span><span>PyCon US</span><span>QCon SF</span>
-    <span>SoCon 2026</span><span>KubeCon NA</span><span>BlackHat USA</span><span>RustConf</span>
-    <span>NeurIPS Systems</span><span>DEF CON AI</span><span>USENIX Security</span>
-    <span>AI Engineer Fair</span><span>PyCon US</span><span>QCon SF</span>
-  </div>
-</div>
-
-<!-- ============================== KINETIC TRIO ============================== -->
-<section class="section tight">
+<!-- ============================== THREE BLOCKS ============================== -->
+<section class="band band-paper">
   <div class="shell">
-    <div class="section-head reveal">
-      <p class="eyebrow">What Walkaway does while you get on with life</p>
-      <h2 class="h-lg">The agent works the queue.<br />You keep the brake.</h2>
-    </div>
-
-    <div class="kinetic reveal">
-      <article class="kinetic-cell">
-        <span class="k-while">While you brew</span>
-        <h3>Ten portals fill themselves in</h3>
-        <p>One delegated run opens ten real conference call-for-papers portals, writes the same
-           speaker profile into each, and remembers every form shape it saw.</p>
-        <svg class="k-glyph" viewBox="0 0 64 64" fill="none" stroke="#ffc400" stroke-width="2.5" stroke-linecap="round">
-          <rect x="14" y="6" width="36" height="52" rx="6" /><path d="M22 22h20M22 32h20M22 42h12" />
-        </svg>
+    <div class="blocks">
+      <article class="block reveal">
+        <span class="b-num">01</span>
+        <div class="b-h"><h3 class="fit fit-block">Local</h3></div>
+        <div class="b-body">
+          <p>It runs on your machine. Your sessions, your secrets, your network. Nothing leaves
+             unless you send it.</p>
+          <span class="b-art">
+            <img src="assets/img/muse-rest.webp" width="1600" height="1451" alt="The Muse mascot at rest" />
+          </span>
+        </div>
       </article>
 
-      <article class="kinetic-cell">
-        <span class="k-while">While you drink</span>
-        <h3>Only the scary bits stop</h3>
-        <p>Navigation, typing and form-filling run straight through. A submit or a secret never
-           does — those freeze at the engine boundary until a human says yes.</p>
-        <svg class="k-glyph" viewBox="0 0 64 64" fill="none" stroke="#ffc400" stroke-width="2.5" stroke-linecap="round">
-          <path d="M32 6 56 18v28L32 58 8 46V18Z" /><path d="M32 32 40 24M32 32l-8-8M32 32v12" />
-        </svg>
+      <article class="block reveal">
+        <span class="b-num">02</span>
+        <div class="b-h"><h3 class="fit fit-block">Reachable</h3></div>
+        <div class="b-body">
+          <p>Your phone and your remote assistant talk to it directly, the way they talk to you.</p>
+          <span class="b-mark">
+            <img src="assets/img/avatar-adversary.webp" width="64" height="64" alt="The agent on the other end of the line" />
+          </span>
+        </div>
       </article>
 
-      <article class="kinetic-cell">
-        <span class="k-while">While you walk</span>
-        <h3>Three taps, then silence</h3>
-        <p>A card lands on your lenses. One tap releases nine remembered submissions at once,
-           with every proposal, fingerprint and generation listed in the manifest.</p>
-        <svg class="k-glyph" viewBox="0 0 64 64" fill="none" stroke="#ffc400" stroke-width="2.5" stroke-linecap="round">
-          <path d="M8 32s10-15 24-15 24 15 24 15-10 15-24 15S8 32 8 32Z" /><circle cx="32" cy="32" r="7" />
-        </svg>
+      <article class="block reveal">
+        <span class="b-num">03</span>
+        <div class="b-h"><h3 class="fit fit-block">Composes</h3></div>
+        <div class="b-body">
+          <p>It fetches, plans and finishes the work. Ten forms filled in for you, while you
+             are elsewhere.</p>
+          <span class="b-art">
+            <img src="assets/img/muse-form.webp" width="1600" height="1328" alt="The Muse mascot carrying a filled form" />
+          </span>
+        </div>
       </article>
     </div>
   </div>
 </section>
 
-<!-- ============================== ACTS ============================== -->
-<section class="section" id="story">
+<!-- ============================== STATEMENTS ============================== -->
+<section class="band band-ink">
   <div class="shell">
-    <div class="section-head reveal">
-      <p class="eyebrow">Walkaway features</p>
-      <h2 class="h-lg">A three-act run,<br />one tap each.</h2>
-      <p class="lede">The demo is not a mockup. Every act below runs against a real Hermes binary,
-        a real SQLite-backed portal suite, a resident local Qwen3-4B, and a physical pair of
-        Ray-Ban Display glasses.</p>
-    </div>
 
-    <div class="acts">
-      <div class="act-list" id="actList">
-
-        <div class="act-item open" data-act="0">
-          <button class="act-btn" aria-expanded="true" aria-controls="act-panel-0">
-            <span class="act-idx">ACT 01</span>
-            <span class="act-title">Seal the vault</span>
-            <span class="act-plus" aria-hidden="true"></span>
-          </button>
-          <div class="act-panel" id="act-panel-0"><div>
-            <p>The agent opens the SoCon 2026 speaker account, then hard-freezes at the commit
-               boundary. Your glasses show the exact action and its SHA-256 fingerprint. One tap
-               releases a 24-character secret into a local vault and mints an NIST P-256 keypair —
-               never into the model's view.</p>
-            <div class="act-tags">
-              <span class="pill bio">requires_glasses</span>
-              <span class="pill">fill_secret</span>
-              <span class="pill">P-256 ECDSA</span>
-              <span class="pill">blind vault</span>
-            </div>
-          </div></div>
-        </div>
-
-        <div class="act-item" data-act="1">
-          <button class="act-btn" aria-expanded="false" aria-controls="act-panel-1">
-            <span class="act-idx">ACT 02</span>
-            <span class="act-title">Fix the broken form</span>
-            <span class="act-plus" aria-hidden="true"></span>
-          </button>
-          <div class="act-panel" id="act-panel-1"><div>
-            <p>Portal #1 rejects the submission for a visible reason: a missing T-shirt size and an
-               abstract under forty characters. The local Qwen3-4B reads the error, repairs the
-               field values once, and the corrected form waits for your second tap.</p>
-            <div class="act-tags">
-              <span class="pill signal">1 LLM call</span>
-              <span class="pill">resident Qwen3-4B</span>
-              <span class="pill">validation repair</span>
-              <span class="pill">SQLite row</span>
-            </div>
-          </div></div>
-        </div>
-
-        <div class="act-item" data-act="2">
-          <button class="act-btn" aria-expanded="false" aria-controls="act-panel-2">
-            <span class="act-idx">ACT 03</span>
-            <span class="act-title">Replay at zero cost</span>
-            <span class="act-plus" aria-hidden="true"></span>
-          </button>
-          <div class="act-panel" id="act-panel-2"><div>
-            <p>The learned form recipe is replayed across the other nine portals with zero LLM
-               tokens. Your third tap carries an explicit batch manifest — every proposal id,
-               fingerprint, generation, session id and portal id — and releases all nine at once.
-               Reject it and not one row is written.</p>
-            <div class="act-tags">
-              <span class="pill solar">0 LLM calls</span>
-              <span class="pill">batch manifest</span>
-              <span class="pill">FormRecipe</span>
-              <span class="pill">10/10 rows</span>
-            </div>
-          </div></div>
-        </div>
-
-      </div>
-
-      <div class="act-stage">
-        <div class="act-stage-inner">
-
-          <!-- Scene 1 -->
-          <div class="act-scene active" data-scene="0">
-            <div class="glass-card">
-              <div class="gc-top">
-                <span class="gc-badge" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="#7ed321" stroke-width="2" stroke-linecap="round">
-                    <path d="M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12Z" />
-                    <circle cx="12" cy="12" r="2.4" fill="#7ed321" stroke="none" />
-                  </svg>
-                </span>
-                <span>
-                  <b>Meta RB Display 003F</b>
-                  <span>Bus 19099 · card #10 · DAT STARTED</span>
-                </span>
-              </div>
-              <h4>Seal the vault</h4>
-              <div class="gc-meta">
-                <span class="pill bio">Sensitive</span>
-                <span class="pill">SoCon 2026</span>
-                <span class="pill">generation 3</span>
-              </div>
-              <div class="gc-actions">
-                <button class="approve" type="button">Approve</button>
-                <button class="reject" type="button">Reject</button>
-              </div>
-              <p class="gc-fp">fingerprint <b>a9c1d4e7…</b> · proposal <b>p_submit_1</b> · secret stays local</p>
-            </div>
-          </div>
-
-          <!-- Scene 2 -->
-          <div class="act-scene" data-scene="1">
-            <div class="repair-stack">
-              <div class="repair-box err">
-                <div class="rb-head">Portal #1 — validation error</div>
-                <ul>
-                  <li><i class="ic-cross" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></i><span>tshirt_size is required</span></li>
-                  <li><i class="ic-cross" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></i><span>abstract_summary must be at least 40 characters</span></li>
-                </ul>
-              </div>
-              <div class="repair-box">
-                <span class="rb-tag">Qwen3-4B abstract repair — llm_calls: 1</span>
-                <div class="rb-head">Proposed field values</div>
-                <ul>
-                  <li class="ok"><i class="ic-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg></i><span>tshirt_size = "L"</span></li>
-                  <li class="ok"><i class="ic-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg></i><span>abstract_summary = 168 characters — containment-first sandboxing</span></li>
-                </ul>
-              </div>
-              <div class="repair-box ok">
-                <div class="rb-head">Waiting on glasses</div>
-                <ul><li class="ok"><i class="ic-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg></i><span>1 tap releases the repaired CFP — SQLite row written once</span></li></ul>
-              </div>
-            </div>
-          </div>
-
-          <!-- Scene 3 -->
-          <div class="act-scene" data-scene="2">
-            <div class="portal-grid">
-              <div class="portal-tile done"><span class="pt-name">SoCon 2026</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile done"><span class="pt-name">KubeCon NA</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile done"><span class="pt-name">BlackHat USA</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile done"><span class="pt-name">RustConf</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile done"><span class="pt-name">NeurIPS Systems</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile done"><span class="pt-name">DEF CON AI</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile done"><span class="pt-name">USENIX Security</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile done"><span class="pt-name">AI Engineer Fair</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile done"><span class="pt-name">PyCon US</span><span class="pt-dot"></span><span class="pt-state">Submitted</span></div>
-              <div class="portal-tile frozen"><span class="pt-name">QCon SF</span><span class="pt-dot"></span><span class="pt-state">Frozen · tap 3</span></div>
-            </div>
-            <div class="portal-foot">
-              <span class="pill solar">Batch manifest · 9 proposals</span>
-              <span class="pill bio">0 LLM tokens</span>
-              <span class="pill">recipe recalled</span>
-            </div>
-          </div>
-
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ============================== TRUST ============================== -->
-<section class="section" id="control">
-  <div class="shell">
-    <div class="section-head reveal">
-      <p class="eyebrow">Secure and in control</p>
-      <h2 class="h-lg">The agent can never<br />authorize itself.</h2>
-      <p class="lede">Two rules do the heavy lifting. The model can observe and propose; it cannot
-        approve. And a human decision only ever enters through the host boundary — never from a
-        notification, never from a replayed ack, never from the agent itself.</p>
-    </div>
-
-    <div class="trust">
-      <article class="trust-card reveal">
-        <span class="tc-glyph" style="background:rgba(11,74,47,.35);" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#7ed321" stroke-width="2" stroke-linecap="round">
-            <rect x="4" y="10" width="16" height="11" rx="2.5" />
-            <path d="M8 10V7a4 4 0 0 1 8 0v3" /><circle cx="12" cy="15.5" r="1.6" fill="#7ed321" stroke="none" />
-          </svg>
-        </span>
-        <h3>Your password never enters the model's view</h3>
-        <p>The vault holds a generated secret and a P-256 keypair on disk. The Semantic X-Ray
-           overlay labels the field <b style="color:var(--bio)">BLIND VAULT — hidden from LLM/JS</b>,
-           and the engine injects the credential itself. It never appears in an observation, a
-           proposal, an audit record, a screenshot, or a log line.</p>
-        <p class="tc-note">Assertion signing: <b>ECDSA P-256</b> over authenticatorData + SHA256(clientDataJSON)</p>
-      </article>
-
-      <article class="trust-card reveal">
-        <span class="tc-glyph" style="background:rgba(255,196,0,.16);" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#ffc400" stroke-width="2" stroke-linecap="round">
-            <path d="M12 3 20 7v6c0 4.5-3.2 7.6-8 8.6C7.2 20.6 4 17.5 4 13V7Z" />
-            <path d="m8.8 12.2 2.4 2.4 4.2-4.6" />
-          </svg>
-        </span>
-        <h3>Three taps, and only on irreversible things</h3>
-        <p><code style="font-family:var(--mono);color:var(--solar)">requires_glasses</code> is true for
-           exactly two operations: <code style="font-family:var(--mono);color:var(--solar)">submit</code> and
-           <code style="font-family:var(--mono);color:var(--solar)">fill_secret</code>. Everything else runs
-           under policy. A rejected proposal is destroyed, and a replayed acknowledgement decides
-           nothing twice.</p>
-        <p class="tc-note">Human decisions only: <b>surface = glasses_dat</b></p>
-      </article>
-    </div>
-
-    <!-- ============================== ADVERSARY ============================== -->
-    <div class="threat-band">
-      <div class="threat-head reveal">
-        <p class="eyebrow threat-eyebrow">The adversary</p>
-        <h3 class="h-md">Meet the agent you<br />never delegate to.</h3>
-        <p class="lede">Walkaway assumes the agent is hostile or compromised: a hijacked portal,
-          a spoofed notification, a replayed tap, a tampered manifest. Each of those has a named
-          control, and each control has a test behind it.</p>
-      </div>
-
-      <div class="threat-grid">
-        <figure class="threat-dossier reveal">
-          <div class="td-art">
-            <img src="assets/img/avatar-adversary.webp" width="1024" height="1024"
-                 alt="A ghost in a top hat — the adversary, a hypothetical hostile agent wearing a black hat" />
-            <span class="td-scan" aria-hidden="true"></span>
-          </div>
-          <figcaption>
-            <span class="td-label">Threat actor 01</span>
-            <strong>The agent you don't hand the keys to</strong>
-            <p>Wants your vault, your approvals and your sessions. Has a browser, a model and a
-              network. Does <b>not</b> have the ability to approve itself — and never will.</p>
-            <div class="td-wants">
-              <span class="pill" style="border-color:rgba(198,60,255,.4);color:#d68cff;">wants the vault</span>
-              <span class="pill" style="border-color:rgba(198,60,255,.4);color:#d68cff;">wants the taps</span>
-              <span class="pill bio">gets none of it</span>
-            </div>
-          </figcaption>
+    <div class="statement">
+      <h2 class="fit fit-stmt">Peace of mind.<br />In one <em>tap.</em></h2>
+      <div class="statement-body">
+        <p class="lede">It gets on with the work on its own. One trusted line to your lenses,
+           and one tap only when something irreversible is ready.</p>
+        <figure class="s-art">
+          <img src="assets/img/screen-browser-working.webp" width="1344" height="1143"
+               alt="The Hermes browser window running a supervised session with its supervision bar" />
         </figure>
-
-        <div class="threat-cards">
-          <article class="threat-card reveal">
-            <span class="tc-no">THREAT 01</span>
-            <h4>Forge an approval</h4>
-            <p><code>received</code>, <code>dat_sent</code> and <code>dat_failed</code> are transport
-               receipts, not permission. Only <code>approve</code> or <code>reject</code> carrying
-               <code>source="glasses_dat"</code> ever becomes a decision.</p>
-            <span class="tc-block">Blocked · <b>source-bound decisions</b></span>
-          </article>
-
-          <article class="threat-card reveal">
-            <span class="tc-no">THREAT 02</span>
-            <h4>Replay your tap</h4>
-            <p>A replayed acknowledgement decides nothing twice. A re-proposed submit approved
-               from the lenses commits exactly once, and a rejected proposal is destroyed rather
-               than left on the shelf.</p>
-            <span class="tc-block">Blocked · <b>single-use decisions</b></span>
-          </article>
-
-          <article class="threat-card reveal">
-            <span class="tc-no">THREAT 03</span>
-            <h4>Tamper with the batch</h4>
-            <p>Tap three releases nine submissions, so the manifest is explicit: every
-               <code>proposal_id</code>, fingerprint, generation, session and portal. A tampered
-               manifest is rejected with HTTP 409.</p>
-            <span class="tc-block">Blocked · <b>bound batch manifest</b></span>
-          </article>
-
-          <article class="threat-card reveal">
-            <span class="tc-no">THREAT 04</span>
-            <h4>Steal the password</h4>
-            <p>The vault is blind — hidden from the model and from page JavaScript. Secret key
-               material and generated passwords never reach logs, proposals, audit records,
-               screenshots or test output.</p>
-            <span class="tc-block">Blocked · <b>blind vault, zero leaks</b></span>
-          </article>
-
-          <article class="threat-card reveal">
-            <span class="tc-no">THREAT 05</span>
-            <h4>Sign as you, later</h4>
-            <p>Every assertion is an ECDSA P-256 signature bound to the challenge, the origin and
-               the relying party. Wrong challenge, wrong origin, wrong RP and replayed assertions
-               all fail verification.</p>
-            <span class="tc-block">Blocked · <b>challenge-bound P-256</b></span>
-          </article>
-
-          <article class="threat-card reveal">
-            <span class="tc-no">THREAT 06</span>
-            <h4>Let it approve itself</h4>
-            <p>The agent can observe and propose. It cannot approve. A decision enters only
-               through the host boundary, from a human wearing the glasses — never from a
-               notification, never from a replayed ack.</p>
-            <span class="tc-block">Blocked · <b>human-only authority</b></span>
-          </article>
-        </div>
       </div>
     </div>
+
+    <div class="statement reverse">
+      <h2 class="fit fit-stmt">It has your<br /><em>secrets.</em></h2>
+      <div class="statement-body">
+        <p class="lede">That is the point. It can finish the job for you because it can reach
+           the things only you can reach.</p>
+        <figure class="s-art on-dark">
+          <div class="s-mark">
+            <img src="assets/img/icon-signal.webp" width="230" height="230"
+                 alt="The Walkaway supervision mark" />
+          </div>
+        </figure>
+      </div>
+    </div>
+
   </div>
 </section>
 
 <!-- ============================== FILM ============================== -->
-<section class="section" id="film">
+<section class="band band-paper" id="film">
   <div class="shell">
-    <div class="section-head reveal">
-      <p class="eyebrow">Walkaway in action</p>
-      <h2 class="h-lg">Three minutes,<br />one coffee, three taps.</h2>
-    </div>
-
     <div class="film">
-      <div class="film-side">
-        <article class="film-card reveal">
-          <div class="fc-label">Intro · 0:00</div>
-          <h4>The gap</h4>
-          <p>Muse can plan, compare and fill a form. Muse cannot touch your browser — and you would
-             not want an unsupervised agent clicking through your accounts anyway.</p>
-          <span class="fc-time">Shot 01 — the gap</span>
-        </article>
+      <h2 class="fit fit-film">Three minutes.<br />One <em>coffee.</em></h2>
 
-        <article class="film-card reveal">
-          <div class="fc-label">Act I · 0:20</div>
-          <h4>Delegate</h4>
-          <p>One sentence starts the run. Ten conference portals open on their own and the agent
-             reads a fresh indexed table of every operable element on each page.</p>
-          <span class="fc-time">Shot 02 — delegate</span>
-        </article>
+      <div class="film-body">
+        <div>
+          <p class="lede">Ten forms, one resident model, three taps, and a receipt you can read
+             line by line.</p>
+          <p style="margin-top:28px"><a class="btn" href="#set">See the set</a></p>
+        </div>
 
-        <article class="film-card reveal">
-          <div class="fc-label">Act II · 0:45</div>
-          <h4>The brake</h4>
-          <p>Wrong T-shirt size, rejected on the glasses. The browser does not move. The corrected
-             proposal arrives and is approved.</p>
-          <span class="fc-time">Shot 03 — the brake</span>
-        </article>
-
-        <article class="film-card reveal">
-          <div class="fc-label">Outro · 2:30</div>
-          <h4>Finish, then glasses</h4>
-          <p>Ten of ten submitted. The same brake works in your lens when your hands are busy.
-             Open source — link below.</p>
-          <span class="fc-time">Shot 04 — the receipt</span>
-        </article>
-      </div>
-
-      <div class="frame reveal">
-        <div class="frame-grid" aria-hidden="true"></div>
-        <span class="pill solar frame-badge">3:00 master take</span>
-        <div class="frame-inner">
-          <div class="fi-kicker">Walkaway × Muse Blitz</div>
-          <h3>Now go get some <em>fresh air</em></h3>
-          <p>The full three-minute film: ten real portals, one resident local model, three glasses
-             approvals, and a receipt you can audit line by line.</p>
-          <a class="play" href="#film" aria-label="Play the three-minute demo">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5Z" /></svg>
+        <div class="frame">
+          <span class="sq sq-green"></span>
+          <img class="f-mascot" src="assets/img/muse-mascot.webp" width="1518" height="1454" alt="" />
+          <span class="f-tag tag">Walkaway × Muse Blitz</span>
+          <span class="f-time">3:00</span>
+          <a class="f-play" href="#film" aria-label="Play the three-minute film">
+            <span>
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l13-7.5Z" /></svg>
+            </span>
           </a>
         </div>
-        <span class="frame-note">Muse — Hermes Browser · supervised session</span>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ============================== ASSET KIT + ADS (paper band) ============================== -->
-<div class="paper-band">
-
-  <section class="section" id="kit">
-    <div class="shell">
-      <div class="section-head reveal">
-        <p class="eyebrow on-light">The asset kit</p>
-        <h2 class="h-lg">Everything an app store<br />listing asks for.</h2>
-        <p class="lede on-light">Full-resolution source files, ready to drop into an App Store
-           submission, a press kit, or a sponsored placement. Icons ship at 1024, screenshots at
-           native resolution.</p>
-      </div>
-
-      <div class="kit reveal">
-        <div class="kit-row">
-          <article class="kit-tile">
-            <div class="kt-art"><img src="assets/img/icon-ios-default.webp" width="512" height="512" alt="Walkaway app icon, default variant" /></div>
-            <span class="kt-name">App icon · default</span>
-            <span class="kt-meta">1024 × 1024 PNG</span>
-            <a class="kt-dl" href="assets/download/icon-ios-default.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-
-          <article class="kit-tile">
-            <div class="kt-art"><img src="assets/img/icon-ios-dark.webp" width="512" height="512" alt="Walkaway app icon, dark variant" /></div>
-            <span class="kt-name">App icon · dark</span>
-            <span class="kt-meta">1024 × 1024 PNG</span>
-            <a class="kt-dl" href="assets/download/icon-ios-dark.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-
-          <article class="kit-tile">
-            <div class="kt-art"><img src="assets/img/icon-ios-tinted.webp" width="512" height="512" alt="Walkaway app icon, tinted variant" /></div>
-            <span class="kt-name">App icon · tinted</span>
-            <span class="kt-meta">1024 × 1024 PNG</span>
-            <a class="kt-dl" href="assets/download/icon-ios-tinted.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-
-          <article class="kit-tile">
-            <div class="kt-art"><img src="assets/img/icon-signal.webp" width="512" height="512" alt="Walkaway supervision eye mark" /></div>
-            <span class="kt-name">Supervision mark</span>
-            <span class="kt-meta">1600 × 1600 PNG</span>
-            <a class="kt-dl" href="assets/download/icon-signal.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-        </div>
-
-        <div class="kit-row kit-shots">
-          <article class="kit-tile">
-            <div class="kt-art shot"><img src="assets/img/screen-browser-working.webp" width="1344" height="1143" alt="Hermes browser window showing a supervised page with a supervision bar" /></div>
-            <span class="kt-name">Shot · browser working</span>
-            <span class="kt-meta">1344 × 1143 PNG</span>
-            <a class="kt-dl" href="assets/download/screen-browser-working.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-
-          <article class="kit-tile">
-            <div class="kt-art shot"><img src="assets/img/screen-add-password.webp" width="1344" height="444" alt="Add password prompt for a site" /></div>
-            <span class="kt-name">Shot · add password</span>
-            <span class="kt-meta">1344 × 444 PNG</span>
-            <a class="kt-dl" href="assets/download/screen-add-password.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-
-          <article class="kit-tile">
-            <div class="kt-art shot"><img src="assets/img/screen-allow-login.webp" width="1344" height="1286" alt="Permission dialog allowing the agent to sign in" /></div>
-            <span class="kt-name">Shot · allow login</span>
-            <span class="kt-meta">1344 × 1286 PNG</span>
-            <a class="kt-dl" href="assets/download/screen-allow-login.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-        </div>
-
-        <div class="kit-row">
-          <article class="kit-tile">
-            <div class="kt-art"><img src="assets/img/mark-walkaway.webp" width="512" height="512" alt="Walkaway wordmark" /></div>
-            <span class="kt-name">Wordmark</span>
-            <span class="kt-meta">1024 × 1024 PNG</span>
-            <a class="kt-dl" href="assets/download/mark-walkaway.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-
-          <article class="kit-tile">
-            <div class="kt-art"><img src="assets/img/icon-device-sync.webp" width="512" height="512" alt="Device sync icon showing a laptop, browser and agent cycling" /></div>
-            <span class="kt-name">Device sync icon</span>
-            <span class="kt-meta">1920 × 1171 JPG</span>
-            <a class="kt-dl" href="assets/download/icon-device-sync.jpg" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-
-          <article class="kit-tile">
-            <div class="kt-art"><img src="assets/img/hero-winged-chips.webp" width="512" height="512" alt="Hero artwork: winged terminals and golden AI chips" /></div>
-            <span class="kt-name">Hero artwork</span>
-            <span class="kt-meta">1448 × 1086 PNG</span>
-            <a class="kt-dl" href="assets/download/hero-winged-chips.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-
-          <article class="kit-tile">
-            <div class="kt-art"><img src="assets/img/avatar-adversary.webp" width="512" height="512" alt="Adversary avatar — the ghost in the top hat" /></div>
-            <span class="kt-name">Adversary avatar</span>
-            <span class="kt-meta">1024 × 1024 PNG, cut out</span>
-            <a class="kt-dl" href="assets/download/avatar-adversary.png" download>Download <span aria-hidden="true">↓</span></a>
-          </article>
-        </div>
-
-        <p class="kit-note">
-          Icons, screenshots, wordmark, hero art and the adversary mark in one drop. Every file on
-          this page is the real shipped asset — no mockups, no placeholders.
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================== ADS ============================== -->
-  <section class="section" id="ads">
-    <div class="shell">
-      <div class="ads-head reveal">
-        <div>
-          <p class="eyebrow on-light">Paid placements</p>
-          <h2 class="h-md">Sponsored creative,<br />cut to the slot.</h2>
-        </div>
-        <div class="slot-tabs" role="group" aria-label="Filter ad slots">
-          <button class="slot-tab active" type="button" data-slot="all">All</button>
-          <button class="slot-tab" type="button" data-slot="feed">Feed 1200×628</button>
-          <button class="slot-tab" type="button" data-slot="square">Square 1080×1080</button>
-          <button class="slot-tab" type="button" data-slot="story">Story 1080×1920</button>
-          <button class="slot-tab" type="button" data-slot="display">Display 300×250</button>
-        </div>
-      </div>
-
-      <div class="ads reveal">
-        <div class="ad-grid">
-
-          <!-- A-01 -->
-          <article class="ad-item" data-slot="feed">
-            <div class="ad-canvas">
-              <svg class="banner-svg" viewBox="0 0 1200 628" role="img" aria-label="Ad: Delegate ten portals, walk away">
-                <defs>
-                  <linearGradient id="g01" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0" stop-color="#ffc400" /><stop offset="1" stop-color="#f0a500" />
-                  </linearGradient>
-                  <pattern id="p01" width="46" height="46" patternUnits="userSpaceOnUse">
-                    <path d="M46 0H0V46" fill="none" stroke="rgba(8,11,15,.13)" stroke-width="1.5" />
-                  </pattern>
-                </defs>
-                <rect width="1200" height="628" fill="url(#g01)" />
-                <rect width="1200" height="628" fill="url(#p01)" />
-                <circle cx="1040" cy="150" r="200" fill="#fff" opacity=".22" />
-                <g transform="translate(950 52)">
-                  <rect width="170" height="170" rx="44" fill="#080b0f" />
-                  <g transform="translate(33 41) scale(4.3)">
-                    <path d="M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12Z" fill="none" stroke="#ffc400" stroke-width="2" />
-                    <circle cx="12" cy="12" r="2.6" fill="#ffc400" />
-                  </g>
-                </g>
-                <text x="74" y="112" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="24" letter-spacing="6" fill="#080b0f">META MUSE × WALKAWAY BLITZ</text>
-                <text x="74" y="292" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="92" fill="#080b0f" letter-spacing="-2">DELEGATE</text>
-                <text x="74" y="394" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="92" fill="#080b0f" letter-spacing="-2">TEN PORTALS.</text>
-                <text x="74" y="496" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="92" fill="#080b0f" letter-spacing="-2">WALK AWAY.</text>
-                <text x="74" y="578" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="22" letter-spacing="3" fill="rgba(8,11,15,.72)">3 TAPS ON YOUR GLASSES · 1 LLM CALL · 0 SECRET LEAKS</text>
-              </svg>
-            </div>
-            <div class="ad-foot">
-              <div><span class="ad-name">A-01 · Delegate</span><span class="ad-size">Feed placement · 1200 × 628</span></div>
-              <button class="ad-dl" type="button" data-dl="A-01-delegate">Download SVG</button>
-            </div>
-          </article>
-
-          <!-- A-02 -->
-          <article class="ad-item" data-slot="square">
-            <div class="ad-canvas">
-              <svg class="banner-svg" viewBox="0 0 1080 1080" role="img" aria-label="Ad: Three taps, then silence">
-                <defs>
-                  <radialGradient id="g02" cx="50%" cy="0%" r="85%">
-                    <stop offset="0" stop-color="#1b2530" /><stop offset="1" stop-color="#080b0f" />
-                  </radialGradient>
-                </defs>
-                <rect width="1080" height="1080" fill="url(#g02)" />
-                <g stroke="rgba(255,255,255,.07)" stroke-width="1.5">
-                  <path d="M0 135h1080M0 270h1080M0 405h1080M0 540h1080M0 675h1080M0 810h1080M0 945h1080" />
-                  <path d="M135 0v1080M270 0v1080M405 0v1080M540 0v1080M675 0v1080M810 0v1080M945 0v1080" />
-                </g>
-                <circle cx="540" cy="330" r="250" fill="#ffc400" opacity=".14" />
-                <text x="540" y="150" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="30" letter-spacing="8" fill="#ffc400">WALKAWAY × MUSE BLITZ</text>
-                <text x="540" y="332" text-anchor="middle" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="172" fill="#eef3f8" letter-spacing="-4">THREE</text>
-                <text x="540" y="494" text-anchor="middle" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="172" fill="#eef3f8" letter-spacing="-4">TAPS.</text>
-                <text x="540" y="588" text-anchor="middle" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="84" fill="#7ed321" letter-spacing="-2">THEN SILENCE.</text>
-                <g transform="translate(260 656)">
-                  <rect width="560" height="196" rx="34" fill="#14191f" stroke="rgba(255,255,255,.14)" />
-                  <text x="280" y="58" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="22" letter-spacing="3" fill="#6f7d8c">BATCH COMMIT</text>
-                  <text x="280" y="118" text-anchor="middle" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="38" fill="#eef3f8" letter-spacing="-1">9 SUBMISSIONS</text>
-                  <text x="280" y="162" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="19" letter-spacing="2" fill="#7ed321">MANIFEST LISTED · 1 TAP</text>
-                </g>
-                <text x="540" y="962" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="26" letter-spacing="5" fill="#6f7d8c">10 PORTALS · 0 LLM TOKENS TO REPLAY</text>
-              </svg>
-            </div>
-            <div class="ad-foot">
-              <div><span class="ad-name">A-02 · Three taps</span><span class="ad-size">Square placement · 1080 × 1080</span></div>
-              <button class="ad-dl" type="button" data-dl="A-02-three-taps">Download SVG</button>
-            </div>
-          </article>
-
-          <!-- A-03 -->
-          <article class="ad-item" data-slot="story">
-            <div class="ad-canvas">
-              <svg class="banner-svg" viewBox="0 0 1080 1920" role="img" aria-label="Ad: Go make coffee">
-                <defs>
-                  <linearGradient id="g03" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0" stop-color="#0b1219" /><stop offset=".55" stop-color="#1d2a20" /><stop offset="1" stop-color="#ffc400" />
-                  </linearGradient>
-                  <radialGradient id="g03s" cx="50%" cy="78%" r="52%">
-                    <stop offset="0" stop-color="#fff6dc" stop-opacity=".95" /><stop offset="1" stop-color="#fff6dc" stop-opacity="0" />
-                  </radialGradient>
-                </defs>
-                <rect width="1080" height="1920" fill="url(#g03)" />
-                <rect width="1080" height="1920" fill="url(#g03s)" />
-                <circle cx="540" cy="1440" r="300" fill="#ffc400" opacity=".5" />
-                <circle cx="540" cy="1440" r="185" fill="#fff6dc" opacity=".85" />
-                <g transform="translate(360 1230)">
-                  <rect width="360" height="360" rx="92" fill="#080b0f" opacity=".92" />
-                  <g transform="translate(84 116) scale(8)">
-                    <path d="M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12Z" fill="none" stroke="#ffc400" stroke-width="2" />
-                    <circle cx="12" cy="12" r="2.6" fill="#ffc400" />
-                  </g>
-                </g>
-                <text x="540" y="240" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="34" letter-spacing="10" fill="#ffc400">META MUSE × WALKAWAY</text>
-                <text x="540" y="490" text-anchor="middle" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="132" fill="#eef3f8" letter-spacing="-3">GO MAKE</text>
-                <text x="540" y="632" text-anchor="middle" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="132" fill="#ffc400" letter-spacing="-3">COFFEE.</text>
-                <text x="540" y="808" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="34" letter-spacing="4" fill="#b9c6d3">TEN PORTALS WILL BE FILLED IN.</text>
-                <text x="540" y="868" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="34" letter-spacing="4" fill="#b9c6d3">YOU WILL BE TAPPED THREE TIMES.</text>
-                <g transform="translate(240 1760)">
-                  <rect width="600" height="80" rx="40" fill="#080b0f" opacity=".85" />
-                  <text x="300" y="52" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="26" letter-spacing="5" fill="#7ed321">SUPERVISED BATCH BROWSER</text>
-                </g>
-              </svg>
-            </div>
-            <div class="ad-foot">
-              <div><span class="ad-name">A-03 · Make coffee</span><span class="ad-size">Story placement · 1080 × 1920</span></div>
-              <button class="ad-dl" type="button" data-dl="A-03-make-coffee">Download SVG</button>
-            </div>
-          </article>
-
-          <!-- A-04 -->
-          <article class="ad-item" data-slot="display">
-            <div class="ad-canvas">
-              <svg class="banner-svg" viewBox="0 0 300 250" role="img" aria-label="Ad: Zero LLM calls to replay">
-                <rect width="300" height="250" fill="#080b0f" />
-                <rect x="0" y="0" width="300" height="7" fill="#7ed321" />
-                <text x="20" y="52" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="11" letter-spacing="3" fill="#6f7d8c">WALKAWAY</text>
-                <text x="20" y="92" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="30" fill="#eef3f8" letter-spacing="-1">ZERO LLM</text>
-                <text x="20" y="126" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="30" fill="#eef3f8" letter-spacing="-1">CALLS TO</text>
-                <text x="20" y="162" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="34" fill="#7ed321" letter-spacing="-1">REPLAY.</text>
-                <text x="20" y="192" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="10" letter-spacing="1.2" fill="#6f7d8c">9 PORTALS · 1 TAP · 10/10 ROWS</text>
-                <g transform="translate(214 18)">
-                  <rect width="66" height="40" rx="11" fill="#ffc400" />
-                  <text x="33" y="27" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="15" fill="#080b0f">GO</text>
-                </g>
-              </svg>
-            </div>
-            <div class="ad-foot">
-              <div><span class="ad-name">A-04 · Zero LLM</span><span class="ad-size">Display placement · 300 × 250</span></div>
-              <button class="ad-dl" type="button" data-dl="A-04-zero-llm">Download SVG</button>
-            </div>
-          </article>
-
-          <!-- A-05 -->
-          <article class="ad-item" data-slot="feed">
-            <div class="ad-canvas">
-              <svg class="banner-svg" viewBox="0 0 1200 628" role="img" aria-label="Ad: The secret never leaves the laptop">
-                <defs>
-                  <linearGradient id="g05" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0" stop-color="#0b4a2f" /><stop offset="1" stop-color="#08301f" />
-                  </linearGradient>
-                  <pattern id="p05" width="40" height="40" patternUnits="userSpaceOnUse">
-                    <path d="M40 0H0V40" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="1.4" />
-                  </pattern>
-                </defs>
-                <rect width="1200" height="628" fill="url(#g05)" />
-                <rect width="1200" height="628" fill="url(#p05)" />
-                <g transform="translate(952 56)">
-                  <rect width="176" height="176" rx="46" fill="#7ed321" />
-                  <path d="M88 44 132 68v40c0 31-22 52-44 60-22-8-44-29-44-60V68Z" fill="#08301f" />
-                  <path d="m68 110 15 15 27-30" fill="none" stroke="#7ed321" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
-                </g>
-                <text x="74" y="148" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="26" letter-spacing="6" fill="#7ed321">BLIND VAULT</text>
-                <text x="74" y="296" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="92" fill="#eef3f8" letter-spacing="-2">THE SECRET</text>
-                <text x="74" y="398" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="92" fill="#eef3f8" letter-spacing="-2">NEVER LEAVES</text>
-                <text x="74" y="500" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="92" fill="#7ed321" letter-spacing="-2">THE LAPTOP.</text>
-                <text x="74" y="570" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="21" letter-spacing="2" fill="#a9d8bd">P-256 ASSERTIONS · HIDDEN FROM LLM AND JS</text>
-                <text x="74" y="602" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="17" letter-spacing="2" fill="#6f9d84">ZERO LEAKS IN PROPOSALS, AUDIT, SCREENSHOTS, LOGS</text>
-              </svg>
-            </div>
-            <div class="ad-foot">
-              <div><span class="ad-name">A-05 · Blind vault</span><span class="ad-size">Feed placement · 1200 × 628</span></div>
-              <button class="ad-dl" type="button" data-dl="A-05-blind-vault">Download SVG</button>
-            </div>
-          </article>
-
-          <!-- A-06 -->
-          <article class="ad-item" data-slot="square">
-            <div class="ad-canvas">
-              <svg class="banner-svg" viewBox="0 0 1080 1080" role="img" aria-label="Ad: Ten of ten submitted">
-                <rect width="1080" height="1080" fill="#f3f0e6" />
-                <rect x="0" y="0" width="1080" height="12" fill="#0a84ff" />
-                <text x="70" y="140" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="28" letter-spacing="7" fill="#0a84ff">CAMPAIGN RECEIPT</text>
-                <text x="64" y="300" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="168" fill="#14181d" letter-spacing="-4">10<tspan font-family="Departure Mono, ui-monospace, monospace">/</tspan>10</text>
-                <text x="70" y="392" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="92" fill="#14181d" letter-spacing="-2">SUBMITTED</text>
-                <g font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="26" letter-spacing="2">
-                  <text x="70" y="470" fill="#5d6874">TOTAL LLM CALLS</text><text x="700" y="470" fill="#14181d">1</text>
-                  <text x="70" y="522" fill="#5d6874">RECIPE REPLAY CALLS</text><text x="700" y="522" fill="#14181d">0</text>
-                  <text x="70" y="574" fill="#5d6874">GLASSES APPROVALS</text><text x="700" y="574" fill="#14181d">3</text>
-                  <text x="70" y="626" fill="#5d6874">SECRET LEAKS</text><text x="700" y="626" fill="#0b4a2f">0</text>
-                </g>
-                <g transform="translate(70 700)">
-                  <rect width="940" height="250" rx="26" fill="#14181d" />
-                  <text x="34" y="60" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="22" letter-spacing="3" fill="#6f7d8c">DECISION SURFACE</text>
-                  <text x="34" y="118" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="46" fill="#eef3f8" letter-spacing="-1">glasses_dat</text>
-                  <text x="34" y="176" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="21" letter-spacing="2" fill="#6f7d8c">FINGERPRINT BOUND · GENERATION LOCKED</text>
-                  <circle cx="850" cy="125" r="54" fill="#7ed321" />
-                  <path d="m824 125 20 20 34-40" fill="none" stroke="#080b0f" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
-                </g>
-              </svg>
-            </div>
-            <div class="ad-foot">
-              <div><span class="ad-name">A-06 · The receipt</span><span class="ad-size">Square placement · 1080 × 1080</span></div>
-              <button class="ad-dl" type="button" data-dl="A-06-receipt">Download SVG</button>
-            </div>
-          </article>
-
-        </div>
-      </div>
-    </div>
-  </section>
-</div>
-
-<!-- ============================== PROOF ============================== -->
-<section class="section" id="proof">
+<!-- ============================== THE SET ============================== -->
+<section class="band band-paper" id="set">
   <div class="shell">
-    <div class="section-head reveal">
-      <p class="eyebrow">Verified, not promised</p>
-      <h2 class="h-lg">Every claim has a<br />command behind it.</h2>
-      <p class="lede">The test registry keeps the exact command, the real components involved, the
-         assertion, and the last observed result for every hop. Here are three of them.</p>
+    <div class="set-head reveal">
+      <h2 class="d2 fit fit-set">The set.</h2>
+      <span class="tag">Ten posters · 1920 × 1080 · SVG</span>
     </div>
 
-    <div class="tests">
-      <article class="test-card reveal">
-        <span class="tc-id">T-ZONE-Z-10PORTAL-CAMPAIGN</span>
-        <h4>Ten portals, one LLM call, three glasses cards</h4>
-        <p>The full campaign runs against the real Hermes binary, the SQLite fixture, the resident
-           local Qwen3-4B, and the message bus. Rejecting card three leaves portals two through ten
-           uncommitted.</p>
-        <div class="tc-res"><span>3 tests · 16.695s</span><b>PASS</b></div>
-      </article>
-
-      <article class="test-card reveal">
-        <span class="tc-id">T-ZONE-X-SUPERPOWERS</span>
-        <h4>Commit-only gating and the X-Ray overlay</h4>
-        <p>Under <code style="font-family:var(--mono);color:var(--solar)">--supervise-commits-only</code>,
-           routine form fills auto-execute while submits hard-freeze at the engine boundary. The
-           freeze shield, vault shield and telemetry bar are captured from the live window.</p>
-        <div class="tc-res"><span>1.799s · 54/54 checks</span><b>PASS</b></div>
-      </article>
-
-      <article class="test-card reveal">
-        <span class="tc-id">T-WALKAWAY-DAT-001</span>
-        <h4>The tap on real lenses</h4>
-        <p>Glasses worn and band connected, a laptop message became a Walkaway DAT card on the
-           lenses, and the physical approve came back as
-           <code style="font-family:var(--mono);color:var(--solar)">source: glasses_dat</code>.</p>
-        <div class="tc-res"><span>Hardware · 2026-11-04</span><b>PASS</b></div>
-      </article>
+    <div class="set-grid">
+      <a class="set-item reveal" href="assets/posters/01-local-browser.svg" download>
+        <img src="assets/posters/01-local-browser.svg" width="1920" height="1080" alt="Poster: A local intelligent browser" />
+        <span class="s-meta"><span class="tag">01 · Local browser</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/02-walkaway.svg" download>
+        <img src="assets/posters/02-walkaway.svg" width="1920" height="1080" alt="Poster: Walkaway" />
+        <span class="s-meta"><span class="tag">02 · Walkaway</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/03-reachable.svg" download>
+        <img src="assets/posters/03-reachable.svg" width="1920" height="1080" alt="Poster: Your phone talks to it" />
+        <span class="s-meta"><span class="tag">03 · Reachable</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/04-one-tap.svg" download>
+        <img src="assets/posters/04-one-tap.svg" width="1920" height="1080" alt="Poster: Peace of mind in one tap" />
+        <span class="s-meta"><span class="tag">04 · One tap</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/05-composes.svg" download>
+        <img src="assets/posters/05-composes.svg" width="1920" height="1080" alt="Poster: It fetches, it plans, it finishes" />
+        <span class="s-meta"><span class="tag">05 · Composes</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/06-secrets.svg" download>
+        <img src="assets/posters/06-secrets.svg" width="1920" height="1080" alt="Poster: It has your secrets" />
+        <span class="s-meta"><span class="tag">06 · Secrets</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/07-coffee.svg" download>
+        <img src="assets/posters/07-coffee.svg" width="1920" height="1080" alt="Poster: Go make coffee" />
+        <span class="s-meta"><span class="tag">07 · Coffee</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/08-manifest.svg" download>
+        <img src="assets/posters/08-manifest.svg" width="1920" height="1080" alt="Poster: Manifest first" />
+        <span class="s-meta"><span class="tag">08 · Manifest</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/09-ten-of-ten.svg" download>
+        <img src="assets/posters/09-ten-of-ten.svg" width="1920" height="1080" alt="Poster: Ten of ten submitted" />
+        <span class="s-meta"><span class="tag">09 · Ten of ten</span><span class="dl">SVG</span></span>
+      </a>
+      <a class="set-item reveal" href="assets/posters/10-broken-form.svg" download>
+        <img src="assets/posters/10-broken-form.svg" width="1920" height="1080" alt="Poster: Never see a broken form again" />
+        <span class="s-meta"><span class="tag">10 · Broken form</span><span class="dl">SVG</span></span>
+      </a>
     </div>
   </div>
 </section>
 
-<!-- ============================== FAQ ============================== -->
-<section class="section" id="faq">
+<!-- ============================== BANNERS ============================== -->
+<section class="band band-paper" id="banners">
   <div class="shell">
-    <div class="faq">
-      <div class="faq-intro reveal">
-        <p class="eyebrow">Frequently asked questions</p>
-        <h2 class="h-md">Ask the<br />short questions.</h2>
+    <div class="set-head reveal">
+      <h2 class="d2 fit fit-set">Paid placements.</h2>
+      <span class="tag">Six creatives · true ad ratios · SVG</span>
+    </div>
+
+    <div class="slot-tabs" role="group" aria-label="Filter ad placements">
+      <button class="slot-tab active" type="button" data-slot="all">All</button>
+      <button class="slot-tab" type="button" data-slot="feed">Feed</button>
+      <button class="slot-tab" type="button" data-slot="square">Square</button>
+      <button class="slot-tab" type="button" data-slot="story">Story</button>
+      <button class="slot-tab" type="button" data-slot="display">Display</button>
+    </div>
+
+    <div class="banner-grid">
+      <div class="banner-item" data-slot="feed">
+        <img src="assets/banners/01-feed.svg" width="1200" height="628" alt="Ad: A local intelligent browser" />
+        <div class="b-meta"><span class="tag">Feed · 1200 × 628</span><a class="dl" href="assets/banners/01-feed.svg" download>SVG</a></div>
       </div>
-
-      <div class="faq-list">
-        <div class="faq-item open">
-          <button class="faq-q" aria-expanded="true" aria-controls="faq-0">
-            <span>Does the agent work in my real browser?</span><span class="fq-sign" aria-hidden="true"></span>
-          </button>
-          <div class="faq-panel" id="faq-0"><div>
-            <p>No. Walkaway ships its own engine — a native supervised browser called Hermes with
-               the Blitz layout engine and Static Hermes page logic. That is deliberate: the demo
-               path is a separate execution path from the older Chrome relay, so it is always clear
-               which browser ran an action.</p>
-          </div></div>
-        </div>
-
-        <div class="faq-item">
-          <button class="faq-q" aria-expanded="false" aria-controls="faq-1">
-            <span>Does the model ever see my password?</span><span class="fq-sign" aria-hidden="true"></span>
-          </button>
-          <div class="faq-panel" id="faq-1"><div>
-            <p>No. The vault holds a generated 24-character secret and a P-256 keypair on the
-               laptop. The engine blind-injects the secret at commit time, and the X-Ray overlay
-               marks the field as hidden from both the LLM and page JavaScript. Tests assert the
-               plaintext appears in no observation, proposal, audit record, screenshot or log.</p>
-          </div></div>
-        </div>
-
-        <div class="faq-item">
-          <button class="faq-q" aria-expanded="false" aria-controls="faq-2">
-            <span>Can a notification approve something?</span><span class="fq-sign" aria-hidden="true"></span>
-          </button>
-          <div class="faq-panel" id="faq-2"><div>
-            <p>No. Transport acknowledgements — <code style="font-family:var(--mono);color:var(--solar)">received</code>,
-               <code style="font-family:var(--mono);color:var(--solar)">dat_sent</code>,
-               <code style="font-family:var(--mono);color:var(--solar)">dat_failed</code> — never authorize
-               anything. Only a physical approve or reject from the glasses can become a decision
-               frame bound to the proposal id, fingerprint and generation.</p>
-          </div></div>
-        </div>
-
-        <div class="faq-item">
-          <button class="faq-q" aria-expanded="false" aria-controls="faq-3">
-            <span>Is the model in the cloud?</span><span class="fq-sign" aria-hidden="true"></span>
-          </button>
-          <div class="faq-panel" id="faq-3"><div>
-            <p>The demo path runs a resident local <code style="font-family:var(--mono);color:var(--solar)">Qwen3-4B</code>
-               on the laptop's GPU for the one repair it needs. The browser, the vault, the bus and
-               the fixture are local processes. The Muse connector is a separate hosted entry point
-               for the Meta side.</p>
-          </div></div>
-        </div>
-
-        <div class="faq-item">
-          <button class="faq-q" aria-expanded="false" aria-controls="faq-4">
-            <span>Is this open source?</span><span class="fq-sign" aria-hidden="true"></span>
-          </button>
-          <div class="faq-panel" id="faq-4"><div>
-            <p>Yes — BSD-3-Clause. The browser engine, the host bridge, the message bus, the
-               Android bridge, the demo fixtures, the campaign driver and the whole test suite are
-               in the public repository.</p>
-          </div></div>
-        </div>
+      <div class="banner-item" data-slot="square">
+        <img src="assets/banners/02-square.svg" width="1080" height="1080" alt="Ad: It only interrupts when it must" />
+        <div class="b-meta"><span class="tag">Square · 1080 × 1080</span><a class="dl" href="assets/banners/02-square.svg" download>SVG</a></div>
+      </div>
+      <div class="banner-item" data-slot="story">
+        <img src="assets/banners/03-story.svg" width="1080" height="1920" alt="Ad: Go make coffee" />
+        <div class="b-meta"><span class="tag">Story · 1080 × 1920</span><a class="dl" href="assets/banners/03-story.svg" download>SVG</a></div>
+      </div>
+      <div class="banner-item" data-slot="display">
+        <img src="assets/banners/04-display.svg" width="300" height="250" alt="Ad: Your secrets" />
+        <div class="b-meta"><span class="tag">Display · 300 × 250</span><a class="dl" href="assets/banners/04-display.svg" download>SVG</a></div>
+      </div>
+      <div class="banner-item" data-slot="feed">
+        <img src="assets/banners/05-feed.svg" width="1200" height="628" alt="Ad: It fetches, it plans, it finishes" />
+        <div class="b-meta"><span class="tag">Feed · 1200 × 628</span><a class="dl" href="assets/banners/05-feed.svg" download>SVG</a></div>
+      </div>
+      <div class="banner-item" data-slot="square">
+        <img src="assets/banners/06-square.svg" width="1080" height="1080" alt="Ad: Ten of ten submitted" />
+        <div class="b-meta"><span class="tag">Square · 1080 × 1080</span><a class="dl" href="assets/banners/06-square.svg" download>SVG</a></div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ============================== CTA ============================== -->
-<section class="section tight">
+<!-- ============================== ASSETS ============================== -->
+<section class="band band-paper" id="assets">
   <div class="shell">
-    <div class="cta reveal">
-      <svg class="cta-mark" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.4" aria-hidden="true">
-        <path d="M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12Z" /><circle cx="12" cy="12" r="3.2" />
-      </svg>
-      <h2>Ready to get something done?</h2>
-      <p>Delegate the queue, keep the brake, and let the agent work while you are not looking at
-         it. Open source, self-hosted, and honest about every hop.</p>
-      <div class="cta-actions">
-        <a class="btn btn-primary" href="#film">Watch the demo <span class="arrow" aria-hidden="true">→</span></a>
-        <a class="btn btn-ghost" href="#kit">Download the assets <span class="arrow" aria-hidden="true">→</span></a>
-        <a class="btn btn-ghost" href="#proof">Read the proof <span class="arrow" aria-hidden="true">→</span></a>
+    <div class="set-head reveal">
+      <h2 class="d2 fit fit-set">The assets.</h2>
+      <span class="tag">Full resolution · downloads</span>
+    </div>
+
+    <div class="kit-grid">
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/icon-ios-default.webp" width="512" height="512" alt="Walkaway app icon, default" /></div>
+        <span class="k-name">App icon · default</span>
+        <span class="k-meta">1024 × 1024 PNG</span>
+        <a class="dl" href="assets/download/icon-ios-default.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/icon-ios-dark.webp" width="512" height="512" alt="Walkaway app icon, dark" /></div>
+        <span class="k-name">App icon · dark</span>
+        <span class="k-meta">1024 × 1024 PNG</span>
+        <a class="dl" href="assets/download/icon-ios-dark.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/icon-ios-tinted.webp" width="512" height="512" alt="Walkaway app icon, tinted" /></div>
+        <span class="k-name">App icon · tinted</span>
+        <span class="k-meta">1024 × 1024 PNG</span>
+        <a class="dl" href="assets/download/icon-ios-tinted.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/icon-signal.webp" width="512" height="512" alt="Supervision mark" /></div>
+        <span class="k-name">Supervision mark</span>
+        <span class="k-meta">1600 × 1600 PNG</span>
+        <a class="dl" href="assets/download/icon-signal.png" download>Download</a>
+      </div>
+
+      <div class="kit-cell reveal">
+        <div class="kit-art shot"><img src="assets/img/screen-browser-working.webp" width="1344" height="1143" alt="Hermes browser running a supervised session" /></div>
+        <span class="k-name">Shot · working</span>
+        <span class="k-meta">1344 × 1143 PNG</span>
+        <a class="dl" href="assets/download/screen-browser-working.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art shot"><img src="assets/img/screen-add-password.webp" width="1344" height="444" alt="Add password prompt" /></div>
+        <span class="k-name">Shot · add password</span>
+        <span class="k-meta">1344 × 444 PNG</span>
+        <a class="dl" href="assets/download/screen-add-password.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art shot"><img src="assets/img/screen-allow-login.webp" width="1344" height="1286" alt="Permission dialog allowing sign in" /></div>
+        <span class="k-name">Shot · allow login</span>
+        <span class="k-meta">1344 × 1286 PNG</span>
+        <a class="dl" href="assets/download/screen-allow-login.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/avatar-adversary.webp" width="512" height="512" alt="The agent on the other end" /></div>
+        <span class="k-name">Agent mark</span>
+        <span class="k-meta">1024 × 1024 PNG</span>
+        <a class="dl" href="assets/download/avatar-adversary.png" download>Download</a>
+      </div>
+
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/mark-walkaway.webp" width="512" height="512" alt="Walkaway wordmark" /></div>
+        <span class="k-name">Wordmark</span>
+        <span class="k-meta">1024 × 1024 PNG</span>
+        <a class="dl" href="assets/download/mark-walkaway.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/icon-device-sync.webp" width="1920" height="1171" alt="Device sync icon" /></div>
+        <span class="k-name">Device sync</span>
+        <span class="k-meta">1920 × 1171 JPG</span>
+        <a class="dl" href="assets/download/icon-device-sync.jpg" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art shot"><img src="assets/img/hero-muse.webp" width="1920" height="1080" alt="Hero artwork: the browser with the Muse mascot and winged chips" /></div>
+        <span class="k-name">Hero artwork</span>
+        <span class="k-meta">1920 × 1080 PNG</span>
+        <a class="dl" href="assets/download/hero-muse.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/muse-mascot.webp" width="1518" height="1454" alt="The winged Muse mascot" /></div>
+        <span class="k-name">Muse mascot</span>
+        <span class="k-meta">1518 × 1454 PNG</span>
+        <a class="dl" href="assets/download/muse-mascot.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/muse-chips.webp" width="1836" height="1582" alt="Three winged AI chips" /></div>
+        <span class="k-name">Winged chips</span>
+        <span class="k-meta">1836 × 1582 PNG</span>
+        <a class="dl" href="assets/download/muse-chips.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art shot"><img src="assets/img/hero-winged-chips.webp" width="1448" height="1086" alt="Original hero artwork" /></div>
+        <span class="k-name">Hero artwork · original</span>
+        <span class="k-meta">1448 × 1086 PNG</span>
+        <a class="dl" href="assets/download/hero-winged-chips.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art shot"><img src="assets/img/hero-muse-flight.webp" width="1920" height="1080" alt="Hero artwork: the browser with the Muse mascot flying in from the right" /></div>
+        <span class="k-name">Hero artwork · flight</span>
+        <span class="k-meta">1920 × 1080 PNG</span>
+        <a class="dl" href="assets/download/hero-muse-flight.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art shot"><img src="assets/download/og-walkaway.png" width="1200" height="630" alt="Social card: the Muse mascot and the browser" /></div>
+        <span class="k-name">Social card</span>
+        <span class="k-meta">1200 × 630 PNG</span>
+        <a class="dl" href="assets/download/og-walkaway.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art shot"><img src="assets/download/square-muse.png" width="1080" height="1080" alt="Square social image: the Muse mascot and the browser" /></div>
+        <span class="k-name">Social square</span>
+        <span class="k-meta">1080 × 1080 PNG</span>
+        <a class="dl" href="assets/download/square-muse.png" download>Download</a>
+      </div>
+
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/muse-form.webp" width="1600" height="1328" alt="The Muse mascot carrying a filled form" /></div>
+        <span class="k-name">Muse · form</span>
+        <span class="k-meta">1600 × 1328 PNG</span>
+        <a class="dl" href="assets/download/muse-form.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/muse-tap.webp" width="1600" height="1708" alt="The Muse mascot pressing a single chip" /></div>
+        <span class="k-name">Muse · one tap</span>
+        <span class="k-meta">1600 × 1708 PNG</span>
+        <a class="dl" href="assets/download/muse-tap.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/muse-glasses.webp" width="1177" height="1069" alt="The Muse mascot wearing the glasses" /></div>
+        <span class="k-name">Muse · glasses</span>
+        <span class="k-meta">1177 × 1069 PNG</span>
+        <a class="dl" href="assets/download/muse-glasses.png" download>Download</a>
+      </div>
+      <div class="kit-cell reveal">
+        <div class="kit-art"><img src="assets/img/muse-rest.webp" width="1600" height="1451" alt="The Muse mascot at rest" /></div>
+        <span class="k-name">Muse · at rest</span>
+        <span class="k-meta">1600 × 1451 PNG</span>
+        <a class="dl" href="assets/download/muse-rest.png" download>Download</a>
+      </div>
+
+      <div class="kit-cell reveal" style="justify-content:center;">
+        <span class="k-name">Everything above</span>
+        <p class="quiet">Icons, screenshots, wordmark, hero art, the Muse mascot family and the
+           agent mark. The browser window in the hero art is a real Hermes screenshot; the mascot
+           and the chips are drawn for the campaign.</p>
+        <a class="dl" href="#set" style="align-self:flex-start;">The poster set</a>
       </div>
     </div>
   </div>
@@ -998,46 +430,34 @@
   <div class="shell">
     <div class="footer-grid">
       <div>
-        <div class="f-brand">Walk<span>away</span></div>
-        <p class="f-note">Walkaway × Muse Blitz — a supervised batch browser with a glasses commit
-           gate. Self-hosted open-source software (BSD-3-Clause). The developer operates no
-           Walkaway servers and receives no user data.</p>
+        <div class="f-brand">Walk<em>away</em></div>
+        <p class="f-note">A local intelligent browser with a trusted line to your glasses.
+           Self-hosted, open source, BSD-3-Clause. The developer operates no Walkaway servers
+           and receives no user data.</p>
       </div>
-
       <div>
-        <h5>Product</h5>
+        <h5>Walkaway</h5>
         <ul>
-          <li><a href="#story">How it works</a></li>
-          <li><a href="#control">Security model</a></li>
           <li><a href="#film">The film</a></li>
-          <li><a href="#kit">Asset kit</a></li>
+          <li><a href="#set">The poster set</a></li>
+          <li><a href="#banners">Paid placements</a></li>
+          <li><a href="#assets">The assets</a></li>
         </ul>
       </div>
-
       <div>
-        <h5>Marketing</h5>
+        <h5>Elsewhere</h5>
         <ul>
-          <li><a href="#ads">Paid placements</a></li>
-          <li><a href="#proof">Test registry</a></li>
-          <li><a href="#faq">FAQ</a></li>
-          <li><a href="assets/download/icon-ios-default.png" download>App icon (1024)</a></li>
-        </ul>
-      </div>
-
-      <div>
-        <h5>Connect</h5>
-        <ul>
-          <li><a href="#top">Glasses web app</a></li>
-          <li><a href="#top">Connector tools</a></li>
           <li><a href="#top">Repository</a></li>
+          <li><a href="#top">Connector</a></li>
+          <li><a href="#top">Glasses web app</a></li>
           <li><a href="#top">Privacy &amp; terms</a></li>
         </ul>
       </div>
     </div>
 
     <div class="footer-base">
-      <span>Walkaway × Muse Blitz — 2026</span>
-      <span>Hermes · Blitz · Static Hermes · Qwen3-4B · Meta Ray-Ban Display</span>
+      <span>Walkaway × Muse Blitz</span>
+      <span>Hermes · Blitz · Qwen3-4B · Meta Ray-Ban Display</span>
     </div>
   </div>
 </footer>

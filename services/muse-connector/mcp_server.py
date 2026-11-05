@@ -80,6 +80,11 @@ def public(state):
         ),
         "awaiting_approval": bool(decision),
         "awaiting_approval_on_glasses": bool(decision),
+        "awaiting_approval_on_android": bool(decision),
+        "card_message_id": decision.get("card_message_id") if isinstance(decision, dict) else None,
+        "card_title": decision.get("card_title") if isinstance(decision, dict) else None,
+        "card_body": decision.get("card_body") if isinstance(decision, dict) else None,
+        "last_decision": state.get("last_decision"),
         "approval_url": APPROVAL_URL if decision else None,
         "glasses_url": APPROVAL_URL if decision else None,
         "steps_acted": state.get("history_count", 0),
@@ -91,12 +96,13 @@ def public(state):
 TOOLS = [
     {
         "name": "walkaway_start_task",
-        "description": "Start a browser task on the user's own machine from the user's verbatim goal. The browser opens immediately; no step executes until the user approves steps on their glasses.",
+        "description": "Start a browser task on the user's own machine from the user's verbatim goal and optional target URL. The browser opens the real webpage immediately; commits require approval on the user's glasses or Android app.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "goal": {"type": "string", "description": "The user's goal, verbatim."},
-                "scenario": {"type": "string", "enum": ["flights", "travel", "research"], "description": "flights = Google Flights. travel/research = local fixtures."},
+                "url": {"type": "string", "description": "Optional https:// or http:// target URL to open in Hermes browser."},
+                "scenario": {"type": "string", "enum": ["flights", "travel", "research"], "description": "Optional scenario preset."},
             },
             "required": ["goal"],
         },
@@ -138,7 +144,10 @@ TOOLS = [
 def call_tool(name, args):
     args = args or {}
     if name == "walkaway_start_task":
-        return public(relay("start", {"goal": args.get("goal", ""), "scenario": args.get("scenario", "flights")}))
+        payload = {"goal": args.get("goal", ""), "scenario": args.get("scenario", "flights")}
+        if args.get("url"):
+            payload["url"] = args["url"]
+        return public(relay("start", payload))
     if name == "walkaway_status":
         return public(relay("state"))
     if name == "walkaway_propose_step":
@@ -149,9 +158,9 @@ def call_tool(name, args):
             state = relay("predict")
         result = public(state)
         result["say"] = (
-            "A step is waiting on the approval page: "
-            + (result["proposed_step"] or "none")
-            + ". The user approves or rejects there; this connector cannot approve."
+            "A step is waiting on your glasses and Android app: "
+            + (result.get("card_title") or result["proposed_step"] or "none")
+            + ". Approve or reject on your glasses or Android app; this connector cannot approve."
         )
         return result
     if name == "walkaway_reject_step":

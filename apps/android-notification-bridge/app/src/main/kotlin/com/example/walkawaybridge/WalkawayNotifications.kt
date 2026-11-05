@@ -39,19 +39,10 @@ fun showWalkawayNotification(context: Context, message: BusMessage) {
     openIntent,
     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
   )
-  fun actionIntent(action: String): PendingIntent {
-    val intent = Intent(context, NotificationActionReceiver::class.java).apply {
-      this.action = "com.example.walkawaybridge.ACTION_$action"
-      putExtra(EXTRA_MESSAGE_ID, message.id)
-      putExtra("walkaway.action", action)
-    }
-    return PendingIntent.getBroadcast(
-      context,
-      (message.id * 10 + action.hashCode()).toInt(),
-      intent,
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    )
-  }
+  // No Approve/Reject actions: phone notifications are status-only.
+  // Decisions count exclusively from physical glasses taps (glasses_dat);
+  // the previous notification actions acked as notification_action, which
+  // every decision path ignores — dead controls (alignment 6.1.1).
   val notification = NotificationCompat.Builder(context, WALKAWAY_CHANNEL_ID)
     .setSmallIcon(android.R.drawable.ic_dialog_info)
     .setContentTitle(message.title)
@@ -61,8 +52,6 @@ fun showWalkawayNotification(context: Context, message: BusMessage) {
     .setCategory(NotificationCompat.CATEGORY_MESSAGE)
     .setContentIntent(pending)
     .setAutoCancel(true)
-    .addAction(0, "Approve", actionIntent("approve"))
-    .addAction(0, "Reject", actionIntent("reject"))
     .build()
   NotificationManagerCompat.from(context).notify(message.id.toInt(), notification)
 }

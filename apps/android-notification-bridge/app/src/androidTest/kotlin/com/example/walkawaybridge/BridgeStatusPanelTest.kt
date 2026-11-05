@@ -6,7 +6,7 @@ import androidx.compose.ui.test.onNodeWithText
 import org.junit.Rule
 import org.junit.Test
 
-/** Demo-safe panel contract: every phase renders its label; no phone decision controls exist. */
+/** Panel contract: every phase renders its label; the panel itself carries no decision buttons (phone Approve/Reject live in BridgeScreen under the active card, §9 dual-surface). */
 class BridgeStatusPanelTest {
 
   @get:Rule val composeTestRule = createAndroidComposeRule<ComponentActivity>()

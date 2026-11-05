@@ -16,17 +16,40 @@ Provides:
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-MLX_PYTHON = Path(
-    os.environ.get(
-        "HERMES_MLX_PYTHON",
-        "/Users/mac/.local/share/uv/tools/mlx-lm/bin/python3",
-    )
-)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def resolve_mlx_python() -> Path:
+    env_val = os.environ.get("HERMES_MLX_PYTHON")
+    if env_val and Path(env_val).exists():
+        return Path(env_val)
+    uv_tool = Path.home() / ".local" / "share" / "uv" / "tools" / "mlx-lm" / "bin" / "python3"
+    if uv_tool.exists():
+        return uv_tool
+    which_py = shutil.which("python3")
+    return Path(which_py) if which_py else Path(sys.executable)
+
+
+def resolve_hermes_binary() -> Path:
+    env_val = os.environ.get("HERMES_BROWSER_BIN")
+    if env_val and Path(env_val).exists():
+        return Path(env_val)
+    in_repo = REPO_ROOT / "apps" / "hermes-browser" / "target" / "release" / "hermes-blitz-browser"
+    if in_repo.exists():
+        return in_repo
+    external = Path.home() / "hermes-blitz-browser" / "target" / "release" / "hermes-blitz-browser"
+    return external
+
+
+MLX_PYTHON = resolve_mlx_python()
 MODEL_ID = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 
 _INLINE_MLX_SCRIPT = r"""
@@ -181,3 +204,223 @@ def plan_recall_or_llm(
             },
         }
     return plan_validation_repair_with_local_llm(snapshot, speaker_profile)
+
+
+DEFAULT_USER_PROFILE: dict[str, str] = {
+    "full_name": "Ryan MacArthur",
+    "name": "Ryan MacArthur",
+    "custname": "Ryan MacArthur",
+    "email": "ryan@zunftmax.secure.build",
+    "custemail": "ryan@zunftmax.secure.build",
+    "phone": "415-555-0199",
+    "custtel": "415-555-0199",
+    "affiliation": "Zunftmax Systems",
+    "company": "Zunftmax Systems",
+    "talk_title": "Containment-First Sandboxing: What Firecracker Leaves as Homework",
+    "tshirt_size": "L",
+    "size": "medium",
+    "topping": "bacon",
+    "delivery": "18:00",
+    "comments": "Leave at reception desk.",
+}
+
+
+def format_domain_card(url: str, action_label: str, fields_summary: list[str]) -> tuple[str, str]:
+    """Format a <=80 char title and <=160 char body for the glasses DAT / Android approval card."""
+    parsed = urlparse(url or "")
+    domain = parsed.netloc or parsed.path or "browser"
+    title = f"COMMIT {domain}: {action_label}".strip()
+    if len(title) > 80:
+        title = title[:77] + "..."
+    body = "; ".join(fields_summary) if fields_summary else f"Approve commit on {url}"
+    if len(body) > 160:
+        body = body[:157] + "..."
+    return title, body
+
+
+def plan_general_web_form_with_local_llm(
+    snapshot: dict[str, Any],
+    goal: str,
+    user_profile: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Use local Qwen3-4B on Apple Silicon to map any real webpage's form controls to the user's goal."""
+    if not MLX_PYTHON.exists():
+        raise RuntimeError(f"MLX Python interpreter not found at {MLX_PYTHON}")
+
+    profile = dict(DEFAULT_USER_PROFILE)
+    if user_profile:
+        profile.update(user_profile)
+
+    elements = snapshot.get("elements") or []
+    controls_summary = []
+    by_key: dict[str, dict[str, Any]] = {}
+    submit_el: dict[str, Any] | None = None
+
+    for el in elements:
+        if not el.get("visible", True) or not el.get("enabled", True):
+            continue
+        tag = (el.get("tag") or "").lower()
+        input_type = (el.get("input_type") or "").lower()
+        label = (el.get("label") or "").strip()
+
+        if tag == "button" or (tag == "input" and input_type in {"submit", "button"}):
+            if submit_el is None or "submit" in label.lower() or input_type == "submit":
+                submit_el = el
+            continue
+
+        if tag not in {"input", "select", "textarea"}:
+            continue
+        if input_type in {"hidden", "reset", "file", "image"}:
+            continue
+
+        key = el.get("dom_id") or el.get("name") or el.get("node_ref")
+        if not key:
+            continue
+        # For radio/checkbox inputs that share a `name`, disambiguate by label or node_ref
+        if input_type in {"radio", "checkbox"} and key in by_key:
+            key = f"{key}:{label or el.get('node_ref')}"
+        by_key[key] = el
+        controls_summary.append(
+            {
+                "field_key": key,
+                "tag": tag,
+                "input_type": input_type or "text",
+                "label": label,
+                "current_value": el.get("value"),
+            }
+        )
+
+    if not by_key and submit_el is not None:
+        title, body = format_domain_card(
+            snapshot.get("url", ""),
+            submit_el.get("label") or "Submit",
+            [f"Goal: {goal}"],
+        )
+        return {
+            "llm_calls": 0,
+            "model_id": None,
+            "latency_ms": 0.0,
+            "stage_operation": None,
+            "commit_operation": {
+                "kind": "submit",
+                "target_ref": submit_el["node_ref"],
+            },
+            "submit_target": submit_el,
+            "card_title": title,
+            "card_body": body,
+            "fields_preview": [],
+        }
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an autonomous browser form planner running locally on Apple Silicon. "
+                "Given a webpage's form controls, the user's goal, and the user's profile, "
+                "output ONLY a valid JSON object mapping each `field_key` to the string value to fill "
+                "(for checkbox/radio fields, output \"true\" to check/select that option or omit it). "
+                "Do not output markdown fences or explanation."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "goal": goal,
+                    "page_url": snapshot.get("url", ""),
+                    "page_title": snapshot.get("title", ""),
+                    "page_text_excerpt": (snapshot.get("text") or "")[:600],
+                    "controls": controls_summary,
+                    "user_profile": profile,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+
+    t0 = time.perf_counter()
+    proc = subprocess.run(
+        [str(MLX_PYTHON), "-c", _INLINE_MLX_SCRIPT],
+        input=json.dumps({"model_id": MODEL_ID, "messages": messages}),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+    last_line = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()][-1]
+    res = json.loads(last_line)
+    raw_output = res["output"]
+    field_values = _extract_json_object(raw_output)
+
+    fields_ops = []
+    fields_preview = []
+    for field_key, val in field_values.items():
+        if field_key not in by_key:
+            continue
+        el = by_key[field_key]
+        tag = (el.get("tag") or "").lower()
+        input_type = (el.get("input_type") or "").lower()
+        if input_type == "password":
+            fields_ops.append(
+                {
+                    "target_ref": el["node_ref"],
+                    "action": "fill_secret",
+                    "vault_key": "default_site_secret",
+                }
+            )
+            fields_preview.append(f"{field_key}=[VAULT_SECRET]")
+            continue
+        if tag == "select":
+            action = "select"
+        elif tag == "input" and input_type in {"checkbox", "radio"}:
+            if str(val).lower() not in {"true", "1", "yes", "on", "checked"}:
+                continue
+            action = "check"
+            val = "true"
+        else:
+            action = "type"
+        str_val = str(val)
+        fields_ops.append(
+            {
+                "target_ref": el["node_ref"],
+                "action": action,
+                "value": str_val,
+            }
+        )
+        fields_preview.append(f"{el.get('name') or field_key}={str_val[:28]}")
+
+    stage_op = (
+        {
+            "kind": "fill_form",
+            "stage_only": True,
+            "fields": fields_ops,
+        }
+        if fields_ops
+        else None
+    )
+    commit_op = (
+        {
+            "kind": "submit",
+            "target_ref": submit_el["node_ref"],
+        }
+        if submit_el is not None
+        else None
+    )
+    action_label = (submit_el.get("label") if submit_el else None) or "Submit Form"
+    title, body = format_domain_card(snapshot.get("url", ""), action_label, fields_preview)
+
+    return {
+        "llm_calls": 1,
+        "model_id": MODEL_ID,
+        "latency_ms": elapsed_ms,
+        "raw_model_output": raw_output,
+        "stage_operation": stage_op,
+        "commit_operation": commit_op,
+        "submit_target": submit_el,
+        "card_title": title,
+        "card_body": body,
+        "fields_preview": fields_preview,
+    }
+
