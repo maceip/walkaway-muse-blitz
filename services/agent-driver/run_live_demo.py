@@ -31,11 +31,12 @@ import reset_demo  # noqa: E402
 import signup_fixture  # noqa: E402
 
 
-def _banner(title: str, subtitle: str = "") -> None:
+def _banner(action_line: str, say_line: str = "") -> None:
     line = "=" * 78
-    print(f"\n{line}\n  {title}", flush=True)
-    if subtitle:
-        print(f"  {subtitle}", flush=True)
+    print(f"\n{line}", flush=True)
+    print(f"ACTION: {action_line}", flush=True)
+    if say_line:
+        print(f"\nSAY:\n{say_line}", flush=True)
     print(f"{line}\n", flush=True)
 
 
@@ -180,23 +181,42 @@ def main() -> int:
     while not sock_path.exists() and time.monotonic() < deadline:
         time.sleep(0.05)
 
+    current_waiting_mid: list[int] = []
+
+    def _stdin_enter_fallback() -> None:
+        while True:
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                if current_waiting_mid:
+                    mid = current_waiting_mid[-1]
+                    print(f"[HOTKEY] Enter pressed -> sending Approve for Card #{mid}", flush=True)
+                    _post_ack(args.bus_url, args.bus_token, mid, "approve")
+            except Exception:
+                break
+
+    if not args.auto_approve and sys.stdin.isatty():
+        threading.Thread(target=_stdin_enter_fallback, daemon=True).start()
+
     def on_card(card_idx: int, msg: dict[str, Any]) -> None:
         mid = int(msg["id"])
+        current_waiting_mid.append(mid)
         title = msg.get("title", "")
         if card_idx == 1:
             _banner(
-                f"TAP #1 ON GLASSES NOW (Bus Message #{mid}): {title}",
-                "Voiceover: 'Tap 1 on my glasses seals the speaker account and P-256 passkey in the Blind Vault.'",
+                f"TAP APPROVE ON GLASSES CARD #1 (or press ENTER here) — [{title}]",
+                "Tap 1 on my Ray-Ban Display glasses seals my speaker account and P-256 passkey inside the Blind Vault — the LLM and page JS never see the secret.",
             )
         elif card_idx == 2:
             _banner(
-                f"TAP #2 ON GLASSES NOW (Bus Message #{mid}): {title}",
-                "Voiceover: 'Portal #1 threw a CFP validation curveball; local Qwen3-4B repaired it in 1s. Tap 2 commits Portal #1 and records the FormRecipe.'",
+                f"TAP APPROVE ON GLASSES CARD #2 (or press ENTER here) — [{title}]",
+                "Portal 1 threw a CFP validation error. Local Qwen3-4B repaired the abstract in one second. Tap 2 commits Portal 1 and compiles a reusable FormRecipe.",
             )
         elif card_idx == 3:
             _banner(
-                f"TAP #3 ON GLASSES NOW (Bus Message #{mid}): {title}",
-                "Voiceover: 'Portals #2 through #10 matched the FormSignature and replayed in <5ms with 0 LLM calls. Tap 3 releases all 9 conference submissions at once.'",
+                f"TAP APPROVE ON GLASSES CARD #3 (or press ENTER here) — [{title}]",
+                "Portals 2 through 10 matched that FormSignature in under 5 milliseconds with zero LLM calls. Tap 3 releases all 9 conference submissions at once.",
             )
         if args.auto_approve:
             def _delayed_ack() -> None:

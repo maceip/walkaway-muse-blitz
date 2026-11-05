@@ -704,6 +704,7 @@ def run_10portal_campaign(
                 w_env["HERMES_VAULT_PATH"] = str(vault_path)
                 w_env["HERMES_RECALL_PATH"] = str(recall_path)
                 w_env["HERMES_AUDIT_PATH"] = str(audit_path)
+                w_env["HERMES_HIDDEN_WINDOW"] = "1"
                 w_proc = subprocess.Popen(
                     [str(HERMES_BIN), "--control-socket", str(w_sock)],
                     env=w_env,
