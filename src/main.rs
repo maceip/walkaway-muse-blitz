@@ -303,6 +303,7 @@ struct PageInstance {
     document_generation: u64,
     next_snapshot_id: u64,
     last_snapshot: Option<observe::PageSnapshot>,
+    last_observe_ms: f64,
     /// Every stable node reference this instance has issued (WebDriver's
     /// known-element registry). Cleared when the instance is replaced.
     known_node_refs: HashSet<String>,
@@ -316,6 +317,7 @@ impl PageInstance {
             document_generation: 1,
             next_snapshot_id: 1,
             last_snapshot: None,
+            last_observe_ms: 0.0,
             known_node_refs: HashSet::new(),
         }
     }
@@ -325,6 +327,7 @@ impl PageInstance {
         self.page_id = self.page_id.wrapping_add(1);
         self.document_generation = self.document_generation.wrapping_add(1);
         self.last_snapshot = None;
+        self.last_observe_ms = 0.0;
         self.known_node_refs.clear();
     }
 
@@ -429,6 +432,7 @@ struct PendingProposal {
     operation: Value,
     rationale: String,
     classification: String,
+    requires_glasses: bool,
 }
 
 struct ControlSession {
@@ -528,6 +532,9 @@ struct BrowserApp {
     /// Monotonic presented/captured frame counter (the frame contract:
     /// every screenshot names the frame it came from).
     frame_seq: u64,
+    recalled_count: u64,
+    supervise_commits_only: bool,
+    xray_enabled: bool,
     exit_after: Option<Duration>,
     started: Instant,
 }
@@ -544,6 +551,13 @@ impl BrowserApp {
             TabId(1),
             page_viewport(size, scale, Theme::Light),
         )];
+        let supervise_commits_only = std::env::args().any(|a| a == "--supervise-commits-only")
+            || std::env::var("HERMES_SUPERVISE_COMMITS_ONLY")
+                .ok()
+                .as_deref()
+                == Some("1");
+        let xray_enabled = std::env::args().any(|a| a == "--xray")
+            || std::env::var("HERMES_XRAY").ok().as_deref() == Some("1");
         let mut app = Self {
             window: None,
             renderer: VelloWindowRenderer::new(),
@@ -570,6 +584,9 @@ impl BrowserApp {
             next_input_event_id: 1,
             last_input_event_id: 0,
             frame_seq: 0,
+            recalled_count: 0,
+            supervise_commits_only,
+            xray_enabled,
             exit_after: parse_exit_after(),
             started: Instant::now(),
         };
@@ -604,6 +621,7 @@ impl BrowserApp {
             .tabs
             .iter_mut()
             .find(|tab| tab.canonical.id == tab_id)?;
+        let t0 = Instant::now();
         tab.instance.page.resolve();
         let snapshot_id = tab.instance.next_snapshot_id;
         tab.instance.next_snapshot_id = tab.instance.next_snapshot_id.wrapping_add(1);
@@ -626,6 +644,7 @@ impl BrowserApp {
                 scale,
             },
         );
+        tab.instance.last_observe_ms = t0.elapsed().as_secs_f64() * 1000.0;
         tab.instance
             .known_node_refs
             .extend(snapshot.elements.iter().map(|e| e.node_ref.clone()));
@@ -1509,6 +1528,7 @@ impl BrowserApp {
             }
         }
 
+        let requires_glasses = sensitive_target;
         let classification = if sensitive_target {
             "sensitive"
         } else if op_kind == "scroll" {
@@ -1526,6 +1546,7 @@ impl BrowserApp {
             operation: operation.clone(),
             rationale: rationale.to_string(),
             classification: classification.clone(),
+            requires_glasses,
         };
         if let Some(session) = self.control.as_mut() {
             session.seen_proposals.insert(pending.proposal_id.clone());
@@ -1541,6 +1562,23 @@ impl BrowserApp {
             Some("socket"),
             Some(&pending.proposal_id),
         );
+        let pid_copy = pending.proposal_id.clone();
+        let fp_copy = pending.fingerprint.clone();
+        let gen_copy = pending.generation;
+        if self.supervise_commits_only && !requires_glasses {
+            if let Some(session) = self.control.as_mut() {
+                session.pending = Some(pending);
+            }
+            let _ = self.decide(
+                &pid_copy,
+                &fp_copy,
+                gen_copy,
+                true,
+                "policy",
+                "commit_gate",
+            );
+            return;
+        }
         self.session_event(
             OutTarget::Host,
             "proposal.pending",
@@ -1550,6 +1588,7 @@ impl BrowserApp {
                 "fingerprint": pending.fingerprint, "generation": pending.generation,
                 "operation": pending.operation, "rationale": pending.rationale,
                 "classification": pending.classification,
+                "requires_glasses": pending.requires_glasses,
             }),
         );
         if let Some(session) = self.control.as_mut() {
@@ -2089,6 +2128,7 @@ impl BrowserApp {
                 }
                 tab.instance.page.resolve();
                 tab.bump_generation();
+                self.recalled_count = self.recalled_count.wrapping_add(1);
             }
             PageCommand::Submit {
                 target_id,
@@ -2350,6 +2390,101 @@ impl BrowserApp {
 
     /// Regenerate the chrome document from state.
     fn sync_chrome(&mut self) {
+        let telemetry = if self.control.is_some() || self.xray_enabled {
+            let active_tab_id = self.tab().canonical.id;
+            if self.tab().instance.last_snapshot.is_none() {
+                let _ = self.observe_tab(active_tab_id);
+            }
+            let tab = self.tab();
+            let layout_observe_ms = tab.instance.last_observe_ms;
+            let rss_mb = measure_process_rss_mb();
+            let pending_target_ids: Vec<String> = self
+                .control
+                .as_ref()
+                .and_then(|s| s.pending.as_ref())
+                .map(|p| {
+                    let mut ids = Vec::new();
+                    if let Some(tid) = p.operation.get("target_id").and_then(Value::as_str) {
+                        if !tid.is_empty() {
+                            ids.push(tid.to_string());
+                        }
+                    }
+                    if let Some(fields) = p.operation.get("fields").and_then(Value::as_array) {
+                        for f in fields {
+                            if f.get("action").and_then(Value::as_str) == Some("fill_secret") {
+                                if let Some(tid) = f.get("target_id").and_then(Value::as_str) {
+                                    ids.push(tid.to_string());
+                                }
+                            }
+                        }
+                    }
+                    ids
+                })
+                .unwrap_or_default();
+            let freeze_fp_short = self
+                .control
+                .as_ref()
+                .and_then(|s| s.pending.as_ref())
+                .map(|p| p.fingerprint.chars().take(8).collect::<String>());
+            let mut overlays = Vec::new();
+            let (form_signature, matched_recipe_id) =
+                if let Some(snap) = tab.instance.last_snapshot.as_ref() {
+                    for el in &snap.elements {
+                        if !el.visible {
+                            continue;
+                        }
+                        let is_vault_secret = el.value_state == observe::ValueState::Sensitive
+                            || el.input_type.as_deref() == Some("password");
+                        let is_frozen_target = pending_target_ids.iter().any(|id| id == &el.id);
+                        if !is_frozen_target
+                            && !is_vault_secret
+                            && !matches!(
+                                el.tag.as_str(),
+                                "input" | "select" | "textarea" | "button" | "a"
+                            )
+                            && el.role != "button"
+                        {
+                            continue;
+                        }
+                        let role_tag = if is_vault_secret {
+                            "password".to_string()
+                        } else if !el.role.is_empty() {
+                            el.role.clone()
+                        } else {
+                            el.tag.clone()
+                        };
+                        overlays.push(chrome::XRayBox {
+                            id: el.id.clone(),
+                            role_tag,
+                            x: el.bounds.x,
+                            y: el.bounds.y,
+                            width: el.bounds.width,
+                            height: el.bounds.height,
+                            is_vault_secret,
+                            is_frozen_target,
+                            freeze_fp_short: if is_frozen_target {
+                                freeze_fp_short.clone()
+                            } else {
+                                None
+                            },
+                        });
+                    }
+                    (snap.form_signature.clone(), snap.matched_recipe_id.clone())
+                } else {
+                    (None, None)
+                };
+            Some(chrome::EngineTelemetry {
+                layout_observe_ms,
+                rss_mb,
+                form_signature,
+                matched_recipe_id,
+                recalled_count: self.recalled_count,
+                overlays,
+            })
+        } else {
+            None
+        };
+
         let titles: Vec<String> = self
             .tabs
             .iter()
@@ -2378,6 +2513,7 @@ impl BrowserApp {
             surface_height: self.size.1 as f64 / self.scale,
             theme: self.theme,
             supervision,
+            telemetry,
         });
 
         let mut doc = HtmlDocument::from_html(
@@ -3179,6 +3315,51 @@ fn qual_name(local: &str) -> QualName {
     QualName::new(None, Namespace::from(""), LocalName::from(local))
 }
 
+/// Live-measured resident set size (RSS) of the current process in megabytes,
+/// queried directly from the OS kernel (`getrusage(RUSAGE_SELF)`).
+fn measure_process_rss_mb() -> f64 {
+    #[repr(C)]
+    struct Timeval {
+        tv_sec: i64,
+        tv_usec: i64,
+    }
+    #[repr(C)]
+    struct RUsage {
+        ru_utime: Timeval,
+        ru_stime: Timeval,
+        ru_maxrss: isize,
+        _rest: [isize; 14],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut RUsage) -> i32;
+    }
+    let mut usage = RUsage {
+        ru_utime: Timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        },
+        ru_stime: Timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        },
+        ru_maxrss: 0,
+        _rest: [0; 14],
+    };
+    let rc = unsafe { getrusage(0, &mut usage) };
+    if rc == 0 && usage.ru_maxrss > 0 {
+        #[cfg(target_os = "macos")]
+        {
+            (usage.ru_maxrss as f64) / (1024.0 * 1024.0)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            (usage.ru_maxrss as f64) / 1024.0
+        }
+    } else {
+        0.0
+    }
+}
+
 fn apply_dom_field_action(
     doc: &mut HtmlDocument,
     node_id: NodeId,
@@ -3218,8 +3399,53 @@ fn apply_dom_field_action(
                 return;
             };
             if let Ok(acct) = vault::get_or_create_secret(origin, username) {
-                let mut mutator = doc.mutate();
-                mutator.set_attribute(node_id, qual_name("value"), &acct.secret);
+                {
+                    let mut mutator = doc.mutate();
+                    mutator.set_attribute(node_id, qual_name("value"), &acct.secret);
+                }
+                // If the form also contains WebAuthn assertion inputs (#webauthn_challenge
+                // and #webauthn_assertion), sign a real ECDSA P-256 assertion using the
+                // vault keypair (since fill_secret only executes after Host approve!).
+                let challenge_val = doc
+                    .get_element_by_id("webauthn_challenge")
+                    .and_then(|cid| doc.get_node(cid))
+                    .and_then(|n| n.element_data())
+                    .and_then(|d| d.attr(local_name!("value")))
+                    .map(str::to_string);
+                let rp_id_val = doc
+                    .get_element_by_id("webauthn_rp_id")
+                    .and_then(|rid| doc.get_node(rid))
+                    .and_then(|n| n.element_data())
+                    .and_then(|d| d.attr(local_name!("value")))
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        Url::parse(origin)
+                            .ok()
+                            .and_then(|u| u.host_str().map(str::to_string))
+                            .unwrap_or_else(|| origin.to_string())
+                    });
+                let assertion_node = doc.get_element_by_id("webauthn_assertion");
+                if let (Some(challenge), Some(assert_id)) = (challenge_val, assertion_node) {
+                    if !challenge.is_empty() {
+                        if let Ok(bundle) = vault::sign_webauthn_assertion(
+                            origin,
+                            username,
+                            &rp_id_val,
+                            &challenge,
+                            true,
+                            true,
+                        ) {
+                            if let Ok(bundle_json) = serde_json::to_string(&bundle) {
+                                let mut mutator = doc.mutate();
+                                mutator.set_attribute(
+                                    assert_id,
+                                    qual_name("value"),
+                                    &bundle_json,
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
         "select" => {
@@ -4609,6 +4835,51 @@ fn supervisortest() -> i32 {
         "non-sensitive type proposal pends for host approval",
     );
 
+    // Zone X: Semantic X-Ray overlay + live telemetry bar + P-256 WebAuthn verification
+    app.xray_enabled = true;
+    app.sync_chrome();
+    check(
+        app.chrome_doc.get_element_by_id("xray-telemetry-bar").is_some()
+            && app.chrome_doc.get_element_by_id("xray-vault-shield").is_some()
+            && app.chrome_doc.get_element_by_id("xray-freeze-shield").is_some(),
+        "Semantic X-Ray renders telemetry HUD, blind vault shield, and freeze shield in chrome_doc",
+    );
+
+    let assertion = vault::sign_webauthn_assertion(
+        "http://127.0.0.1:18080",
+        "ryan@socon.dev",
+        "socon2026.local",
+        "challenge_suptest_123456",
+        true,
+        true,
+    );
+    check(
+        assertion.is_ok(),
+        "vault signs ECDSA P-256 WebAuthn assertion",
+    );
+    if let Ok(a) = assertion {
+        check(
+            vault::verify_webauthn_assertion(
+                &a,
+                "socon2026.local",
+                "http://127.0.0.1:18080",
+                "challenge_suptest_123456",
+            )
+            .is_ok(),
+            "vault P-256 WebAuthn assertion verifies against public key, rpIdHash, challenge, and origin",
+        );
+        check(
+            vault::verify_webauthn_assertion(
+                &a,
+                "socon2026.local",
+                "http://127.0.0.1:18080",
+                "wrong_challenge",
+            )
+            .is_err(),
+            "vault P-256 WebAuthn assertion rejects wrong challenge",
+        );
+    }
+
     if failures == 0 {
         println!("SUPERVISOR TEST PASS");
         0
@@ -4908,6 +5179,7 @@ fn selftest() -> i32 {
             surface_height: HEIGHT as f64,
             theme: Theme::Light,
             supervision: None,
+            telemetry: None,
         });
         let mut chrome_doc = HtmlDocument::from_html(
             &html,
@@ -5111,6 +5383,7 @@ fn render_to_png(
         surface_height: height as f64,
         theme,
         supervision: None,
+        telemetry: None,
     });
     let mut chrome_doc = HtmlDocument::from_html(
         &html,
