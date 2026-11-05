@@ -69,6 +69,17 @@ class WalkawayDat(private val appContext: Context) {
   private var pendingDeviceId: DeviceIdentifier? = null
   private var onDisplayReady: ((Display) -> Unit)? = null
   private var onDisplayFailed: ((String) -> Unit)? = null
+  /** Fired when a shown card disappears without Approve/Reject (WS3 resend). */
+  @Volatile var onCardGone: (() -> Unit)? = null
+  @Volatile private var awaitingAction = false
+
+  private fun notifyCardGone(reason: String) {
+    if (!awaitingAction) return
+    awaitingAction = false
+    Log.i(TAG, "card gone without decision: $reason")
+    setEvent("Card gone without decision ($reason)")
+    onCardGone?.invoke()
+  }
   private var monitoringStarted = false
 
   fun initialize(activity: ComponentActivity) {
@@ -243,10 +254,12 @@ class WalkawayDat(private val appContext: Context) {
                   background = FlexBoxBackground.NONE
                 ) {
                   button("Approve", style = ButtonStyle.PRIMARY, onClick = {
+                    awaitingAction = false
                     onAction("approve")
                     scope.launch { dismissAndPowerOff() }
                   })
                   button("Reject", style = ButtonStyle.SECONDARY, onClick = {
+                    awaitingAction = false
                     onAction("reject")
                     scope.launch { dismissAndPowerOff() }
                   })
@@ -254,6 +267,7 @@ class WalkawayDat(private val appContext: Context) {
               }
             }
           }.onSuccess {
+            awaitingAction = true
             setEvent("DAT card sent")
             onResult(Result.success(Unit))
           }.onFailure {
@@ -274,29 +288,25 @@ class WalkawayDat(private val appContext: Context) {
     onReady: (Display) -> Unit,
     onFailed: (String) -> Unit
   ) {
-    onDisplayReady = onReady
-    onDisplayFailed = onFailed
-    val currentDisplay = synchronized(sessionLock) { display }
-    val currentSession = synchronized(sessionLock) { session }
-    when {
-      currentDisplay != null && currentSession != null -> {
-        scope.launch {
-          if (currentDisplay.state.value == DisplayState.STARTED) {
-            onReady(currentDisplay)
-          } else {
-            currentDisplay.state.first { it == DisplayState.STARTED }
-            onReady(currentDisplay)
-          }
-        }
+    scope.launch {
+      val currentSession = synchronized(sessionLock) { session }
+      val currentDisplay = synchronized(sessionLock) { display }
+      if (currentDisplay != null &&
+        shouldReuseDatSession(currentSession?.state?.value?.name, currentDisplay.state.value.name)
+      ) {
+        Log.i(TAG, "Reusing live DAT session/display (both STARTED)")
+        onReady(currentDisplay)
+        return@launch
       }
-      currentSession != null -> {
-        synchronized(sessionLock) { pendingDeviceId = deviceId }
-        attachDisplay()
+      if (currentSession != null || currentDisplay != null) {
+        Log.i(TAG, "Releasing stale DAT session before opening fresh glasses card")
+        releaseSessionFully()
+        delay(250)
       }
-      else -> {
-        synchronized(sessionLock) { pendingDeviceId = deviceId }
-        startSession(deviceId)
-      }
+      onDisplayReady = onReady
+      onDisplayFailed = onFailed
+      synchronized(sessionLock) { pendingDeviceId = deviceId }
+      startSession(deviceId)
     }
   }
 
@@ -317,6 +327,7 @@ class WalkawayDat(private val appContext: Context) {
                 }
                 DeviceSessionState.STOPPED -> {
                   synchronized(sessionLock) { pendingDeviceId = null }
+                  notifyCardGone("session.state=STOPPED")
                   cleanupDisplay()
                 }
                 else -> Unit
@@ -361,7 +372,11 @@ class WalkawayDat(private val appContext: Context) {
           newDisplay.state.collect { state ->
             Log.i(TAG, "display.state -> $state")
             setEvent("display.state=$state")
-            if (state == DisplayState.STARTED) onDisplayReady?.invoke(newDisplay)
+            if (state == DisplayState.STARTED) {
+              onDisplayReady?.invoke(newDisplay)
+            } else {
+              notifyCardGone("display.state=$state")
+            }
           }
         }
       },
@@ -396,6 +411,7 @@ class WalkawayDat(private val appContext: Context) {
         "localized=${error.getLocalizedDescription(appContext)}"
     )
     synchronized(sessionLock) { pendingDeviceId = null }
+    notifyCardGone("session error: ${error.name}")
     failPendingOnce("session error: ${error.name}")
     scope.launch { releaseSessionFully() }
   }

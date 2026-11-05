@@ -53,11 +53,13 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
 
   var serverUrl by remember { mutableStateOf(prefs.getString(PREF_SERVER, "http://127.0.0.1:19099") ?: "http://127.0.0.1:19099") }
   var token by remember { mutableStateOf(prefs.getString(PREF_TOKEN, "walkaway-dev-bus-token") ?: "walkaway-dev-bus-token") }
-  var connected by remember { mutableStateOf(false) }
-  var status by remember { mutableStateOf("Not connected") }
+  var connected by remember { mutableStateOf(true) }
+  var status by remember { mutableStateOf("Auto-connecting…") }
   var lastMessage by remember { mutableStateOf<BusMessage?>(null) }
   var lastId by remember { mutableLongStateOf(prefs.getLong(PREF_LAST_ID, 0L)) }
   var cardMessageId by remember { mutableStateOf<Long?>(null) }
+  var cardMessage by remember { mutableStateOf<BusMessage?>(null) }
+  var pendingResend by remember { mutableStateOf<BusMessage?>(null) }
   var decidedMessageId by remember { mutableStateOf<Long?>(null) }
   var decidedAction by remember { mutableStateOf<String?>(null) }
 
@@ -111,12 +113,15 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
       status = "Duplicate card suppressed for #${message.id}"
       return
     }
+    cardMessage = message
     dat.sendCard(
       title = message.title,
       body = message.body,
       onAction = { action ->
         if (decidedDedupe.mark(message.id)) {
           cardMessageId = null
+          cardMessage = null
+          pendingResend = null
           decidedMessageId = message.id
           decidedAction = action
           sendAckFor(message, action, "glasses_dat")
@@ -130,11 +135,30 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
           status = "DAT card sent for #${message.id}"
           sendAckFor(message, "dat_sent", "android_dat")
         }.onFailure {
-          status = "DAT card failed: ${it.message}${datFailureHint(it.message)}"
+          // Failed sends must not consume the one-card dedupe slot (WS3).
+          cardedDedupe.forget(message.id)
+          pendingResend = message
+          status = "DAT card failed: ${it.message}${datFailureHint(it.message)} Use Resend card."
           sendAckFor(message, "dat_failed", "android_dat")
         }
       }
     )
+  }
+
+  LaunchedEffect(dat) {
+    dat.onCardGone = {
+      val gone = cardMessage
+      if (gone != null && decidedMessageId != gone.id) {
+        cardedDedupe.forget(gone.id)
+        cardMessageId = null
+        pendingResend = gone
+        status = "Card #${gone.id} gone without a decision. Use Resend card."
+      }
+    }
+  }
+
+  LaunchedEffect(connected) {
+    if (connected) BridgeKeepAliveService.start(context) else BridgeKeepAliveService.stop(context)
   }
 
   LaunchedEffect(connected, serverUrl, token) {
@@ -226,6 +250,15 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
         dat.startRegistration(host)
       }
     }) { Text("Connect Meta AI") }
+    pendingResend?.let { message ->
+      Button(
+        onClick = {
+          pendingResend = null
+          sendDat(message)
+        },
+        modifier = Modifier.fillMaxWidth()
+      ) { Text("Resend card #${message.id}") }
+    }
     lastMessage?.let { message ->
       Text("Latest card #${message.id} ${message.title}", style = MaterialTheme.typography.titleLarge)
       Text(message.body)

@@ -15,6 +15,7 @@ returns /ack. State is intentionally in memory for the transport proof.
 """
 
 import argparse
+import fcntl
 import hmac
 import json
 import os
@@ -142,6 +143,34 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class BusServer(ThreadingHTTPServer):
+    # SO_REUSEADDR allowed 0.0.0.0:19099 and 127.0.0.1:19099 to dual-bind on
+    # macOS during the 2026-11-04 live run; the flock in main() is the hard
+    # guarantee, this removes the bind-level half of the trap.
+    allow_reuse_address = False
+
+
+_LOCK_FD = None
+
+
+def acquire_bus_lock(port):
+    """Exclusive per-port flock; exits non-zero if another bus owns the port."""
+    global _LOCK_FD
+    lock_path = os.environ.get("WALKAWAY_BUS_LOCK", f"/tmp/walkaway-bus-{port}.lock")
+    fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise SystemExit(
+            f"Refusing to start: another message bus holds the lock for port {port} ({lock_path})"
+        )
+    os.ftruncate(fd, 0)
+    os.write(fd, f"{os.getpid()}\n".encode())
+    _LOCK_FD = fd
+    return lock_path
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
@@ -149,8 +178,9 @@ def main():
     args = parser.parse_args()
     if not TOKEN:
         raise SystemExit("WALKAWAY_BUS_TOKEN is required")
-    print(f"Bus next_id starts at {load_next_id()} (state: {STATE_PATH})", flush=True)
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    lock_path = acquire_bus_lock(args.port)
+    print(f"Bus next_id starts at {load_next_id()} (state: {STATE_PATH}, lock: {lock_path})", flush=True)
+    server = BusServer((args.host, args.port), Handler)
     print(f"Walkaway message bus: http://{args.host}:{args.port}", flush=True)
     server.serve_forever()
 

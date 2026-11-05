@@ -2,7 +2,8 @@
 
 Static marketing surface for **Walkaway × Muse Blitz — Supervised Batch Browser &
 Glasses Commit Gate**. It is an App Store-style promotional page: hero, story,
-security model, film, downloadable asset kit, and paid ad placements.
+security model and threat band, film, downloadable asset kit, and paid ad
+placements.
 
 There is **no build step**. `index.html` plus `assets/` is the deployable unit.
 
@@ -94,3 +95,22 @@ anywhere. To export as PNG, open the exported SVG and rasterise at its
 
 Type sizes in the creatives were set from measured advance widths, not by eye —
 re-run `scripts/verify-marketing-site.py` after editing any `<text>` node.
+
+## The adversary band
+
+The threat model is not invented copy. Each of the six threat/control pairs is
+sourced from a real control in `docs/TEST_REGISTRY.md` or `docs/FINAL_LOCKED_PLAN.md`:
+
+| Threat | Control | Source |
+|---|---|---|
+| Forge an approval | `received` / `dat_sent` / `dat_failed` never authorize; only `source="glasses_dat"` does | `T-ZONE-X-SUPERPOWERS` |
+| Replay your tap | A replayed ack decides nothing twice; a rejected proposal is destroyed | `T-ZONE-X-SUPERPOWERS` |
+| Tamper with the batch | A tampered `batch_proposals` manifest returns HTTP 409 | `T-ZONE-X-SUPERPOWERS` |
+| Steal the password | Blind vault is hidden from LLM and JS; zero secret leaks anywhere | `T-ZONE-X-SUPERPOWERS`, `T-DEMO-VERTICAL-001` |
+| Sign as you, later | Wrong challenge / origin / RP and replayed assertions all fail P-256 verification | `T-ZONE-Y-10PORTALS` |
+| Let it approve itself | The agent can propose, never approve; decisions enter only via the host boundary | `docs/architecture.md` |
+
+The threat-actor avatar lives at `assets/download/avatar-adversary.png` (1024×1024
+PNG, studio background keyed out to alpha) and renders at
+`assets/img/avatar-adversary.webp`. It is also offered as a download in the
+asset kit.

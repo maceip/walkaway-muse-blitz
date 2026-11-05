@@ -438,21 +438,109 @@ def _http_json(
         return json.loads(raw) if raw.strip() else {}
 
 
+DECISION_BRIDGE_SCRIPT = Path("/Users/mac/walkaway-monorepo/services/hermes-host/decision_bridge.py")
+
+
+def _free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
 class GlassesBusCoordinator:
-    """Routes high-consequence commit cards through message_bus.py and enforces idempotency."""
+    """Routes all Hermes host supervision and commit cards through decision_bridge.py (19101 held mode)."""
 
     IGNORED_ACTIONS = {"received", "dat_sent", "dat_failed"}
     TERMINAL_ACTIONS = {"approve", "reject"}
 
-    def __init__(self, bus_base_url: str, bus_token: str) -> None:
+    def __init__(
+        self,
+        bus_base_url: str,
+        bus_token: str,
+        decision_bridge_url: str,
+    ) -> None:
         self.bus_base_url = bus_base_url.rstrip("/")
         self.bus_token = bus_token
+        self.decision_bridge_url = decision_bridge_url.rstrip("/")
         self.headers = {"X-Bus-Token": self.bus_token}
         self.processed_message_ids: set[int] = set()
         self.decided_proposals: set[tuple[str, str, int]] = set()
         self.cards_posted: list[dict[str, Any]] = []
         self.terminal_acks: list[dict[str, Any]] = []
         self.ignored_acks_seen: list[dict[str, Any]] = []
+
+    def attach_socket(
+        self,
+        sock_path: Path,
+        host_token: str,
+        start_url: str | None = None,
+        session_title: str = "Walkaway Hermes Host Bridge",
+    ) -> str:
+        payload: dict[str, Any] = {
+            "sock_path": str(sock_path),
+            "token": host_token,
+            "session_title": session_title,
+        }
+        if start_url is not None:
+            payload["start_url"] = start_url
+        resp = _http_json(
+            f"{self.decision_bridge_url}/sockets",
+            payload=payload,
+            headers=self.headers,
+            timeout_s=12.0,
+        )
+        sid = str(resp.get("session_id") or "")
+        if not sid:
+            raise RuntimeError(f"decision_bridge POST /sockets did not return session_id: {resp}")
+        return sid
+
+    def wait_for_pending(
+        self,
+        session_id: str,
+        proposal_id: str,
+        timeout_s: float = 15.0,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            pending_resp = _http_json(f"{self.decision_bridge_url}/pending", headers=self.headers)
+            for item in pending_resp.get("pending") or []:
+                if (
+                    str(item.get("session_id")) == str(session_id)
+                    and str(item.get("proposal_id")) == str(proposal_id)
+                ):
+                    return item
+            time.sleep(0.03)
+        raise TimeoutError(
+            f"Timed out waiting for proposal {proposal_id!r} in decision_bridge GET /pending"
+        )
+
+    def wait_for_receipt(
+        self,
+        proposal_id: str,
+        expected_types: set[str] | None = None,
+        timeout_s: float = 15.0,
+    ) -> dict[str, Any]:
+        if expected_types is None:
+            expected_types = {"executed"}
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            dec_resp = _http_json(f"{self.decision_bridge_url}/decisions", headers=self.headers)
+            for entry in dec_resp.get("decisions") or []:
+                receipt = entry.get("receipt")
+                if not isinstance(receipt, dict):
+                    continue
+                if str(receipt.get("proposal_id")) == str(proposal_id) and (
+                    receipt.get("type") in expected_types or receipt.get("type") == "refused"
+                ):
+                    return receipt
+            time.sleep(0.03)
+        raise TimeoutError(
+            f"Timed out waiting for receipt on proposal {proposal_id!r} in decision_bridge GET /decisions"
+        )
+
+    def bridge_decisions(self) -> list[dict[str, Any]]:
+        dec_resp = _http_json(f"{self.decision_bridge_url}/decisions", headers=self.headers)
+        return list(dec_resp.get("decisions") or [])
 
     def post_card(
         self,
@@ -461,16 +549,21 @@ class GlassesBusCoordinator:
         kind: str = "high_consequence_commit",
         batch_proposals: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        if not batch_proposals:
+            raise ValueError("post_card requires batch_proposals manifest for decision_bridge POST /cards")
         payload: dict[str, Any] = {
             "title": title,
             "body": body,
             "kind": kind,
+            "batch_proposals": batch_proposals,
         }
-        if batch_proposals is not None:
-            payload["batch_proposals"] = batch_proposals
-        msg = _http_json(f"{self.bus_base_url}/messages", payload=payload, headers=self.headers)
-        if batch_proposals is not None:
-            msg["batch_proposals"] = batch_proposals
+        msg = _http_json(
+            f"{self.decision_bridge_url}/cards",
+            payload=payload,
+            headers=self.headers,
+            timeout_s=10.0,
+        )
+        msg["batch_proposals"] = batch_proposals
         self.cards_posted.append(msg)
         return msg
 
@@ -508,14 +601,11 @@ class GlassesBusCoordinator:
             time.sleep(poll_interval_s)
         raise TimeoutError(f"Timed out waiting for glasses_dat decision on message_id={msg_id}")
 
-    def decide_single_proposal(
+    def await_bridge_proposal_receipt(
         self,
-        host_client: ControlSocketClient,
-        session_id: str,
         proposal_frame: dict[str, Any],
         decision: str,
-        request_id: str,
-        surface: str = "glasses_dat",
+        timeout_s: float = 15.0,
     ) -> dict[str, Any]:
         key = (
             str(proposal_frame["proposal_id"]),
@@ -525,22 +615,8 @@ class GlassesBusCoordinator:
         if key in self.decided_proposals:
             return {"type": "ignored_duplicate", "proposal_id": key[0]}
         self.decided_proposals.add(key)
-
-        host_client.send(
-            {
-                "type": "decision",
-                "session_id": session_id,
-                "request_id": request_id,
-                "proposal_id": proposal_frame["proposal_id"],
-                "fingerprint": proposal_frame["fingerprint"],
-                "generation": int(proposal_frame["generation"]),
-                "decision": decision,
-                "decided_by": "user",
-                "surface": surface,
-            }
-        )
-        expected = "executed" if decision == "approve" else "proposal.invalidated"
-        return host_client.read_until_type(expected)
+        expected = {"executed"} if decision == "approve" else {"proposal.invalidated"}
+        return self.wait_for_receipt(str(proposal_frame["proposal_id"]), expected_types=expected, timeout_s=timeout_s)
 
     def replay_duplicate_ack_check(
         self,
@@ -597,7 +673,7 @@ def _wait_for_control(
 
 
 def _propose_and_host_approve(
-    host: ControlSocketClient,
+    coordinator: GlassesBusCoordinator,
     agent: ControlSocketClient,
     session_id: str,
     proposal_id: str,
@@ -605,7 +681,9 @@ def _propose_and_host_approve(
     operation: dict[str, Any],
     rationale: str,
 ) -> dict[str, Any]:
-    """Propose an intermediate staging/navigation action and approve it on the Host channel."""
+    """Propose an intermediate staging/navigation action and wait for decision_bridge policy auto-approval."""
+    staged_op = dict(operation)
+    staged_op["stage_only"] = True
     agent.send(
         {
             "type": "propose",
@@ -615,29 +693,11 @@ def _propose_and_host_approve(
             "snapshot_id": snap["snapshot_id"],
             "fingerprint": snap["fingerprint"],
             "generation": snap["generation"],
-            "operation": operation,
+            "operation": staged_op,
             "rationale": rationale,
         }
     )
-    frame = host.read_until_type({"proposal.pending", "executed"})
-    if frame.get("type") == "executed":
-        return frame
-    if frame.get("type") != "proposal.pending":
-        raise RuntimeError(f"Unexpected frame for proposal {proposal_id}: {frame}")
-    host.send(
-        {
-            "type": "decision",
-            "session_id": session_id,
-            "request_id": f"dec-{proposal_id}",
-            "proposal_id": frame["proposal_id"],
-            "fingerprint": frame["fingerprint"],
-            "generation": frame["generation"],
-            "decision": "approve",
-            "decided_by": "host_stage",
-            "surface": "desktop-panel",
-        }
-    )
-    exec_frame = host.read_until_type("executed")
+    exec_frame = coordinator.wait_for_receipt(proposal_id, expected_types={"executed"})
     if exec_frame.get("type") != "executed":
         raise RuntimeError(f"Execution failed for proposal {proposal_id}: {exec_frame}")
     return exec_frame
@@ -666,8 +726,9 @@ def run_10portal_campaign(
     include_screenshots: bool = True,
     glasses_timeout_s: float = 30.0,
     show_workbench_in_primary: bool = False,
+    decision_bridge_url: str | None = None,
 ) -> dict[str, Any]:
-    """Execute the full 3-Act, 10-Portal Disco Campaign with 3 Glasses Cards."""
+    """Execute the full 3-Act, 10-Portal Disco Campaign supervised by decision_bridge.py (held mode)."""
     t_campaign0 = time.perf_counter()
     origin = fixture_origin.rstrip("/")
     profile = dict(DEFAULT_SPEAKER_PROFILE)
@@ -679,21 +740,55 @@ def run_10portal_campaign(
         resident_qwen = get_resident_qwen_driver()
     qwen_calls_before = resident_qwen.llm_calls
 
-    coordinator = GlassesBusCoordinator(bus_base_url=bus_base_url, bus_token=bus_token)
+    bridge_proc: subprocess.Popen[str] | None = None
+    if not decision_bridge_url:
+        bridge_port = _free_local_port()
+        decision_bridge_url = f"http://127.0.0.1:{bridge_port}"
+        b_env = os.environ.copy()
+        b_env["WALKAWAY_BUS_TOKEN"] = bus_token
+        b_env["HERMES_HOST_TOKEN"] = host_token
+        bridge_proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(DECISION_BRIDGE_SCRIPT),
+                "--bus-url",
+                bus_base_url,
+                "--http-host",
+                "127.0.0.1",
+                "--http-port",
+                str(bridge_port),
+                "--card-mode",
+                "held",
+            ],
+            env=b_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline_b = time.monotonic() + 10.0
+        while time.monotonic() < deadline_b:
+            try:
+                bh = _http_json(f"{decision_bridge_url}/health")
+                if bh.get("ok"):
+                    break
+            except Exception:
+                time.sleep(0.03)
 
-    host = ControlSocketClient(sock_path, host_token)
-    agent = ControlSocketClient(sock_path, agent_token)
+    coordinator = GlassesBusCoordinator(
+        bus_base_url=bus_base_url,
+        bus_token=bus_token,
+        decision_bridge_url=decision_bridge_url,
+    )
 
     worker_procs: list[subprocess.Popen[str]] = []
-    worker_clients: list[tuple[ControlSocketClient, ControlSocketClient]] = []
+    worker_agents: list[ControlSocketClient] = []
     receipt_proposals: list[dict[str, Any]] = []
+    agent: ControlSocketClient | None = None
 
     with tempfile.TemporaryDirectory(prefix="walkaway-campaign-workers-") as worker_tmp_str:
         worker_tmp = Path(worker_tmp_str)
         try:
-            # Start 8 worker hermes-blitz-browser processes in parallel for Portals #3..#10
-            # so all 9 recalled portals (#2 on primary, #3..#10 on workers) hold real
-            # simultaneous `proposal.pending` state before Glasses Card #3 is decided.
+            # Start worker hermes-blitz-browser processes in parallel for Portals #3..#10 (or #2..#10)
             worker_start_pid = 2 if show_workbench_in_primary else 3
             worker_socks: dict[int, Path] = {}
             for pid in range(worker_start_pid, 11):
@@ -719,18 +814,13 @@ def run_10portal_campaign(
             # ACT 1: Speaker Account Creation & Blind Vault Commit on /signup
             # =========================================================================
             signup_url = f"{origin}/signup"
-            host.send(
-                {
-                    "type": "session.open",
-                    "request_id": "open-campaign-1",
-                    "title": "Muse x Hermes 10-Portal Disco Campaign",
-                    "start_url": signup_url,
-                    "capabilities": {"protocol": 1},
-                    "policy": {"decision": "human_per_action"},
-                }
+            session_id = coordinator.attach_socket(
+                sock_path=sock_path,
+                host_token=host_token,
+                start_url=signup_url,
+                session_title="Muse x Hermes 10-Portal Disco Campaign",
             )
-            opened = host.read_until_type("session.opened")
-            session_id = str(opened["session_id"])
+            agent = ControlSocketClient(sock_path, agent_token)
 
             snap1, _ = _wait_for_control(agent, session_id, "speaker_name", "act1-init")
             by_id1 = {
@@ -808,7 +898,7 @@ def run_10portal_campaign(
                 )
 
             _propose_and_host_approve(
-                host=host,
+                coordinator=coordinator,
                 agent=agent,
                 session_id=session_id,
                 proposal_id="act1-signup-fill",
@@ -845,9 +935,18 @@ def run_10portal_campaign(
                     "rationale": "SoCon 2026 — Create Speaker Account & Seal Vault/Passkey",
                 }
             )
-            pending_card1 = host.read_until_type("proposal.pending")
+            pending_card1 = coordinator.wait_for_pending(session_id, "act1-signup-submit")
 
             # Glasses Card #1: SoCon 2026 — Create Speaker Account & Seal Vault/Passkey
+            card1_manifest = [
+                {
+                    "proposal_id": str(pending_card1["proposal_id"]),
+                    "fingerprint": str(pending_card1["fingerprint"]),
+                    "generation": int(pending_card1["generation"]),
+                    "session_id": session_id,
+                    "portal_id": 1,
+                }
+            ]
             card1_msg = coordinator.post_card(
                 title="SoCon 2026 — Create Speaker Account & Seal Vault/Passkey",
                 body=(
@@ -856,19 +955,17 @@ def run_10portal_campaign(
                     f"fp={pending_card1['fingerprint'][:16]})."
                 ),
                 kind="vault_account_commit",
+                batch_proposals=card1_manifest,
             )
             card1_ack = coordinator.wait_for_glasses_decision(
                 int(card1_msg["id"]),
                 timeout_s=glasses_timeout_s,
                 on_poll=(lambda _mid: on_glasses_card(1, card1_msg)) if on_glasses_card else None,
             )
-            exec_card1 = coordinator.decide_single_proposal(
-                host_client=host,
-                session_id=session_id,
+            exec_card1 = coordinator.await_bridge_proposal_receipt(
                 proposal_frame=pending_card1,
                 decision=str(card1_ack["action"]),
-                request_id="dec-card1-signup",
-                surface="glasses_dat",
+                timeout_s=glasses_timeout_s,
             )
             receipt_proposals.append(
                 {
@@ -912,7 +1009,7 @@ def run_10portal_campaign(
             )
             snap_pre2 = agent.read_until_type("observe.result")
             _propose_and_host_approve(
-                host=host,
+                coordinator=coordinator,
                 agent=agent,
                 session_id=session_id,
                 proposal_id="act2-nav-cfp1",
@@ -964,7 +1061,7 @@ def run_10portal_campaign(
                 )
 
             _propose_and_host_approve(
-                host=host,
+                coordinator=coordinator,
                 agent=agent,
                 session_id=session_id,
                 proposal_id="act2-cfp1-fill-incomplete",
@@ -980,7 +1077,7 @@ def run_10portal_campaign(
                 if e.get("dom_id") or e.get("name") or e.get("id")
             }
             _propose_and_host_approve(
-                host=host,
+                coordinator=coordinator,
                 agent=agent,
                 session_id=session_id,
                 proposal_id="act2-cfp1-submit-incomplete",
@@ -1018,7 +1115,7 @@ def run_10portal_campaign(
             llm_repair_ms = float(repair_result["llm_repair_ms"])
 
             _propose_and_host_approve(
-                host=host,
+                coordinator=coordinator,
                 agent=agent,
                 session_id=session_id,
                 proposal_id="act2-cfp1-fill-repaired",
@@ -1055,7 +1152,7 @@ def run_10portal_campaign(
                     "rationale": "SoCon 2026 — Submit Repaired CFP",
                 }
             )
-            pending_card2 = host.read_until_type("proposal.pending")
+            pending_card2 = coordinator.wait_for_pending(session_id, "act2-cfp1-submit-good")
 
             _post_workbench_update(
                 origin,
@@ -1076,6 +1173,15 @@ def run_10portal_campaign(
             )
 
             # Glasses Card #2: SoCon 2026 — Submit Repaired CFP
+            card2_manifest = [
+                {
+                    "proposal_id": str(pending_card2["proposal_id"]),
+                    "fingerprint": str(pending_card2["fingerprint"]),
+                    "generation": int(pending_card2["generation"]),
+                    "session_id": session_id,
+                    "portal_id": 1,
+                }
+            ]
             card2_msg = coordinator.post_card(
                 title="SoCon 2026 — Submit Repaired CFP",
                 body=(
@@ -1084,19 +1190,17 @@ def run_10portal_campaign(
                     f"fp={pending_card2['fingerprint'][:16]})."
                 ),
                 kind="cfp_repaired_commit",
+                batch_proposals=card2_manifest,
             )
             card2_ack = coordinator.wait_for_glasses_decision(
                 int(card2_msg["id"]),
                 timeout_s=glasses_timeout_s,
                 on_poll=(lambda _mid: on_glasses_card(2, card2_msg)) if on_glasses_card else None,
             )
-            exec_card2 = coordinator.decide_single_proposal(
-                host_client=host,
-                session_id=session_id,
+            exec_card2 = coordinator.await_bridge_proposal_receipt(
                 proposal_frame=pending_card2,
                 decision=str(card2_ack["action"]),
-                request_id="dec-card2-cfp1",
-                surface="glasses_dat",
+                timeout_s=glasses_timeout_s,
             )
             receipt_proposals.append(
                 {
@@ -1146,7 +1250,7 @@ def run_10portal_campaign(
             total_recall_ms = 0.0
 
             # Connect to worker sockets for Portals #3..#10 (or #2..#10 if primary shows workbench)
-            portal_sessions: dict[int, tuple[ControlSocketClient, ControlSocketClient, str]] = {}
+            portal_sessions: dict[int, tuple[ControlSocketClient, str]] = {}
 
             if not show_workbench_in_primary:
                 # Portal #2 uses the primary browser session
@@ -1159,7 +1263,7 @@ def run_10portal_campaign(
                 )
                 snap_pre_p2 = agent.read_until_type("observe.result")
                 _propose_and_host_approve(
-                    host=host,
+                    coordinator=coordinator,
                     agent=agent,
                     session_id=session_id,
                     proposal_id="act3-nav-cfp2",
@@ -1167,9 +1271,9 @@ def run_10portal_campaign(
                     operation={"kind": "navigate", "url": f"{origin}/cfp/2"},
                     rationale="Act 3: Open Portal #2 (KubeCon NA)",
                 )
-                portal_sessions[2] = (host, agent, session_id)
+                portal_sessions[2] = (agent, session_id)
 
-            # Wait for worker sockets and open sessions on /cfp/N .. /cfp/10
+            # Wait for worker sockets and attach them to decision_bridge.py via POST /sockets
             deadline = time.monotonic() + 10.0
             for pid in range(worker_start_pid, 11):
                 w_sock = worker_socks[pid]
@@ -1177,25 +1281,19 @@ def run_10portal_campaign(
                     time.sleep(0.02)
                 if not w_sock.exists():
                     raise RuntimeError(f"Worker Hermes socket for portal #{pid} did not bind in time")
-                w_host = ControlSocketClient(w_sock, host_token)
-                w_agent = ControlSocketClient(w_sock, agent_token)
-                worker_clients.append((w_host, w_agent))
-                w_host.send(
-                    {
-                        "type": "session.open",
-                        "request_id": f"open-p{pid}",
-                        "title": f"Portal #{pid} — {PORTAL_CONFERENCES[pid]}",
-                        "start_url": f"{origin}/cfp/{pid}",
-                        "capabilities": {"protocol": 1},
-                        "policy": {"decision": "human_per_action"},
-                    }
+                w_sid = coordinator.attach_socket(
+                    sock_path=w_sock,
+                    host_token=host_token,
+                    start_url=f"{origin}/cfp/{pid}",
+                    session_title=f"Portal #{pid} — {PORTAL_CONFERENCES[pid]}",
                 )
-                w_opened = w_host.read_until_type("session.opened")
-                portal_sessions[pid] = (w_host, w_agent, str(w_opened["session_id"]))
+                w_agent = ControlSocketClient(w_sock, agent_token)
+                worker_agents.append(w_agent)
+                portal_sessions[pid] = (w_agent, w_sid)
 
             # Stage Portals #2..#10 with Zero-LLM FormRecipe Recall
             for pid in range(2, 11):
-                p_host, p_agent, p_sid = portal_sessions[pid]
+                p_agent, p_sid = portal_sessions[pid]
                 conf_name = PORTAL_CONFERENCES[pid]
 
                 snap_p, obs_p_ms = _wait_for_control(p_agent, p_sid, "submit-cfp", f"act3-p{pid}-obs")
@@ -1208,7 +1306,7 @@ def run_10portal_campaign(
 
                 t_rec0 = time.perf_counter()
                 _propose_and_host_approve(
-                    host=p_host,
+                    coordinator=coordinator,
                     agent=p_agent,
                     session_id=p_sid,
                     proposal_id=f"act3-p{pid}-replay",
@@ -1249,9 +1347,7 @@ def run_10portal_campaign(
                         "rationale": f"Stage submission for Portal #{pid} ({conf_name})",
                     }
                 )
-                pending_p = p_host.read_until_type("proposal.pending")
-                if pending_p.get("type") != "proposal.pending":
-                    raise RuntimeError(f"Expected proposal.pending on Portal #{pid}, got {pending_p}")
+                pending_p = coordinator.wait_for_pending(p_sid, sub_prop_id)
 
                 manifest_entry = {
                     "proposal_id": str(pending_p["proposal_id"]),
@@ -1263,7 +1359,6 @@ def run_10portal_campaign(
                 staged_batch.append(
                     {
                         **manifest_entry,
-                        "host_client": p_host,
                         "agent_client": p_agent,
                         "pending_frame": pending_p,
                         "screenshot_hash": snap_p_staged.get("screenshot_hash") or "",
@@ -1321,7 +1416,7 @@ def run_10portal_campaign(
                 )
                 snap_pre_wb = agent.read_until_type("observe.result")
                 _propose_and_host_approve(
-                    host=host,
+                    coordinator=coordinator,
                     agent=agent,
                     session_id=session_id,
                     proposal_id="act3-nav-disco-workbench",
@@ -1369,13 +1464,10 @@ def run_10portal_campaign(
             for item in staged_batch:
                 pid = int(item["portal_id"])
                 conf_name = PORTAL_CONFERENCES[pid]
-                res_frame = coordinator.decide_single_proposal(
-                    host_client=item["host_client"],
-                    session_id=item["session_id"],
+                res_frame = coordinator.await_bridge_proposal_receipt(
                     proposal_frame=item["pending_frame"],
                     decision=batch_decision,
-                    request_id=f"dec-card3-p{pid}",
-                    surface="glasses_dat",
+                    timeout_s=glasses_timeout_s,
                 )
                 if batch_decision == "approve" and res_frame.get("type") == "executed":
                     batch_executed_count += 1
@@ -1435,7 +1527,7 @@ def run_10portal_campaign(
                 )
                 snap_wb2 = agent.read_until_type("observe.result")
                 _propose_and_host_approve(
-                    host=host,
+                    coordinator=coordinator,
                     agent=agent,
                     session_id=session_id,
                     proposal_id="act3-refresh-disco-workbench",
@@ -1453,7 +1545,7 @@ def run_10portal_campaign(
                 )
                 snap_rec = agent.read_until_type("observe.result")
                 _propose_and_host_approve(
-                    host=host,
+                    coordinator=coordinator,
                     agent=agent,
                     session_id=session_id,
                     proposal_id="act3-nav-campaign-receipt",
@@ -1463,14 +1555,14 @@ def run_10portal_campaign(
                 )
 
             campaign_elapsed_ms = (time.perf_counter() - t_campaign0) * 1000.0
-            all_wire_lines = list(host.raw_lines) + list(agent.raw_lines)
-            for w_h, w_a in worker_clients:
-                all_wire_lines.extend(w_h.raw_lines)
+            all_wire_lines = list(agent.raw_lines) + [json.dumps(coordinator.bridge_decisions())]
+            for w_a in worker_agents:
                 all_wire_lines.extend(w_a.raw_lines)
 
             return {
                 "ok": True,
                 "session_id": session_id,
+                "decision_bridge_url": decision_bridge_url,
                 "total_llm_calls": total_llm_calls,
                 "llm_repair_ms": llm_repair_ms,
                 "total_recall_ms": total_recall_ms,
@@ -1494,11 +1586,7 @@ def run_10portal_campaign(
                 "raw_wire_text": "\n".join(all_wire_lines),
             }
         finally:
-            for w_h, w_a in worker_clients:
-                try:
-                    w_h.close()
-                except Exception:
-                    pass
+            for w_a in worker_agents:
                 try:
                     w_a.close()
                 except Exception:
@@ -1510,14 +1598,18 @@ def run_10portal_campaign(
                 except Exception:
                     w_proc.kill()
                     w_proc.communicate()
-            try:
-                host.close()
-            except Exception:
-                pass
-            try:
-                agent.close()
-            except Exception:
-                pass
+            if agent is not None:
+                try:
+                    agent.close()
+                except Exception:
+                    pass
+            if bridge_proc is not None:
+                bridge_proc.terminate()
+                try:
+                    bridge_proc.communicate(timeout=2.0)
+                except Exception:
+                    bridge_proc.kill()
+                    bridge_proc.communicate()
             if own_qwen and resident_qwen is not None:
                 resident_qwen.close()
 
@@ -1528,6 +1620,7 @@ def main() -> int:
     parser.add_argument("--control-socket", type=Path, required=True)
     parser.add_argument("--bus-url", default="http://127.0.0.1:19099")
     parser.add_argument("--bus-token", default=os.environ.get("WALKAWAY_BUS_TOKEN", "walkaway-dev-bus-token"))
+    parser.add_argument("--decision-bridge-url", default=None)
     parser.add_argument("--vault-path", type=Path, default=Path("/tmp/hermes-vault.json"))
     parser.add_argument("--recall-path", type=Path, default=Path("/tmp/hermes-recall.json"))
     parser.add_argument("--audit-path", type=Path, default=Path("/tmp/hermes-audit.jsonl"))
@@ -1546,6 +1639,7 @@ def main() -> int:
         vault_path=args.vault_path,
         recall_path=args.recall_path,
         audit_path=args.audit_path,
+        decision_bridge_url=args.decision_bridge_url,
     )
     summary = {k: v for k, v in res.items() if k not in {"coordinator", "raw_wire_text"}}
     print(json.dumps(summary, indent=2))

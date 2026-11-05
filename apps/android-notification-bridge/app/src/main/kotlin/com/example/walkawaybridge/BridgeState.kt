@@ -33,7 +33,25 @@ class IdDedupe(private val load: () -> Set<Long>, private val save: (Set<Long>) 
     save(current + id)
     return true
   }
+
+  /** Un-marks an id so a failed/dismissed card can be re-sent (WS3 recovery). */
+  @Synchronized
+  fun forget(id: Long): Boolean {
+    val current = load()
+    if (id !in current) return false
+    save(current - id)
+    return true
+  }
 }
+
+/**
+ * A live DAT session may be reused for the next card only when both the
+ * session and its display are fully STARTED; anything else (stale, stopped,
+ * mid-start) must be released and recreated (WS3 refinement of the 19:07
+ * emergency release-always edit).
+ */
+fun shouldReuseDatSession(sessionState: String?, displayState: String?): Boolean =
+  sessionState == "STARTED" && displayState == "STARTED"
 
 /** Human hint for DAT eligibility failures; empty for other failures. */
 fun datFailureHint(message: String?): String {

@@ -38,6 +38,14 @@ Canonical implementation (Partner Lane P):
   card bound to every listed proposal. All-or-nothing: 409 on any unknown,
   stale, decided, already-carded, or fingerprint/generation-mismatched
   entry. Works for a single proposal (Tap 1/2) and for the Tap 3 batch.
+- `POST /sockets` — `{sock_path, token?, start_url?, session_title?}`
+  attaches a Hermes host channel at runtime (WS1: campaign worker sockets
+  spawned mid-run), opens a session when `start_url` is given, returns
+  `{socket, session_id}` (201; 409 if already attached). Token falls back
+  to `<sock_path>.host.token` then `HERMES_HOST_TOKEN`. `--socket` CLI args
+  are optional; the bridge can boot HTTP-only and attach everything later.
+  `GET /decisions` returns executed frames verbatim (including any
+  `webauthn_*` fields Hermes emits).
 
 ## Run (demo shape)
 

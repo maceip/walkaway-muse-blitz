@@ -280,3 +280,52 @@ hop works across devices.
   (`Navigation.kt`, `NavigationKeys.kt`, `ui/main/*`, `data/*` + template
   tests) was deleted; `MainActivity` renders `BridgeScreen` directly and
   nothing referenced the template stack except its own tests.
+
+
+### T-LIVE-DEMO-001 (Full 10-Portal Physical Campaign)
+
+- Command: `docs/DEMO_RUN.md` sequence (bus 19099 + fixture 8795 + Hermes
+  `--control-socket` + `parallel_campaign_driver.run_10portal_campaign`),
+  wearer approving glasses DAT cards. Final completing run used Hermes
+  socket `muse_blitz.sock` with DB `live_demo.sqlite3` in
+  `/var/folders/8j/5mwkcdz55xbcg1pg_54tlcf00000gn/T/walkaway-live-demo-psa_o5bz/`.
+- Real components: release Hermes (primary + 8 workers), SQLite fixture
+  (10 portals + disco workbench), resident Qwen3-4B, message bus 19099,
+  Walkaway Android DAT bridge, worn Ray-Ban Display glasses.
+- Last observed: **PASS** 2026-11-04 19:15 PT. `campaign_meta=COMMITTED`,
+  `llm_calls=1`, `accounts == 1`, `cfp_submissions == 10`, 11 executed
+  receipts with `decision_surface=glasses_dat`, bus `approve/glasses_dat`
+  acks #27-#32. Earlier Lane P attempts in the same hour failed honestly:
+  30s CLI tap-window timeout after a dismissed Card 2, and a
+  `ConnectionResetError` when the bus restarted mid-run.
+
+
+### T-SALVAGE-WS1WS2 (Salvage WS1 Dynamic Attach & Unified Campaign Driver + WS2 Bus/Stack Single-Instance)
+
+- Commands:
+  - `python3 services/hermes-host/test_decision_bridge_e2e.py` (3 cases incl. dynamic-attach case)
+  - `python3 services/hermes-host/test_message_bus_lock.py`
+  - `python3 tests/e2e/test_10portal_disco_campaign.py` (3 cases routing 100% of host supervision through `decision_bridge.py` `19101` held mode)
+- Asserts:
+  1. Bridge boots with zero sockets; `POST /sockets` attaches real Hermes host channels (primary + 8 parallel workers, HTTP 201 + live `session_id`), duplicate attach is 409, intermediate `stage_only: true` fills/probes are auto-approved by bridge policy (`requires_glasses=false`), and the 11 commit proposals pause in `GET /pending`, emit 3 glasses cards via `POST /cards`, and return verbatim `executed` / `proposal.invalidated` receipts (`webauthn_*`, `before/after_fingerprint`) via `GET /decisions`.
+  2. Bus: a second instance on the same port via `0.0.0.0` (the 19:07 dual-bind shape) exits non-zero on the per-port flock (`/tmp/walkaway-bus-<port>.lock`); first bus untouched.
+  3. Campaign driver + `HighBacklogThreadingHTTPServer` (`request_queue_size=128`): Card #3 fanout across 9 concurrent worker browsers commits all 10 SQLite CFP rows (`cfp_submissions == 10`), while rejecting Card #3 leaves Portals #2–#10 uncommitted (`cfp_submissions == 1`).
+- Last observed: **PASS** 2026-11-04 21:06 PT (`test_decision_bridge_e2e.py` 3/3 in `9.061s`; `test_message_bus_lock.py` 1/1 in `0.172s`; `test_10portal_disco_campaign.py` 3/3 in `14.466s`; full 9-test `tests/e2e` discovery suite 9/9 in `29.783s`; `--supervisortest` 54/54 PASS).
+
+### T-SALVAGE-WS3 (Android Hardening — Device Verification Pending)
+
+- Commands: `./gradlew :app:testDebugUnitTest :app:assembleDebug` in
+  `apps/android-notification-bridge/` (host side, complete);
+  `:app:connectedDebugAndroidTest` + install/launch checks (device side,
+  PENDING — Pixel was disconnected from USB mid-verification 2026-11-04
+  21:00 PT, `adb devices` empty after daemon restart).
+- Host-side last observed: **PASS** — `BridgeStateTest` 8/8 (phases,
+  dedupe mark/forget across instances, reuse predicate, eligibility hint),
+  fresh debug APK assembled.
+- Code under test when device returns: `BridgeKeepAliveService` foreground
+  keep-alive on Connect, guarded DAT session reuse
+  (`shouldReuseDatSession`), `onCardGone` dismissal detection, dedupe
+  `forget` on failed send + `Resend card` control. Device assertions owed:
+  FGS notification/service present while connected; polling continues with
+  app backgrounded (bus `received` ack); failed send surfaces Resend;
+  panel instrumented suite green (re-run wipes DAT registration again).

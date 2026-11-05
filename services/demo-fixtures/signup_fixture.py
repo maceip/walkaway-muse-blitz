@@ -1168,7 +1168,7 @@ def make_handler(db_path: Path):
             if parsed.path == "/api/cfp_submissions":
                 with lock, contextlib.closing(sqlite3.connect(db_path)) as conn:
                     conn.row_factory = sqlite3.Row
-                    rows = [dict(r) for r in conn.execute("SELECT * FROM cfp_submissions ORDER BY id ASC").fetchall()]
+                    rows = [dict(r) for r in conn.execute("SELECT * FROM cfp_submissions ORDER BY portal_id ASC, id ASC").fetchall()]
                 return self.send_json(200, {"cfp_submissions": rows})
             if parsed.path == "/api/logins":
                 with lock, contextlib.closing(sqlite3.connect(db_path)) as conn:
@@ -1581,9 +1581,13 @@ def make_handler(db_path: Path):
     return SignupHandler
 
 
+class HighBacklogThreadingHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 128
+
+
 def start_server(host: str, port: int, db_path: Path) -> ThreadingHTTPServer:
     init_db(db_path)
-    server = ThreadingHTTPServer((host, port), make_handler(db_path))
+    server = HighBacklogThreadingHTTPServer((host, port), make_handler(db_path))
     return server
 
 

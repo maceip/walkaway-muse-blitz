@@ -1528,7 +1528,11 @@ impl BrowserApp {
             }
         }
 
-        let requires_glasses = sensitive_target;
+        let stage_only = operation
+            .get("stage_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let requires_glasses = sensitive_target && !stage_only;
         let classification = if sensitive_target {
             "sensitive"
         } else if op_kind == "scroll" {

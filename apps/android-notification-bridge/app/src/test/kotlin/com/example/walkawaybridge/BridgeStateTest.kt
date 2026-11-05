@@ -53,6 +53,27 @@ class BridgeStateTest {
   }
 
   @Test
+  fun dedupe_forget_allowsRemark_forResend() {
+    var stored: Set<Long> = emptySet()
+    val dedupe = IdDedupe(load = { stored }, save = { stored = it })
+    assertTrue(dedupe.mark(7L))
+    assertFalse(dedupe.mark(7L))
+    assertTrue(dedupe.forget(7L))
+    assertFalse(dedupe.forget(7L))
+    assertTrue(dedupe.mark(7L))
+    assertEquals(setOf(7L), stored)
+  }
+
+  @Test
+  fun reuseDatSession_onlyWhenBothStarted() {
+    assertTrue(shouldReuseDatSession("STARTED", "STARTED"))
+    assertFalse(shouldReuseDatSession("STARTED", "STOPPED"))
+    assertFalse(shouldReuseDatSession("STOPPED", "STARTED"))
+    assertFalse(shouldReuseDatSession("STARTING", "STARTED"))
+    assertFalse(shouldReuseDatSession(null, null))
+  }
+
+  @Test
   fun datFailureHint_mapsEligibilityErrors() {
     assertTrue(datFailureHint("session error: SESSION_ENDED_BY_DEVICE").contains("not worn"))
     assertTrue(datFailureHint("NO_ELIGIBLE_DEVICE").contains("not worn"))

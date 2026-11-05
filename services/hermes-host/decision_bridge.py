@@ -292,6 +292,23 @@ class Bridge:
                 log(f"ack poll failed: {e}")
             time.sleep(0.5)
 
+    def attach_socket(self, sock_path, token, start_url=None, session_title="Walkaway Hermes Host Bridge"):
+        """Attach a Hermes host channel at runtime (WS1 worker sockets)."""
+        with self.lock:
+            if any(str(c.sock_path) == str(sock_path) for c in self.clients):
+                raise ValueError(f"socket already attached: {sock_path}")
+        client = HostClient(self, sock_path, token)
+        with self.lock:
+            self.clients.append(client)
+        threading.Thread(target=client.run, daemon=True).start()
+        if start_url:
+            client.open_session(session_title, start_url)
+            deadline = time.monotonic() + 10
+            while client.session_id is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+        log(f"attached socket {sock_path} session={client.session_id}")
+        return {"socket": str(sock_path), "session_id": client.session_id}
+
     def snapshot_pending(self):
         with self.lock:
             return [
@@ -344,7 +361,7 @@ def make_handler(bridge):
         def do_POST(self):
             if not self.authorized():
                 return self.send_json(401, {"error": "Unauthorized"})
-            if self.path != "/cards":
+            if self.path not in ("/cards", "/sockets"):
                 return self.send_json(404, {"error": "Not found"})
             length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > 262144:
@@ -353,6 +370,25 @@ def make_handler(bridge):
                 payload = json.loads(self.rfile.read(length))
             except json.JSONDecodeError:
                 return self.send_json(400, {"error": "Invalid JSON"})
+            if self.path == "/sockets":
+                sock_path = str(payload.get("sock_path") or "")
+                if not sock_path:
+                    return self.send_json(400, {"error": "sock_path is required"})
+                token = str(payload.get("token") or "") or default_host_token(sock_path)
+                if not token:
+                    return self.send_json(400, {"error": "no host token for socket"})
+                try:
+                    attached = bridge.attach_socket(
+                        sock_path,
+                        token,
+                        start_url=payload.get("start_url"),
+                        session_title=str(payload.get("session_title") or "Walkaway Hermes Host Bridge"),
+                    )
+                except ValueError as e:
+                    return self.send_json(409, {"error": str(e)})
+                except OSError as e:
+                    return self.send_json(502, {"error": f"attach failed: {e}"})
+                return self.send_json(201, attached)
             try:
                 message = bridge.create_card(
                     title=str(payload.get("title") or "Approve")[:120],
@@ -375,6 +411,10 @@ def read_host_token(args, sock_path):
     if args.host_token_file:
         with open(args.host_token_file) as f:
             return f.read().strip()
+    return default_host_token(sock_path)
+
+
+def default_host_token(sock_path):
     sibling = f"{sock_path}.host.token"
     if os.path.exists(sibling):
         with open(sibling) as f:
@@ -384,7 +424,8 @@ def read_host_token(args, sock_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--socket", action="append", required=True, dest="sockets")
+    parser.add_argument("--socket", action="append", default=[], dest="sockets",
+                        help="Hermes control socket (repeatable; may be empty — attach later via POST /sockets)")
     parser.add_argument("--host-token-file", default=None)
     parser.add_argument("--bus-url", default="http://127.0.0.1:19099")
     parser.add_argument("--http-host", default="127.0.0.1")

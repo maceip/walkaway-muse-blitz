@@ -84,7 +84,7 @@ def wait_until(fn, timeout=15.0, interval=0.1):
 class Harness:
     """Fixture server + bus + N Hermes processes + one bridge."""
 
-    def __init__(self, test, tmp, hermes_count, card_mode):
+    def __init__(self, test, tmp, hermes_count, card_mode, dynamic=False):
         self.test = test
         self.tmp = Path(tmp)
         self.db = self.tmp / "db.sqlite3"
@@ -129,18 +129,26 @@ class Harness:
         benv["HERMES_HOST_TOKEN"] = HOST_TOKEN
         cmd = [sys.executable, str(BRIDGE_SCRIPT), "--bus-url", self.bus,
                "--http-port", str(self.bridge_port), "--card-mode", card_mode]
-        for sock in socks:
-            cmd += ["--socket", str(sock)]
-        cmd += ["--start-url", f"{self.origin}/signup"]
+        if not dynamic:
+            for sock in socks:
+                cmd += ["--socket", str(sock)]
+            cmd += ["--start-url", f"{self.origin}/signup"]
         self.procs.append(
             subprocess.Popen(cmd, env=benv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         )
         wait_until(lambda: http_json(f"{self.bridge}/health", token="")[1].get("ok"))
-        wait_until(
-            lambda: len([s for s in http_json(f"{self.bridge}/health", token="")[1]["sessions"] if s])
-            == hermes_count
-        )
+        if not dynamic:
+            wait_until(
+                lambda: len([s for s in http_json(f"{self.bridge}/health", token="")[1]["sessions"] if s])
+                == hermes_count
+            )
         self.socks = socks
+
+    def attach(self, index=0):
+        return http_json(
+            f"{self.bridge}/sockets",
+            {"sock_path": str(self.socks[index]), "start_url": f"{self.origin}/signup"},
+        )
 
     def session_id(self, index=0):
         _, health = http_json(f"{self.bridge}/health", token="")
@@ -373,6 +381,37 @@ class BridgeHeldBatchE2ETest(unittest.TestCase):
                 batch = [d for d in h.decisions()
                          if d.get("via") == "glasses_dat" and d.get("card_message_id") == last_card_id]
                 self.assertEqual(len(batch), 2)
+            finally:
+                h.stop()
+
+
+class BridgeDynamicAttachE2ETest(unittest.TestCase):
+    def test_attach_socket_at_runtime_then_glasses_flow(self):
+        self.assertTrue(HERMES_BIN.exists())
+        with tempfile.TemporaryDirectory(prefix="walkaway-bridge-c-") as tmp:
+            h = Harness(self, tmp, hermes_count=1, card_mode="immediate", dynamic=True)
+            try:
+                _, health = http_json(f"{h.bridge}/health", token="")
+                self.assertEqual(health["sockets"], [])
+                status, attached = h.attach(0)
+                self.assertEqual(status, 201, attached)
+                session = attached["session_id"]
+                self.assertTrue(session)
+                dup_status, _ = h.attach(0)
+                self.assertEqual(dup_status, 409)
+
+                agent = h.agent(0)
+                snap = observe_until(agent, session, "password", "c-fill")
+                propose(agent, session, snap, "c-fill",
+                        {"kind": "fill_form",
+                         "fields": full_signup_fields(by_id(snap), h.origin, "ryan@zunftmax.secure.build")},
+                        "Stage account on dynamically attached socket")
+                card = wait_card(h, 0)
+                h.bus_ack(card["id"], "approve", "glasses_dat")
+                receipts = wait_until(lambda: h.receipts("c-fill"))
+                # Verbatim executed frame is readable by drivers (WS1 receipt contract).
+                self.assertEqual(receipts[0].get("type"), "executed")
+                self.assertIn("before_fingerprint", receipts[0])
             finally:
                 h.stop()
 

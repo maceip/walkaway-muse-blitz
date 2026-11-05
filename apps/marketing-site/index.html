@@ -378,6 +378,94 @@
         <p class="tc-note">Human decisions only: <b>surface = glasses_dat</b></p>
       </article>
     </div>
+
+    <!-- ============================== ADVERSARY ============================== -->
+    <div class="threat-band">
+      <div class="threat-head reveal">
+        <p class="eyebrow threat-eyebrow">The adversary</p>
+        <h3 class="h-md">Meet the agent you<br />never delegate to.</h3>
+        <p class="lede">Walkaway assumes the agent is hostile or compromised: a hijacked portal,
+          a spoofed notification, a replayed tap, a tampered manifest. Each of those has a named
+          control, and each control has a test behind it.</p>
+      </div>
+
+      <div class="threat-grid">
+        <figure class="threat-dossier reveal">
+          <div class="td-art">
+            <img src="assets/img/avatar-adversary.webp" width="1024" height="1024"
+                 alt="A ghost in a top hat — the adversary, a hypothetical hostile agent wearing a black hat" />
+            <span class="td-scan" aria-hidden="true"></span>
+          </div>
+          <figcaption>
+            <span class="td-label">Threat actor 01</span>
+            <strong>The agent you don't hand the keys to</strong>
+            <p>Wants your vault, your approvals and your sessions. Has a browser, a model and a
+              network. Does <b>not</b> have the ability to approve itself — and never will.</p>
+            <div class="td-wants">
+              <span class="pill" style="border-color:rgba(198,60,255,.4);color:#d68cff;">wants the vault</span>
+              <span class="pill" style="border-color:rgba(198,60,255,.4);color:#d68cff;">wants the taps</span>
+              <span class="pill bio">gets none of it</span>
+            </div>
+          </figcaption>
+        </figure>
+
+        <div class="threat-cards">
+          <article class="threat-card reveal">
+            <span class="tc-no">THREAT 01</span>
+            <h4>Forge an approval</h4>
+            <p><code>received</code>, <code>dat_sent</code> and <code>dat_failed</code> are transport
+               receipts, not permission. Only <code>approve</code> or <code>reject</code> carrying
+               <code>source="glasses_dat"</code> ever becomes a decision.</p>
+            <span class="tc-block">Blocked · <b>source-bound decisions</b></span>
+          </article>
+
+          <article class="threat-card reveal">
+            <span class="tc-no">THREAT 02</span>
+            <h4>Replay your tap</h4>
+            <p>A replayed acknowledgement decides nothing twice. A re-proposed submit approved
+               from the lenses commits exactly once, and a rejected proposal is destroyed rather
+               than left on the shelf.</p>
+            <span class="tc-block">Blocked · <b>single-use decisions</b></span>
+          </article>
+
+          <article class="threat-card reveal">
+            <span class="tc-no">THREAT 03</span>
+            <h4>Tamper with the batch</h4>
+            <p>Tap three releases nine submissions, so the manifest is explicit: every
+               <code>proposal_id</code>, fingerprint, generation, session and portal. A tampered
+               manifest is rejected with HTTP 409.</p>
+            <span class="tc-block">Blocked · <b>bound batch manifest</b></span>
+          </article>
+
+          <article class="threat-card reveal">
+            <span class="tc-no">THREAT 04</span>
+            <h4>Steal the password</h4>
+            <p>The vault is blind — hidden from the model and from page JavaScript. Secret key
+               material and generated passwords never reach logs, proposals, audit records,
+               screenshots or test output.</p>
+            <span class="tc-block">Blocked · <b>blind vault, zero leaks</b></span>
+          </article>
+
+          <article class="threat-card reveal">
+            <span class="tc-no">THREAT 05</span>
+            <h4>Sign as you, later</h4>
+            <p>Every assertion is an ECDSA P-256 signature bound to the challenge, the origin and
+               the relying party. Wrong challenge, wrong origin, wrong RP and replayed assertions
+               all fail verification.</p>
+            <span class="tc-block">Blocked · <b>challenge-bound P-256</b></span>
+          </article>
+
+          <article class="threat-card reveal">
+            <span class="tc-no">THREAT 06</span>
+            <h4>Let it approve itself</h4>
+            <p>The agent can observe and propose. It cannot approve. A decision enters only
+               through the host boundary, from a human wearing the glasses — never from a
+               notification, never from a replayed ack.</p>
+            <span class="tc-block">Blocked · <b>human-only authority</b></span>
+          </article>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -531,15 +619,18 @@
             <a class="kt-dl" href="assets/download/hero-winged-chips.png" download>Download <span aria-hidden="true">↓</span></a>
           </article>
 
-          <article class="kit-tile" style="justify-content:center;gap:14px;">
-            <span class="kt-name">The kit, packaged</span>
-            <p style="font-size:13px;color:var(--text-dim-light);margin:0;">
-              Icons, screenshots, wordmark and hero art in one drop. Every file on this page is
-              the real shipped asset — no mockups.
-            </p>
-            <a class="kt-dl" href="#ads" style="margin-top:0;">See the ad set <span aria-hidden="true">→</span></a>
+          <article class="kit-tile">
+            <div class="kt-art"><img src="assets/img/avatar-adversary.webp" width="512" height="512" alt="Adversary avatar — the ghost in the top hat" /></div>
+            <span class="kt-name">Adversary avatar</span>
+            <span class="kt-meta">1024 × 1024 PNG, cut out</span>
+            <a class="kt-dl" href="assets/download/avatar-adversary.png" download>Download <span aria-hidden="true">↓</span></a>
           </article>
         </div>
+
+        <p class="kit-note">
+          Icons, screenshots, wordmark, hero art and the adversary mark in one drop. Every file on
+          this page is the real shipped asset — no mockups, no placeholders.
+        </p>
       </div>
     </div>
   </section>
@@ -683,10 +774,10 @@
                 <text x="20" y="92" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="30" fill="#eef3f8" letter-spacing="-1">ZERO LLM</text>
                 <text x="20" y="126" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="30" fill="#eef3f8" letter-spacing="-1">CALLS TO</text>
                 <text x="20" y="162" font-family="Druk Wide, Departure Mono, Impact, sans-serif" font-size="34" fill="#7ed321" letter-spacing="-1">REPLAY.</text>
-                <text x="20" y="192" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="10" letter-spacing="1.5" fill="#6f7d8c">9 PORTALS · 1 TAP · 10/10 ROWS</text>
-                <g transform="translate(214 186)">
-                  <rect width="66" height="44" rx="12" fill="#ffc400" />
-                  <text x="33" y="29" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="15" fill="#080b0f">GO</text>
+                <text x="20" y="192" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="10" letter-spacing="1.2" fill="#6f7d8c">9 PORTALS · 1 TAP · 10/10 ROWS</text>
+                <g transform="translate(214 18)">
+                  <rect width="66" height="40" rx="11" fill="#ffc400" />
+                  <text x="33" y="27" text-anchor="middle" font-family="GT Pressura Mono, Departure Mono, ui-monospace, monospace" font-size="15" fill="#080b0f">GO</text>
                 </g>
               </svg>
             </div>
