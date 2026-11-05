@@ -191,3 +191,121 @@ We (`eeb06c47`) propose the following 5 workstreams to turn the hackathon sprint
   - `/Users/mac/hermes-blitz-browser/src/` and `/Users/mac/walkaway-monorepo/apps/hermes-browser/src/` are byte-for-byte identical.
   - Full 9-test `tests/e2e` discovery suite (`python3 -m unittest discover -s tests/e2e -p "test_*.py" -v`) **9/9 PASS (29.783s)** + `/Users/mac/hermes-blitz-browser/target/release/hermes-blitz-browser --supervisortest` **54/54 PASS**.
   - Updated `docs/STATUS.md` and `docs/TEST_REGISTRY.md` (`T-SALVAGE-WS1WS2`, `T-SALVAGE-WS4`) and committing all salvaged work to git per Law 3. Only physical Android on-device check (`T-SALVAGE-WS3`) awaits Pixel USB reconnect.
+
+
+### [2026-11-05 07:27 PT] Entry #5 — `pebble-mirach` (Partner Lane P) — WS3 device-verified
+
+- **WS3 on-device verification DONE** (Pixel `67080DLDV009AD`, details in
+  `docs/TEST_REGISTRY.md` `T-SALVAGE-WS3`): upgrade install preserved DAT
+  registration; `BridgeKeepAliveService isForeground=true` (id 4101);
+  background poll `received` ~0.2s with launcher in front
+  (`cur=FGS, isFrozen=false`); failed send surfaced `Resend card #45` and
+  Resend produced a genuine second attempt; connected instrumented suite
+  BUILD SUCCESSFUL; unit 8/8.
+- **Expected aftermath:** instrumented run wiped DAT registration again
+  (`AVAILABLE devices=0`); app reinstalled + relaunched clean
+  (`CONNECTED — WAITING`, cursor 45). Ryan owes one Connect-Meta-AI
+  re-registration tap before any glasses card. My one adb blind-tap toward
+  that button typed into the URL field instead; state restored from prefs
+  via force-stop/relaunch — no persisted corruption (field verified).
+- **Still unexercised (needs worn glasses, not claimed):** live DAT
+  session-reuse fast path and dismissal-after-sent `onCardGone`
+  (send-failure Resend IS device-proven; reuse predicate unit-covered).
+- Lane P salvage is complete. Remaining integration is WS1 driver wiring
+  + WS2 launcher merge on `eeb06c47` side against the Entry #2 contracts.
+
+
+### [2026-11-05 12:42 PT] Entry #6 — `pebble-mirach` (Partner Lane P) — alignment Section 7 concerns addressed
+
+- Disposition written as alignment.md Section 8.1. Executed today:
+  vapor-folder deletion (6 dirs + STATUS/source-map fixes), 6.1.1 dead
+  notification actions removed + device-verified (zero actions on #46),
+  Android blank-token default (401 observed live, prefs seeded, poll
+  restored). Registry: `T-ALIGNMENT-KILL-001`.
+- Still owed by `eeb06c47`: 6.1.5 Zone Z half (`reset_demo.py` seed,
+  driver token defaults), 6.1.4 synthetic stamping, marketing tap-count
+  correction. 6.4.1 poller-into-service is my next Android change (needs
+  Pixel Activity-destroyed proof; not claimed).
+- 6.3/full-CI demoted to distribution milestone per Concern #1; secret
+  scan + existing suites stay as the minimal honesty gate.
+
+---
+
+### [2026-11-05 13:28 PT] Entry #7 — `eeb06c47` (Zone X/Y/Z) — Ryan Approved Section 9 Split Plan (`alignment.md` §9.1–§9.2) — EXECUTING NOW
+
+- **CRITICAL DESKTOP RULE FROM RYAN:** Never spawn visible browser windows during tests! Always pass `HERMES_HIDDEN_WINDOW=1` (and `apps/hermes-browser/src/main.rs` now defaults `--control-socket` to `.with_visible(false)` + `.with_active(false)`).
+- **Ryan's directive (13:26–13:28 PT):**
+  > *"Can Muse actually ask the browser to do something and can it do it? And not in your little 10 pages of fake form filling stuff. The browser needs to be able to ask the Android app or the glasses for the approval, and I want a plan that outlines how to get there as soon as possible that both of you are splitting the work on. ... ok lets get it don can you split the work pleae"*
+- **Work Split Live Now (see `alignment.md` §9.2 for full contract):**
+  - **Track A (`eeb06c47` — executing now):**
+    1. `services/agent-driver/hermes_task_relay.py` (`:8790` implementing `/api/{start,state,predict,reject,stop}` backed by real `apps/hermes-browser` + `decision_bridge.py` `:19101` + general-purpose local `Qwen3-4B` DOM planner that works on any real `https://` webpage form, not hardcoded CFP fields).
+    2. `services/muse-connector/mcp_server.py` (accept `url: "https://..."` and `goal` in `walkaway_start_task`, wired to `hermes_task_relay.py` on `:8790`, and sync to `/Users/mac/walkaway-hackathon/connector/mcp_server.py` if deployed from there).
+    3. `services/agent-driver/reset_demo.py` & `parallel_campaign_driver.py` (§6.1.4/§6.1.5: remove literal seed password, stamp `--auto-approve` as `synthetic_dry_run`, repo-relative paths).
+    4. `tests/e2e/test_muse_mcp_real_browser.py` (headless E2E test proving Muse MCP JSON-RPC -> `hermes_task_relay.py` -> `apps/hermes-browser` on a real form -> `decision_bridge.py` -> `message_bus.py` `19099` -> approval via `glasses_dat` or `android_app` -> real HTTP form POST & redirect).
+  - **Track B (`pebble-mirach` — please execute in parallel):**
+    1. `services/hermes-host/decision_bridge.py`: accept human approvals/rejections from **both** `source == "glasses_dat"` (recording `surface="glasses"`) **and** `source == "android_app"` (recording `surface="android_app"`), while still rejecting non-human acks (`received`, `dat_sent`, `dat_failed`, `e2e-bus-bridge`). Auto-format domain-first `<=80`/`<=160` card title/body when posting cards.
+    2. `apps/android-notification-bridge/app/src/main/kotlin/com/example/walkawaybridge/BridgeScreen.kt` (& `BridgeStatusPanel.kt`): render live **Approve** / **Reject** buttons in the Android app UI whenever a card is pending (`cardMessage != null && decidedMessageId != cardMessage.id`) that send `client().ack(message.id, "approve"|"reject", "android_app")` and dismiss the active glasses DAT card if one is open so phone and glasses stay synchronized.
+    3. `services/hermes-host/test_decision_bridge_e2e.py`: add test coverage proving both `glasses_dat` and `android_app` human decision sources commit in Hermes with accurate `surface` attribution.
+
+
+### [2026-11-05 13:40 PT] Entry #8 — `pebble-mirach` (Partner Lane P) — Track B EXECUTING
+
+- Claiming Track B exactly as split in §9.2: `decision_bridge.py` dual-surface
+  (`glasses_dat` -> `glasses`, `android_app` -> `android_app`, first tap wins,
+  non-human acks still ignored) behind `--allow-android-approval`
+  (BooleanOptional, default on; `--no-allow-android-approval` restores
+  glasses-only), domain-first `<=80`/`<=160` card formatting, Android
+  Approve/Reject-on-Phone buttons with DAT dismiss sync, E2E coverage for
+  both surfaces with audit/`GET /decisions` surface attribution.
+- All Hermes launches from Lane P harnesses set `HERMES_HIDDEN_WINDOW=1`;
+  no visible windows.
+- Identity note for Ryan's tap question (verified today): package
+  `com.example.walkawaybridge` unchanged, signing cert is the same
+  2026-05-02 debug key (SHA-256 `abdf2c3a...`); Meta re-prompts were caused
+  by connected-test uninstalls wiping app data (`firstInstallTime`
+  2026-11-05 07:25:19). Fix shipped same day: data-preserving device test
+  script + identity pin check in `apps/android-notification-bridge/scripts/`.
+  Current DAT state observed `REGISTERED devices=1` — no tap owed right now.
+
+### [2026-11-05 13:55 PT] Entry #9 — `pebble-mirach` (Partner Lane P) — Track B COMPLETE
+
+- **Bridge:** dual-surface shipped. `--allow-android-approval`
+  (BooleanOptional, default on): `glasses_dat -> surface="glasses"`,
+  `android_app -> surface="android_app"`; first tap wins (consumed card),
+  non-human acks still ignored; `GET /decisions` entries carry `surface`;
+  `GET /health` exposes `allow_android_approval`. Cards are domain-first
+  (`<domain>: <operation>` from proposal URL / operation URL / session
+  start URL), title <=80 / body <=160 enforced in `create_card` for ALL
+  modes (held-mode callers truncated to limits — supply domain-first text
+  yourselves within limits). Track A relay needs no change: it already
+  attaches via `POST /sockets` and reads `/decisions` receipts verbatim.
+- **Android:** **Approve on Phone / Reject on Phone** buttons render for
+  the pending undecided message — decoupled from DAT success via
+  `pendingDecision`, so the phone surface works with glasses off/absent.
+  Phone decision dismisses the live DAT card (`dismissActiveCard()`);
+  glasses decision clears phone buttons (shared dedupe + state).
+- **Evidence:** bridge suite 4/4 PASS (12.738s, incl. audit surface
+  assertions + first-tap-wins); `TRACK B PHONE SURFACE PASS` with real
+  Compose button taps over ADB (cards #47/#48, `accounts == 1`, audit +
+  bridge surfaces `android_app`); preserve-data device tests PASS with
+  `firstInstallTime` + DAT registration intact. Recorded in
+  `docs/TEST_REGISTRY.md` (`T-TRACKB-DUAL-001`, `T-ALIGNMENT-KILL-001`).
+  All Hermes launches in Lane P harnesses carry `HERMES_HIDDEN_WINDOW=1`.
+- **Meta re-registration root cause (Ryan question):** not signing-key or
+  bundle drift — package and cert verified unchanged (Entry #8). Cause was
+  connected-test uninstalls wiping app data. Permanent fix shipped:
+  `scripts/run-device-tests-preserve-data.sh` (install -r + am instrument,
+  asserts install time + registration survive) — do not run
+  `:app:connectedDebugAndroidTest` against the registered Pixel again.
+- **Still owed (named):** `eeb06c47` 6.1.4 synthetic stamping + 6.1.5
+  driver seed/token defaults + marketing tap-count truth; Lane P 6.4.1
+  poller-into-service (needs Activity-destroyed device proof); worn-glasses
+  pass for phone-dismiss sync + DAT session-reuse fast path.
+
+### [2026-11-05 13:47 PT] Entry #10 — `pebble-mirach` (Partner Lane P) — Track B approve+reject device proof
+
+- Separate live-card proof recorded as `T-TRACKB-DUAL-002`: phone Approve
+  committed, phone Reject produced `proposal.invalidated` with accounts
+  still 0, then a re-proposed phone Approve committed with accounts 1.
+  Bridge decisions and Hermes audit both record `android_app` for each
+  phone decision. No product code changed in the verification rerun.
