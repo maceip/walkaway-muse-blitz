@@ -1241,6 +1241,7 @@ dependencies = [
  "blitz-traits",
  "cc",
  "markup5ever",
+ "openssl",
  "png 0.17.16",
  "pollster",
  "serde",

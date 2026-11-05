@@ -1528,7 +1528,11 @@ impl BrowserApp {
             }
         }
 
-        let requires_glasses = sensitive_target;
+        let stage_only = operation
+            .get("stage_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let requires_glasses = sensitive_target && !stage_only;
         let classification = if sensitive_target {
             "sensitive"
         } else if op_kind == "scroll" {
@@ -3122,8 +3126,11 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
         if self.window.is_some() {
             return;
         }
+        let hidden = std::env::args().any(|a| a == "--hidden-window")
+            || std::env::var("HERMES_HIDDEN_WINDOW").ok().as_deref() == Some("1");
         let attrs = Window::default_attributes()
-            .with_title("Muse — Hermes Browser")
+            .with_title("Muse Blitz — Supervised Agent Browser")
+            .with_visible(!hidden)
             .with_inner_size(LogicalSize::new(WIDTH, HEIGHT));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.scale = window.scale_factor();
