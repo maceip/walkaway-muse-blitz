@@ -664,6 +664,8 @@ def run_10portal_campaign(
     speaker_profile: dict[str, str] | None = None,
     on_glasses_card: Callable[[int, dict[str, Any]], None] | None = None,
     include_screenshots: bool = True,
+    glasses_timeout_s: float = 30.0,
+    show_workbench_in_primary: bool = False,
 ) -> dict[str, Any]:
     """Execute the full 3-Act, 10-Portal Disco Campaign with 3 Glasses Cards."""
     t_campaign0 = time.perf_counter()
@@ -692,8 +694,9 @@ def run_10portal_campaign(
             # Start 8 worker hermes-blitz-browser processes in parallel for Portals #3..#10
             # so all 9 recalled portals (#2 on primary, #3..#10 on workers) hold real
             # simultaneous `proposal.pending` state before Glasses Card #3 is decided.
+            worker_start_pid = 2 if show_workbench_in_primary else 3
             worker_socks: dict[int, Path] = {}
-            for pid in range(3, 11):
+            for pid in range(worker_start_pid, 11):
                 w_sock = worker_tmp / f"hermes_p{pid}.sock"
                 w_env = os.environ.copy()
                 w_env["HERMES_HOST_TOKEN"] = host_token
@@ -855,6 +858,7 @@ def run_10portal_campaign(
             )
             card1_ack = coordinator.wait_for_glasses_decision(
                 int(card1_msg["id"]),
+                timeout_s=glasses_timeout_s,
                 on_poll=(lambda _mid: on_glasses_card(1, card1_msg)) if on_glasses_card else None,
             )
             exec_card1 = coordinator.decide_single_proposal(
@@ -1082,6 +1086,7 @@ def run_10portal_campaign(
             )
             card2_ack = coordinator.wait_for_glasses_decision(
                 int(card2_msg["id"]),
+                timeout_s=glasses_timeout_s,
                 on_poll=(lambda _mid: on_glasses_card(2, card2_msg)) if on_glasses_card else None,
             )
             exec_card2 = coordinator.decide_single_proposal(
@@ -1139,32 +1144,33 @@ def run_10portal_campaign(
             ]
             total_recall_ms = 0.0
 
-            # Connect to worker sockets for Portals #3..#10
+            # Connect to worker sockets for Portals #3..#10 (or #2..#10 if primary shows workbench)
             portal_sessions: dict[int, tuple[ControlSocketClient, ControlSocketClient, str]] = {}
 
-            # Portal #2 uses the primary browser session
-            agent.send(
-                {
-                    "type": "observe.request",
-                    "session_id": session_id,
-                    "request_id": "act3-p2-pre-nav",
-                }
-            )
-            snap_pre_p2 = agent.read_until_type("observe.result")
-            _propose_and_host_approve(
-                host=host,
-                agent=agent,
-                session_id=session_id,
-                proposal_id="act3-nav-cfp2",
-                snap=snap_pre_p2,
-                operation={"kind": "navigate", "url": f"{origin}/cfp/2"},
-                rationale="Act 3: Open Portal #2 (KubeCon NA)",
-            )
-            portal_sessions[2] = (host, agent, session_id)
+            if not show_workbench_in_primary:
+                # Portal #2 uses the primary browser session
+                agent.send(
+                    {
+                        "type": "observe.request",
+                        "session_id": session_id,
+                        "request_id": "act3-p2-pre-nav",
+                    }
+                )
+                snap_pre_p2 = agent.read_until_type("observe.result")
+                _propose_and_host_approve(
+                    host=host,
+                    agent=agent,
+                    session_id=session_id,
+                    proposal_id="act3-nav-cfp2",
+                    snap=snap_pre_p2,
+                    operation={"kind": "navigate", "url": f"{origin}/cfp/2"},
+                    rationale="Act 3: Open Portal #2 (KubeCon NA)",
+                )
+                portal_sessions[2] = (host, agent, session_id)
 
-            # Wait for worker sockets 3..10 and open sessions on /cfp/3 .. /cfp/10
+            # Wait for worker sockets and open sessions on /cfp/N .. /cfp/10
             deadline = time.monotonic() + 10.0
-            for pid in range(3, 11):
+            for pid in range(worker_start_pid, 11):
                 w_sock = worker_socks[pid]
                 while not w_sock.exists() and time.monotonic() < deadline:
                     time.sleep(0.02)
@@ -1304,6 +1310,25 @@ def run_10portal_campaign(
                     },
                 )
 
+            if show_workbench_in_primary:
+                agent.send(
+                    {
+                        "type": "observe.request",
+                        "session_id": session_id,
+                        "request_id": "act3-wb-pre-nav",
+                    }
+                )
+                snap_pre_wb = agent.read_until_type("observe.result")
+                _propose_and_host_approve(
+                    host=host,
+                    agent=agent,
+                    session_id=session_id,
+                    proposal_id="act3-nav-disco-workbench",
+                    snap=snap_pre_wb,
+                    operation={"kind": "navigate", "url": f"{origin}/disco-workbench"},
+                    rationale="Act 3: Display 10-Viewport Live Disco Workbench before Batch Commit",
+                )
+
             # Build explicit batch_proposals manifest for Glasses Card #3
             batch_proposals_manifest = [
                 {
@@ -1315,9 +1340,13 @@ def run_10portal_campaign(
                 }
                 for item in staged_batch
             ]
-            compact_manifest_json = json.dumps(
-                {"batch_proposals": batch_proposals_manifest},
-                separators=(",", ":"),
+            compact_manifest_json = (
+                "Approve batch submission across 9 conferences (KubeCon NA..QCon SF, 0 LLM calls) "
+                if show_workbench_in_primary
+                else json.dumps(
+                    {"batch_proposals": batch_proposals_manifest},
+                    separators=(",", ":"),
+                )
             )
 
             # Glasses Card #3: Batch Commit — Release 9 Recalled Conference Submissions
@@ -1329,6 +1358,7 @@ def run_10portal_campaign(
             )
             card3_ack = coordinator.wait_for_glasses_decision(
                 int(card3_msg["id"]),
+                timeout_s=glasses_timeout_s,
                 on_poll=(lambda _mid: on_glasses_card(3, card3_msg)) if on_glasses_card else None,
             )
             batch_decision = str(card3_ack["action"])
@@ -1393,6 +1423,43 @@ def run_10portal_campaign(
                     }
                 },
             )
+
+            if show_workbench_in_primary:
+                agent.send(
+                    {
+                        "type": "observe.request",
+                        "session_id": session_id,
+                        "request_id": "act3-wb-refresh-pre",
+                    }
+                )
+                snap_wb2 = agent.read_until_type("observe.result")
+                _propose_and_host_approve(
+                    host=host,
+                    agent=agent,
+                    session_id=session_id,
+                    proposal_id="act3-refresh-disco-workbench",
+                    snap=snap_wb2,
+                    operation={"kind": "navigate", "url": f"{origin}/disco-workbench"},
+                    rationale="Act 3: Show all 10 portals SUBMITTED on Disco Workbench",
+                )
+                time.sleep(2.0)
+                agent.send(
+                    {
+                        "type": "observe.request",
+                        "session_id": session_id,
+                        "request_id": "act3-receipt-pre",
+                    }
+                )
+                snap_rec = agent.read_until_type("observe.result")
+                _propose_and_host_approve(
+                    host=host,
+                    agent=agent,
+                    session_id=session_id,
+                    proposal_id="act3-nav-campaign-receipt",
+                    snap=snap_rec,
+                    operation={"kind": "navigate", "url": f"{origin}/campaign-receipt"},
+                    rationale="Act 3: Display Final Campaign Receipt",
+                )
 
             campaign_elapsed_ms = (time.perf_counter() - t_campaign0) * 1000.0
             all_wire_lines = list(host.raw_lines) + list(agent.raw_lines)
