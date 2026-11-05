@@ -3126,11 +3126,16 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
         if self.window.is_some() {
             return;
         }
+        let explicit_show = std::env::args().any(|a| a == "--show-window")
+            || std::env::var("HERMES_SHOW_WINDOW").ok().as_deref() == Some("1");
+        let has_control_socket = std::env::args().any(|a| a == "--control-socket");
         let hidden = std::env::args().any(|a| a == "--hidden-window")
-            || std::env::var("HERMES_HIDDEN_WINDOW").ok().as_deref() == Some("1");
+            || std::env::var("HERMES_HIDDEN_WINDOW").ok().as_deref() == Some("1")
+            || (has_control_socket && !explicit_show);
         let attrs = Window::default_attributes()
             .with_title("Muse Blitz — Supervised Agent Browser")
             .with_visible(!hidden)
+            .with_active(false)
             .with_inner_size(LogicalSize::new(WIDTH, HEIGHT));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.scale = window.scale_factor();

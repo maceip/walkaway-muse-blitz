@@ -249,7 +249,24 @@ pub fn submit_form(
                 return Err("empty response".to_string());
             }
             let final_url = Url::parse(&final_url_str).unwrap_or(target_url);
-            Ok((final_url, String::from_utf8_lossy(&bytes).into_owned()))
+            let raw_body = String::from_utf8_lossy(&bytes).into_owned();
+            let trimmed = raw_body.trim_start();
+            let html_body = if (trimmed.starts_with('{') || trimmed.starts_with('['))
+                && !trimmed.to_ascii_lowercase().contains("<html")
+            {
+                let escaped = raw_body
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+                format!(
+                    "<!doctype html><html><head><title>Submitted — {final_url}</title></head>\
+                     <body><h1>Form Submitted ({final_url})</h1>\
+                     <pre id=\"submitted-json\">{escaped}</pre></body></html>"
+                )
+            } else {
+                raw_body
+            };
+            Ok((final_url, html_body))
         }
         Err(e) => Err(format!("{e}")),
     }
