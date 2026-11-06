@@ -690,6 +690,105 @@ pub unsafe extern "C" fn blitz_dom_get_bounding_rect_field(
     }
 }
 
+/// `navigator.credentials.create(options)` -> runs a real NIST P-256 WebAuthn registration
+/// ceremony and writes the JSON credential response into `ctx.scratch_utf8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_webauthn_create(
+    ctx: *mut c_void,
+    rp_id: *const c_char,
+    user_name: *const c_char,
+    challenge: *const c_char,
+) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    let (rp_id, user_name, challenge) = unsafe { (as_str(rp_id), as_str(user_name), as_str(challenge)) };
+    let effective_rp = if rp_id.trim().is_empty() { "localhost" } else { rp_id.trim() };
+    let effective_user = if user_name.trim().is_empty() { "user@localhost" } else { user_name.trim() };
+    let effective_chal = if challenge.trim().is_empty() { "default_challenge" } else { challenge.trim() };
+    let origin = format!("https://{effective_rp}");
+    let Ok(acct) = crate::vault::get_or_create_secret(&origin, effective_user) else {
+        return -1;
+    };
+    let Ok(bundle) = crate::vault::sign_webauthn_assertion(
+        &origin,
+        effective_user,
+        effective_rp,
+        effective_chal,
+        true,
+        true,
+    ) else {
+        return -1;
+    };
+    let payload = serde_json::json!({
+        "id": acct.credential_id,
+        "rawId": acct.credential_id,
+        "type": "public-key",
+        "authenticatorAttachment": "platform",
+        "rpId": effective_rp,
+        "userName": effective_user,
+        "publicKeyPem": bundle.public_key_pem,
+        "clientDataJSON": bundle.client_data_json_b64,
+        "authenticatorData": bundle.authenticator_data_b64,
+        "signature": bundle.signature_der_b64,
+        "signCount": bundle.sign_count,
+    })
+    .to_string();
+    ctx.scratch_utf8.clear();
+    ctx.scratch_utf8.extend_from_slice(payload.as_bytes());
+    ctx.scratch_utf8.len() as c_int
+}
+
+/// `navigator.credentials.get(options)` -> runs a real NIST P-256 WebAuthn assertion
+/// ceremony and writes the JSON assertion response into `ctx.scratch_utf8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_webauthn_get(
+    ctx: *mut c_void,
+    rp_id: *const c_char,
+    challenge: *const c_char,
+) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    let (rp_id, challenge) = unsafe { (as_str(rp_id), as_str(challenge)) };
+    let effective_rp = if rp_id.trim().is_empty() { "localhost" } else { rp_id.trim() };
+    let effective_chal = if challenge.trim().is_empty() { "default_challenge" } else { challenge.trim() };
+    let origin = format!("https://{effective_rp}");
+    let store = crate::vault::load_store();
+    let user_name = store
+        .accounts
+        .iter()
+        .find(|a| a.origin == origin || a.origin.contains(effective_rp))
+        .map(|a| a.username.clone())
+        .unwrap_or_else(|| "user@localhost".to_string());
+    let Ok(bundle) = crate::vault::sign_webauthn_assertion(
+        &origin,
+        &user_name,
+        effective_rp,
+        effective_chal,
+        true,
+        true,
+    ) else {
+        return -1;
+    };
+    let payload = serde_json::json!({
+        "id": bundle.credential_id,
+        "rawId": bundle.credential_id,
+        "type": "public-key",
+        "authenticatorAttachment": "platform",
+        "rpId": bundle.rp_id,
+        "publicKeyPem": bundle.public_key_pem,
+        "clientDataJSON": bundle.client_data_json_b64,
+        "authenticatorData": bundle.authenticator_data_b64,
+        "signature": bundle.signature_der_b64,
+        "signCount": bundle.sign_count,
+    })
+    .to_string();
+    ctx.scratch_utf8.clear();
+    ctx.scratch_utf8.extend_from_slice(payload.as_bytes());
+    ctx.scratch_utf8.len() as c_int
+}
+
 /// Mark the document damaged without mutating it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn blitz_dom_mark_dirty(ctx: *mut c_void) {

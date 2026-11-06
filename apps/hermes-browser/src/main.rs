@@ -6007,6 +6007,21 @@ fn runtimetest() -> i32 {
         parentEl.addEventListener("click", function(ev) {
           parentEl.setAttribute("data-bubbled-from", ev.target.getAttribute("id"));
         });
+
+        navigator.credentials.create({
+          publicKey: {
+            rp: { id: "example.com", name: "Example" },
+            user: { name: "ryan@example.com", displayName: "Ryan" },
+            challenge: "chal_create_123"
+          }
+        }).then(function(cred) {
+          host.setAttribute("data-webauthn-id", cred.id);
+          return navigator.credentials.get({
+            publicKey: { rpId: "example.com", challenge: "chal_get_456" }
+          });
+        }).then(function(assertion) {
+          host.setAttribute("data-webauthn-sig-len", String(assertion.signature.length));
+        });
       </script>
     </body>
     </html>"##;
@@ -6076,6 +6091,24 @@ fn runtimetest() -> i32 {
     check(
         bubbled_from == "bubble-child",
         "addEventListener bubbles click event from #bubble-child to #bubble-parent via blitz_parent_node",
+    );
+    let webauthn_id = dom_page
+        .doc()
+        .get_element_by_id("box-host")
+        .and_then(|id| dom_page.doc().get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-webauthn-id")))
+        .unwrap_or_default()
+        .to_string();
+    let webauthn_sig_len: usize = dom_page
+        .doc()
+        .get_element_by_id("box-host")
+        .and_then(|id| dom_page.doc().get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-webauthn-sig-len")))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    check(
+        !webauthn_id.is_empty() && webauthn_sig_len >= 64,
+        "navigator.credentials.create() and .get() execute P-256 WebAuthn ceremonies via $SHBuiltin.extern_c",
     );
 
     if failures == 0 {

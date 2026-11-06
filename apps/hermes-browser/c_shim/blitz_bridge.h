@@ -41,6 +41,10 @@ int blitz_scratch_byte(size_t index);
 /* Taffy resolved layout geometry: field 0=x, 1=y, 2=width, 3=height */
 double blitz_get_bounding_rect_field(uint64_t node, int field);
 
+/* WebAuthn navigator.credentials bridge (writes JSON credential into scratch buffer) */
+int blitz_webauthn_create(const char *rp_id, const char *user_name, const char *challenge);
+int blitz_webauthn_get(const char *rp_id, const char *challenge);
+
 /* Mark the document as damaged so the host re-resolves layout and repaints. */
 void blitz_mark_dirty(void);
 

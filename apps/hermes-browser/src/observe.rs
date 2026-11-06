@@ -64,6 +64,12 @@ pub struct ScrollSnapshot {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct SelectOptionSnapshot {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct ElementSnapshot {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +100,10 @@ pub struct ElementSnapshot {
     pub selected: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub href: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<SelectOptionSnapshot>>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -486,6 +496,35 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
         let checked = data
             .checkbox_input_checked()
             .or_else(|| (tag == "input" && matches!(input_type.as_str(), "checkbox" | "radio")).then(|| attr(node, local_name!("checked")).is_some()));
+        let placeholder = attr(node, local_name!("placeholder"))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let options = if tag == "select" {
+            let opts: Vec<SelectOptionSnapshot> = node
+                .children
+                .iter()
+                .copied()
+                .filter_map(|child_id| {
+                    let child = doc.get_node(child_id)?;
+                    let child_data = child.element_data()?;
+                    if child_data.name.local.to_string().to_ascii_lowercase() != "option" {
+                        return None;
+                    }
+                    let opt_label = normalized(&child.text_content(), 120);
+                    let opt_val = child_data
+                        .attr(local_name!("value"))
+                        .map(str::to_string)
+                        .unwrap_or_else(|| opt_label.clone());
+                    Some(SelectOptionSnapshot {
+                        value: opt_val,
+                        label: opt_label,
+                    })
+                })
+                .collect();
+            if opts.is_empty() { None } else { Some(opts) }
+        } else {
+            None
+        };
         elements.push(ElementSnapshot {
             id: format!("el_{}", elements.len() + 1),
             dom_id,
@@ -510,6 +549,8 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
             checked,
             selected,
             href,
+            placeholder,
+            options,
         });
         if elements.len() >= 512 {
             break;

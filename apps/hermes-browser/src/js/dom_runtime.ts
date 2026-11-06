@@ -104,6 +104,19 @@
   ): c_double {
     throw 0;
   });
+  const _webauthn_create = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_webauthn_create(
+    rp_id: c_ptr,
+    user_name: c_ptr,
+    challenge: c_ptr
+  ): c_int {
+    throw 0;
+  });
+  const _webauthn_get = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_webauthn_get(
+    rp_id: c_ptr,
+    challenge: c_ptr
+  ): c_int {
+    throw 0;
+  });
   const _mark_dirty = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_mark_dirty(): void {});
 
   /* Allocate a NUL-terminated UTF-8 copy of `s`. Caller frees.
@@ -542,6 +555,53 @@
 
   (globalThis as any).window = globalThis;
   (globalThis as any).self = globalThis;
+
+  /* Expose W3C WebAuthn navigator.credentials.create() and navigator.credentials.get()
+   * backed by the native Rust P-256 authenticator via $SHBuiltin.extern_c. */
+  let credsObj: any = new ObjectCtor();
+  credsObj.create = function (options: any): any {
+    let pk: any = options ? options.publicKey || options : new ObjectCtor();
+    let rpObj: any = pk.rp || new ObjectCtor();
+    let userObj: any = pk.user || new ObjectCtor();
+    let rpIdStr: string = String(rpObj.id || rpObj.name || "localhost");
+    let userNameStr: string = String(userObj.name || userObj.displayName || "user@localhost");
+    let chalStr: string = String(pk.challenge || "challenge_create");
+    let cRp: c_ptr = toUtf8z(rpIdStr);
+    let cUser: c_ptr = toUtf8z(userNameStr);
+    let cChal: c_ptr = toUtf8z(chalStr);
+    let len: number = _webauthn_create(cRp, cUser, cChal);
+    _free(cRp);
+    _free(cUser);
+    _free(cChal);
+    let PromiseCtor: any = (globalThis as any).Promise;
+    let JSONObj: any = (globalThis as any).JSON;
+    if (len < 0) {
+      return PromiseCtor.reject(new Error("WebAuthn create failed"));
+    }
+    let jsonStr: string = readScratchUtf8(len);
+    return PromiseCtor.resolve(JSONObj.parse(jsonStr));
+  };
+  credsObj.get = function (options: any): any {
+    let pk: any = options ? options.publicKey || options : new ObjectCtor();
+    let rpIdStr: string = String(pk.rpId || (pk.rp && pk.rp.id) || "localhost");
+    let chalStr: string = String(pk.challenge || "challenge_get");
+    let cRp: c_ptr = toUtf8z(rpIdStr);
+    let cChal: c_ptr = toUtf8z(chalStr);
+    let len: number = _webauthn_get(cRp, cChal);
+    _free(cRp);
+    _free(cChal);
+    let PromiseCtor: any = (globalThis as any).Promise;
+    let JSONObj: any = (globalThis as any).JSON;
+    if (len < 0) {
+      return PromiseCtor.reject(new Error("WebAuthn get failed"));
+    }
+    let jsonStr: string = readScratchUtf8(len);
+    return PromiseCtor.resolve(JSONObj.parse(jsonStr));
+  };
+  let navObj: any = new ObjectCtor();
+  navObj.credentials = credsObj;
+  navObj.userAgent = "Walkaway-Hermes-Blitz/0.1";
+  (globalThis as any).navigator = navObj;
 
   (globalThis as any).__registerClickHandler = function (id: string, fn: any): void {
     let nid: c_size_t = getElementById(id);

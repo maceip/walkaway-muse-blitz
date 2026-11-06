@@ -7,9 +7,7 @@
 //! never cross the agent/host control socket, never appear in `observe.result`
 //! snapshots, and never enter audit logs.
 
-use openssl::ec::{EcGroup, EcKey};
 use openssl::hash::MessageDigest;
-use openssl::nid::Nid;
 use openssl::pkey::PKey;
 use openssl::sign::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
@@ -87,21 +85,7 @@ fn generate_random_secret() -> Result<String, String> {
 }
 
 fn generate_p256_keypair_pem() -> Result<(String, String), String> {
-    let group =
-        EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).map_err(|e| format!("ec group: {e}"))?;
-    let ec_key = EcKey::generate(&group).map_err(|e| format!("ec keygen: {e}"))?;
-    let pkey = PKey::from_ec_key(ec_key).map_err(|e| format!("pkey from ec: {e}"))?;
-    let priv_pem = String::from_utf8(
-        pkey.private_key_to_pem_pkcs8()
-            .map_err(|e| format!("priv pem: {e}"))?,
-    )
-    .map_err(|e| format!("priv utf8: {e}"))?;
-    let pub_pem = String::from_utf8(
-        pkey.public_key_to_pem()
-            .map_err(|e| format!("pub pem: {e}"))?,
-    )
-    .map_err(|e| format!("pub utf8: {e}"))?;
-    Ok((priv_pem, pub_pem))
+    crate::webauthn::cose::generate_p256_keypair()
 }
 
 pub fn load_store() -> VaultStore {

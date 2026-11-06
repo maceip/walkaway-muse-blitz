@@ -41,6 +41,8 @@ void blitz_dom_set_attribute(void *ctx, uint64_t node, const char *name, const c
 int blitz_dom_load_attribute(void *ctx, uint64_t node, const char *name);
 int blitz_dom_scratch_byte(void *ctx, size_t index);
 double blitz_dom_get_bounding_rect_field(void *ctx, uint64_t node, int field);
+int blitz_dom_webauthn_create(void *ctx, const char *rp_id, const char *user_name, const char *challenge);
+int blitz_dom_webauthn_get(void *ctx, const char *rp_id, const char *challenge);
 void blitz_dom_mark_dirty(void *ctx);
 }
 
@@ -151,6 +153,16 @@ extern "C" int blitz_scratch_byte(size_t index) {
 extern "C" double blitz_get_bounding_rect_field(uint64_t node, int field) {
   if (!g_app) return 0.0;
   return blitz_dom_get_bounding_rect_field(g_app->blitz_ctx, node, field);
+}
+
+extern "C" int blitz_webauthn_create(const char *rp_id, const char *user_name, const char *challenge) {
+  if (!g_app) return -1;
+  return blitz_dom_webauthn_create(g_app->blitz_ctx, rp_id, user_name, challenge);
+}
+
+extern "C" int blitz_webauthn_get(const char *rp_id, const char *challenge) {
+  if (!g_app) return -1;
+  return blitz_dom_webauthn_get(g_app->blitz_ctx, rp_id, challenge);
 }
 
 extern "C" void blitz_mark_dirty(void) {

@@ -208,21 +208,36 @@ def plan_recall_or_llm(
 
 DEFAULT_USER_PROFILE: dict[str, str] = {
     "full_name": "Ryan MacArthur",
-    "name": "Ryan MacArthur",
-    "custname": "Ryan MacArthur",
     "email": "ryan@zunftmax.secure.build",
-    "custemail": "ryan@zunftmax.secure.build",
     "phone": "415-555-0199",
-    "custtel": "415-555-0199",
     "affiliation": "Zunftmax Systems",
-    "company": "Zunftmax Systems",
     "talk_title": "Containment-First Sandboxing: What Firecracker Leaves as Homework",
     "tshirt_size": "L",
-    "size": "medium",
-    "topping": "bacon",
-    "delivery": "18:00",
-    "comments": "Leave at reception desk.",
+    "abstract_summary": (
+        "We dissect hardware-virtualized microVM boundaries, seccomp-bpf filter synthesis, "
+        "and deterministic capability channels for untrusted agent execution at scale."
+    ),
 }
+
+
+def load_user_profile(overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """Load user profile from ~/.walkaway/profile.json (if present) merged with overrides."""
+    profile = dict(DEFAULT_USER_PROFILE)
+    profile_path = Path(os.environ.get("WALKAWAY_PROFILE_PATH", Path.home() / ".walkaway" / "profile.json"))
+    if profile_path.exists():
+        try:
+            loaded = json.loads(profile_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                for k, v in loaded.items():
+                    if v is not None:
+                        profile[str(k)] = str(v)
+        except Exception:
+            pass
+    if overrides:
+        for k, v in overrides.items():
+            if v is not None:
+                profile[str(k)] = str(v)
+    return profile
 
 
 def format_domain_card(url: str, action_label: str, fields_summary: list[str]) -> tuple[str, str]:
@@ -247,9 +262,7 @@ def plan_general_web_form_with_local_llm(
     if not MLX_PYTHON.exists():
         raise RuntimeError(f"MLX Python interpreter not found at {MLX_PYTHON}")
 
-    profile = dict(DEFAULT_USER_PROFILE)
-    if user_profile:
-        profile.update(user_profile)
+    profile = load_user_profile(user_profile)
 
     elements = snapshot.get("elements") or []
     controls_summary = []
@@ -276,19 +289,33 @@ def plan_general_web_form_with_local_llm(
         key = el.get("dom_id") or el.get("name") or el.get("node_ref")
         if not key:
             continue
-        # For radio/checkbox inputs that share a `name`, disambiguate by label or node_ref
-        if input_type in {"radio", "checkbox"} and key in by_key:
-            key = f"{key}:{label or el.get('node_ref')}"
+        # For radio/checkbox inputs that share a `name`, disambiguate by option value, label, or node_ref
+        opt_val = el.get("value") if input_type in {"radio", "checkbox"} else None
+        if input_type in {"radio", "checkbox"} and (key in by_key or opt_val or label):
+            suffix = opt_val or label or el.get("node_ref")
+            candidate = f"{key}:{suffix}"
+            if candidate not in by_key:
+                key = candidate
+            else:
+                key = f"{key}:{el.get('node_ref')}"
         by_key[key] = el
-        controls_summary.append(
-            {
-                "field_key": key,
-                "tag": tag,
-                "input_type": input_type or "text",
-                "label": label,
-                "current_value": el.get("value"),
-            }
-        )
+        ctrl_entry: dict[str, Any] = {
+            "field_key": key,
+            "name": el.get("name") or el.get("dom_id") or "",
+            "tag": tag,
+            "input_type": input_type or ("select" if tag == "select" else "textarea" if tag == "textarea" else "text"),
+            "label": label,
+        }
+        if el.get("placeholder"):
+            ctrl_entry["placeholder"] = el.get("placeholder")
+        if input_type in {"radio", "checkbox"}:
+            ctrl_entry["option_value"] = opt_val or label
+            ctrl_entry["checked"] = bool(el.get("checked"))
+        else:
+            ctrl_entry["current_value"] = el.get("value")
+        if el.get("options"):
+            ctrl_entry["options"] = el.get("options")
+        controls_summary.append(ctrl_entry)
 
     if not by_key and submit_el is not None:
         title, body = format_domain_card(
@@ -315,11 +342,15 @@ def plan_general_web_form_with_local_llm(
         {
             "role": "system",
             "content": (
-                "You are an autonomous browser form planner running locally on Apple Silicon. "
-                "Given a webpage's form controls, the user's goal, and the user's profile, "
-                "output ONLY a valid JSON object mapping each `field_key` to the string value to fill "
-                "(for checkbox/radio fields, output \"true\" to check/select that option or omit it). "
-                "Do not output markdown fences or explanation."
+                "You are an autonomous browser form planner running locally on Apple Silicon.\n"
+                "Given a webpage's observed form `controls`, the user's `goal`, and the user's `user_profile`, "
+                "map the controls required to fulfill the goal.\n"
+                "Rules:\n"
+                "1. Output ONLY a single valid JSON object mapping `field_key` -> string value. Never output markdown fences or prose.\n"
+                "2. Match semantic meaning across `label`, `name`, `placeholder`, and `input_type` (for example, `custname`/`author`/`speaker_name` -> user's full name; `custemail`/`email` -> user's email; `custtel`/`phone`/`tel` -> user's phone; `comments`/`instructions`/`notes` -> task instructions from `goal`).\n"
+                "3. Always prioritize explicit instructions in `goal` (such as sizes, toppings, delivery instructions, or custom values) over generic defaults.\n"
+                "4. For `<select>` controls (`input_type == \"select\"`), choose the matching option's `value` from `options`.\n"
+                "5. For `radio` and `checkbox` controls, output `\"true\"` ONLY for the `field_key` whose `option_value` or `label` should be selected according to `goal`; omit unselected `radio`/`checkbox` keys."
             ),
         },
         {
