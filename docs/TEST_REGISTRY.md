@@ -4,6 +4,20 @@ A test belongs here only when the exact command, real components, assertion,
 and last observed result are known. Passing a unit test never proves a demo
 hop works across devices.
 
+## T-NO-TOOLBAR-WORDMARK — top-right correction (2026-11-06)
+
+- Owner: ZCode, `fix/remove-toolbar-branding`.
+- Component: existing Blitz chrome document, no tab implementation change.
+- Command: `cargo test --release --manifest-path apps/hermes-browser/Cargo.toml`.
+  Regression `top_right_has_loading_feedback_without_browser_wordmarks` asserts
+  no visible Walkaway text/menu caption/wordmark in light/dark and loading/idle
+  states, while real load status and compass remain.
+- Packaging: `WALKAWAY_BUILD_ROOT="$PWD/build-no-wordmark"
+  ./scripts/build-macos-dmg.sh --release --no-notarize --identity
+  'Developer ID Application: Zunftmax UG (haftungsbeschrankt) (D74F5NNMRQ)'`.
+  Separate output avoids overwriting the still-running prior app bundle.
+- Observed: verification in progress; no pass claim until checks complete.
+
 ## T-BROWSER-ICON — supplied app artwork (2026-11-06)
 
 - Owner: ZCode, `feat/browser-app-icon`.

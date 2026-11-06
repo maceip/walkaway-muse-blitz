@@ -40,6 +40,20 @@ never blur which browser executed an action.
 - Runbook: `docs/DEMO_RUN.md`. No demo stack needs to stay running;
   fixture 8795 `/campaign-receipt` serves the receipt page.
 
+## Remove top-right wordmark — 2026-11-06
+
+- Owner: ZCode, task branch `fix/remove-toolbar-branding` in isolated browser
+  worktree, based on clean pushed icon branch `9912fc2`.
+- User correction: remove the top-right browser name. Claimed scope:
+  `apps/hermes-browser/src/chrome.rs` wordmark/menu caption and regression test,
+  browser packaging verification/docs. Keep real loading status/compass intact.
+- Tab implementation answer verified: original Swift AppKit component hosted
+  via SwiftUI NSViewRepresentable; Rust owns tab/page state and event routing.
+- Preflight: live task-built Walkaway.app PID11521 noted; do not overwrite its
+  running bundle or kill it. New verification bundle uses an isolated build path.
+- Next action: remove both visible top-right name labels, render/test, build
+  separately, commit/push and assess latest-main merge snapshot.
+
 ## Browser app icon — 2026-11-06
 
 - Owner: ZCode, task branch `feat/browser-app-icon` in existing isolated browser

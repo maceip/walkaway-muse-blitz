@@ -370,7 +370,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .menubar {{ height:24px; display:flex; align-items:center; gap:4px; padding:0 10px; background-color:{metal_mid}; background-image:linear-gradient(to bottom, {metal_top} 0%, {metal_mid} 100%); border-top:1px solid {highlight}; border-bottom:1px solid {hairline}; }}
   .menubtn {{ height:21px; padding:1px 9px; font-size:11px; display:flex; align-items:center; gap:7px; border:1px solid transparent; border-radius:7px 7px 3px 3px; cursor:pointer; }}
   .menubtn:hover, .menubtn-open {{ background-color:{hover}; background-image:linear-gradient(to bottom, {metal_top} 0%, {metal_bottom} 100%); border-color:{hairline}; box-shadow:inset 0 1px 0 {highlight}; }}
-  .menu-caption {{ font-size:10px; color:{accent}; margin-left:auto; white-space:nowrap; overflow:hidden; }}
   .down {{ width:0; height:0; border-left:3px solid transparent; border-right:3px solid transparent; border-top:4px solid {ink}; }}
 
   /* Explicit stops are painted by Blitz; sculpted faces, not square OS bevels. */
@@ -398,8 +397,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .debug-glyph {{ font-family:monospace; font-size:15px; font-weight:bold; color:{tool_ink}; }}
   .toolbar-divider {{ height:30px; width:2px; flex-shrink:0; margin:0 4px; border-left:1px solid {hairline}; border-right:1px solid {highlight}; border-radius:1px; }}
   .brand {{ display:flex; align-items:center; gap:9px; margin-left:auto; padding:0 2px; min-width:0; flex-shrink:0; }}
-  .brand-copy {{ display:flex; flex-direction:column; align-items:flex-end; gap:2px; }}
-  .brand-word {{ font-family:Georgia, serif; font-weight:bold; font-size:17px; line-height:19px; color:{accent}; white-space:nowrap; }}
   .load-status {{ font-size:10px; line-height:13px; color:{ink}; white-space:nowrap; }}
   .load-status-busy {{ color:{accent}; font-weight:bold; }}
   .compass {{ width:42px; height:42px; flex-shrink:0; border:1px solid {shadow}; border-radius:50%; background-color:{tool_mid}; background-image:linear-gradient(to bottom, #F5F8FF 0%, #A5B9D5 48%, #51698F 100%); box-shadow:inset 0 1px 0 #FFFFFF, 0 1px 0 {highlight}; display:flex; align-items:center; justify-content:center; }}
@@ -442,7 +439,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .menu-item:hover {{ background-color:#3D426F; background-image:linear-gradient(to bottom, #6579A6 0%, #3D426F 100%); color:#FFFFFF; }}
   .menu-sep {{ height:2px; border-top:1px solid {hairline}; border-bottom:1px solid {highlight}; margin:3px 2px; }}
   #debugger-pane {{ position:absolute; left:0; right:0; bottom:0; height:{debugger_height}px; background-color:{menu_bg}; color:{ink}; overflow:hidden; z-index:50; border-top:2px solid {highlight}; }}
-  @media (max-width:600px) {{ .brand-word, .menu-caption {{ display:none; }} .btn {{ width:48px; font-size:10px; }} .toolbar-divider {{ margin:0 1px; }} .brand {{ padding:0; gap:5px; }} }}
+  @media (max-width:600px) {{ .btn {{ width:48px; font-size:10px; }} .toolbar-divider {{ margin:0 1px; }} .brand {{ padding:0; gap:5px; }} }}
   @media (max-width:420px) {{ .nav {{ padding:0 6px; gap:3px; }} .grip, .toolbar-divider {{ display:none; }} .btn {{ width:44px; }} .compass {{ width:34px; height:34px; }} .compass-disc {{ width:28px; height:28px; }} }}
 
   /* supervision bar: overlays the top of the page on the session tab */
@@ -543,7 +540,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
 <body data-chrome-theme="netscape-modern">
   <div class="menubar" id="chrome-menubar">
     <div class="menubtn {menu_class}" id="btn-menu" role="button" aria-haspopup="menu" aria-expanded="{menu_open}">Browser<div class="down" aria-hidden="true"></div></div>
-    <div class="menu-caption">Walkaway Navigator &#183; Modern</div>
   </div>
   <div class="nav" id="chrome-navigation" role="toolbar" aria-label="Navigation">
     <div class="grip" aria-hidden="true"></div>
@@ -553,7 +549,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
     <div class="btn" id="btn-home" role="button" aria-label="Home" title="Home"><div class="glyph tool-face" aria-hidden="true"><div class="home-roof"></div><div class="home-wall"></div><div class="home-door"></div></div><span>Home</span></div>
     <div class="toolbar-divider" aria-hidden="true"></div>
     <div class="btn" id="btn-debugger" role="button" aria-label="JavaScript debugger" aria-pressed="{debugger_open}" title="Local Hermes JavaScript debugger"><div class="glyph tool-face debug-glyph" aria-hidden="true">JS</div><span>Debugger</span></div>
-    <div class="brand"><div class="brand-copy"><div class="brand-word">Walkaway</div><div class="load-status {status_class}" id="page-load-status" role="status" aria-live="polite">{load_status}</div></div><div class="compass {compass_class}" id="walkaway-throbber" role="img" aria-label="{load_label}" title="{load_label}"><div class="compass-disc" aria-hidden="true"><div class="compass-orbit"></div><div class="compass-star"></div><div class="compass-needle"></div></div></div></div>
+    <div class="brand"><div class="load-status {status_class}" id="page-load-status" role="status" aria-live="polite">{load_status}</div><div class="compass {compass_class}" id="walkaway-throbber" role="img" aria-label="{load_label}" title="{load_label}"><div class="compass-disc" aria-hidden="true"><div class="compass-orbit"></div><div class="compass-star"></div><div class="compass-needle"></div></div></div></div>
   </div>
   {tab_row}
   {xray_layer}
@@ -799,6 +795,25 @@ mod tests {
     }
 
     #[test]
+    fn top_right_has_loading_feedback_without_browser_wordmarks() {
+        let tabs = [];
+        for theme in [Theme::Light, Theme::Dark] {
+            for loading in [false, true] {
+                let mut chrome = state(&tabs);
+                chrome.theme = theme;
+                chrome.loading = loading;
+                let html = render(&chrome);
+                assert!(!html.contains("Walkaway"));
+                assert!(!html.contains("brand-word"));
+                assert!(!html.contains("menu-caption"));
+                let doc = document(&chrome);
+                assert!(doc.get_element_by_id("page-load-status").is_some());
+                assert!(doc.get_element_by_id("walkaway-throbber").is_some());
+            }
+        }
+    }
+
+    #[test]
     fn escapes_text_and_both_attribute_quotes() {
         assert_eq!(escape_html("<&>\"' café"), "&lt;&amp;&gt;&quot;&#39; café");
         assert_eq!(first_letter("< 7 wonders"), "7");
@@ -866,7 +881,7 @@ mod tests {
             chrome.theme = theme;
             let html = render(&chrome);
             assert!(html.contains("data-chrome-theme=\"netscape-modern\""));
-            assert!(html.contains("Navigator &#183; Modern"));
+            assert!(!html.contains("Navigator &#183; Modern"));
             assert!(!html.contains("Classic"));
             assert!(!html.contains("@keyframes"));
             assert!(!html.contains("animation:"));
