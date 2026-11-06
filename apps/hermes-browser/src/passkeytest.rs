@@ -96,15 +96,30 @@ fn fixture_path() -> String {
     })
 }
 
+/// Owns the fixture subprocess and kills it when it goes out of scope.
+///
+/// `std::process::Child` does **not** kill its child when dropped, so a
+/// fixture started here would survive a panic, an early return, or a
+/// cancelled command and keep holding its port and database. This guard
+/// makes the teardown unconditional.
+struct FixtureGuard(Child);
+
+impl Drop for FixtureGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Starts the demo fixture on an ephemeral port and returns its port.
-fn start_fixture() -> Result<(u16, Child), String> {
+fn start_fixture() -> Result<(u16, FixtureGuard), String> {
     let fixture = fixture_path();
     let db = std::env::temp_dir().join(format!(
         "hermes-passkeytest-{}.db",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&db);
-    let mut child = Command::new("python3")
+    let child = Command::new("python3")
         .arg(&fixture)
         .arg("--host")
         .arg("127.0.0.1")
@@ -116,7 +131,11 @@ fn start_fixture() -> Result<(u16, Child), String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", fixture))?;
-    let stdout = child
+    // From here on the guard owns the child. Every early return below kills
+    // it instead of leaking it.
+    let mut guard = FixtureGuard(child);
+    let stdout = guard
+        .0
         .stdout
         .take()
         .ok_or_else(|| "fixture stdout was not captured".to_string())?;
@@ -132,7 +151,7 @@ fn start_fixture() -> Result<(u16, Child), String> {
         .next()
         .and_then(|p| p.trim().parse().ok())
         .ok_or_else(|| format!("cannot read the fixture port from {line:?}"))?;
-    Ok((port, child))
+    Ok((port, guard))
 }
 
 /// Fetches a fresh challenge from the relying party.
@@ -545,8 +564,8 @@ pub fn passkeytest() -> i32 {
         Ok(())
     })();
 
-    let _ = fixture.kill();
-    let _ = fixture.wait();
+    let _ = fixture.0.kill();
+    let _ = fixture.0.wait();
     // Leave no passkey behind in the Keychain.
     let _ = crate::credentials::KeychainPasskeyStore::with_service(&service, "passkey_records_v1")
         .clear();
@@ -568,6 +587,61 @@ pub fn passkeytest() -> i32 {
 /// base64url helper re-exported for the harness.
 fn b64url_encode(bytes: &[u8]) -> String {
     crate::webauthn::b64::b64url_encode(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FixtureGuard;
+    use std::process::{Command, Stdio};
+
+    /// The fixture subprocess must not survive the harness.
+    ///
+    /// `std::process::Child` does not kill its child when dropped, so a
+    /// fixture started by the suite would outlive it and keep holding its
+    /// port and database. `FixtureGuard` makes the teardown unconditional.
+    #[test]
+    fn the_fixture_guard_kills_the_child_when_it_goes_out_of_scope() {
+        let child = Command::new("python3")
+            .arg("-c")
+            .arg("import time; time.sleep(300)")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn a child");
+        let pid = child.id();
+
+        {
+            let _guard = FixtureGuard(child);
+            // While the guard is alive the child must be running.
+            let alive = std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            assert!(alive, "the child must be running while the guard is alive");
+        }
+
+        // After the guard is dropped the child must be gone.
+        let mut reaped = false;
+        for _ in 0..50 {
+            let alive = std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !alive {
+                reaped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            reaped,
+            "the fixture subprocess must not outlive the guard; pid {pid} was still running"
+        );
+    }
 }
 
 /// Unused import guard for `PasskeyCeremonyId`.
