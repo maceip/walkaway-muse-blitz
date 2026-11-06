@@ -118,6 +118,16 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 if batch is not None:
                     message["batch_proposals"] = batch[:32]
+                # Optional purchase-card fields (Muse buy-approval demo).
+                image_url = str(payload.get("image_url") or "").strip()
+                price = str(payload.get("price") or "").strip()
+                detail = str(payload.get("detail") or "").strip()
+                if image_url:
+                    message["image_url"] = image_url[:500]
+                if price:
+                    message["price"] = price[:40]
+                if detail:
+                    message["detail"] = detail[:240]
                 NEXT_ID += 1
                 save_next_id()
                 MESSAGES.append(message)

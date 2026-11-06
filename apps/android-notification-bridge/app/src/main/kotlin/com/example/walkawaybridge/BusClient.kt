@@ -8,7 +8,10 @@ data class BusMessage(
   val id: Long,
   val title: String,
   val body: String,
-  val kind: String
+  val kind: String,
+  val imageUrl: String? = null,
+  val price: String? = null,
+  val detail: String? = null
 )
 
 class BusClient(private val baseUrl: String, private val token: String) {
@@ -22,7 +25,10 @@ class BusClient(private val baseUrl: String, private val token: String) {
       id = m.getLong("id"),
       title = m.optString("title", "Walkaway"),
       body = m.optString("body"),
-      kind = m.optString("kind", "message")
+      kind = m.optString("kind", "message"),
+      imageUrl = m.optString("image_url", "").takeIf { it.isNotBlank() },
+      price = m.optString("price", "").takeIf { it.isNotBlank() },
+      detail = m.optString("detail", "").takeIf { it.isNotBlank() }
     )
   }
 

@@ -191,6 +191,9 @@ class WalkawayDat(private val appContext: Context) {
   fun sendCard(
     title: String,
     body: String,
+    imageUrl: String? = null,
+    price: String? = null,
+    detail: String? = null,
     onAction: (String) -> Unit,
     onResult: (Result<Unit>) -> Unit
   ) {
@@ -200,7 +203,7 @@ class WalkawayDat(private val appContext: Context) {
     }
     val connected = connectedDisplayDevice()
     if (connected != null) {
-      prepareAndSend(connected, title, body, onAction, onResult)
+      prepareAndSend(connected, title, body, imageUrl, price, detail, onAction, onResult)
       return
     }
     val candidate = displayCapableDevice()
@@ -216,7 +219,7 @@ class WalkawayDat(private val appContext: Context) {
         metadata.first { it[candidate]?.linkState == LinkState.CONNECTED }
       } != null
       if (ready) {
-        prepareAndSend(candidate, title, body, onAction, onResult)
+        prepareAndSend(candidate, title, body, imageUrl, price, detail, onAction, onResult)
       } else {
         val error = "Timed out waiting for glasses CONNECTED state"
         setEvent(error)
@@ -229,6 +232,9 @@ class WalkawayDat(private val appContext: Context) {
     deviceId: DeviceIdentifier,
     title: String,
     body: String,
+    imageUrl: String? = null,
+    price: String? = null,
+    detail: String? = null,
     onAction: (String) -> Unit,
     onResult: (Result<Unit>) -> Unit
   ) {

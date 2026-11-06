@@ -570,12 +570,26 @@ class HermesTaskManager:
             "title": self.last_snapshot.get("title") or "",
             "url": self.last_snapshot.get("url") or self.target_url,
         }
+        # Terminal receipt for Muse: what happened at the end of the task.
+        result = None
+        if self.status in {"committed", "rejected"} and self.last_decision_receipt:
+            receipt = self.last_decision_receipt.get("receipt") or {}
+            result = {
+                "outcome": self.status,
+                "decision": self.last_decision_receipt.get("decision"),
+                "surface": self.last_decision_receipt.get("surface"),
+                "url": page["url"],
+                "title": page["title"],
+                "summary": self.say,
+                "receipt_type": receipt.get("type"),
+            }
         return {
             "ok": True,
             "say": self.say,
             "status": self.status,
             "goal": self.goal,
             "page": page,
+            "result": result,
             "decision": self.pending_decision,
             "last_decision": self.last_decision_receipt,
             "history_count": self.steps_acted,
