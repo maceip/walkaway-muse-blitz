@@ -309,3 +309,46 @@ We (`eeb06c47`) propose the following 5 workstreams to turn the hackathon sprint
   still 0, then a re-proposed phone Approve committed with accounts 1.
   Bridge decisions and Hermes audit both record `android_app` for each
   phone decision. No product code changed in the verification rerun.
+
+### [2026-11-05 13:56 PT] Entry #11 — `eeb06c47` (Browser / Agent / Muse MCP) — Track A COMPLETE
+
+- **Real External HTTPS Webpage Support & Headless Window Control (`apps/hermes-browser/src/main.rs` & `src/browser.rs`, synced to `/Users/mac/hermes-blitz-browser` and rebuilt `--release`):**
+  - `--control-socket` now defaults to `.with_visible(false)` and `.with_active(false)` unless `--show-window` / `HERMES_SHOW_WINDOW=1` is passed, so automated tests and background workers never pop visible windows on Ryan's desktop.
+  - `submit_form` in `src/browser.rs` now wraps raw JSON responses from external HTTPS POST endpoints (e.g. `https://httpbin.org/post`) in clean HTML (`<title>Submitted — {final_url}</title>...<pre id="submitted-json">...</pre>`) for Blitz DOM observation.
+- **General Web Form Planner (`services/agent-driver/hermes_agent_driver.py`):**
+  - Added `plan_general_web_form_with_local_llm(snapshot, goal, user_profile)`, `format_domain_card()`, `resolve_hermes_binary()`, and `resolve_mlx_python()`.
+  - Uses local `mlx-community/Qwen3-4B-Instruct-2507-4bit` (`0` LLM calls when a `FormRecipe` matches) to map arbitrary real webpage `<input>`, `<select>`, `<textarea>`, and `<button>` controls to a natural-language `goal` and `user_profile`.
+- **Muse MCP -> Real Hermes Task Relay & Root CLI (`services/agent-driver/hermes_task_relay.py`, `services/muse-connector/mcp_server.py`, `./walkaway`):**
+  - Built `services/agent-driver/hermes_task_relay.py` (`:8790` `/api/{start,state,predict,reject,stop}`) wired directly to `apps/hermes-browser` + `decision_bridge.py` (`:19101`) + `message_bus.py` (`:19099`).
+  - Updated `services/muse-connector/mcp_server.py` (synced to `/Users/mac/walkaway-hackathon/connector/mcp_server.py`) so `walkaway_start_task` accepts `url` (`"https://..."`) + `goal` and `public(state)` exposes `card_message_id`, `card_title`, `card_body`, `awaiting_approval_on_glasses`, `awaiting_approval_on_android`, and `last_decision` provenance (`glasses` vs `android_app`).
+  - Added root `./walkaway <https-url> --goal "..."` CLI and `./walkaway --serve-mcp` daemon.
+- **Honesty & Portability Cleanup (§6.1.4, §6.1.5, §6.5.2, §8.1):**
+  - `reset_demo.py` now generates a fresh cryptographic password (`secrets.token_urlsafe(18)`) on every reset (`test_3_deterministic_reset_gate_under_2000ms` updated & PASS in `1.775s`).
+  - Removed hardcoded token defaults in `parallel_campaign_driver.py` and `run_live_demo.py`, stamped `decision_provenance="synthetic_dry_run"` in `--auto-approve` runs and `receipt_proposals`, replaced hardcoded `/Users/mac/...` paths with portable repo-relative resolution, and updated `apps/marketing-site/index.html` tap count to `3 taps`.
+- **End-to-End Verification (`T-MUSE-MCP-REAL-BROWSER`):**
+  - `HERMES_HIDDEN_WINDOW=1 python3 tests/e2e/test_muse_mcp_real_browser.py` — **2/2 PASS (`10.704s`, 0 visible windows)**:
+    1. `test_muse_mcp_drives_real_hermes_browser_and_commits_on_glasses_or_android_approval` (proves both `glasses_dat` and `android_app` approvals end-to-end via `mcp_server.py` JSON-RPC).
+    2. `test_live_internet_https_httpbin_form_via_muse_mcp` (drives real external `https://httpbin.org/forms/post` over HTTPS via Muse MCP + local `Qwen3-4B`, pauses on `COMMIT httpbin.org: ...`, approves via `android_app`, and verifies real HTTPS POST to `https://httpbin.org/post`).
+
+### [2026-11-05 22:37 PT] Entry #11 — `pebble-mirach` (Partner Lane P) — FGS crash-loop fixed
+
+- Ryan reported repeated Android crashes. Root cause was my WS3
+  `BridgeKeepAliveService`: `dataSync` quota timeout at 22:29 PT +
+  `START_STICKY` restart + uncaught `ForegroundServiceStartNotAllowedException`.
+  Fixed and recorded in `docs/TEST_REGISTRY.md` (`T-FGS-CRASH-001`):
+  type -> `connectedDevice`, `START_NOT_STICKY`, `onTimeout` clean stop,
+  failure-tolerant start. Verified on Pixel: foreground type `0x10`,
+  crash buffer clean, process stable, preserve-data tests green.
+- Unrelated crash in the same buffer belongs to `com.facebook.stella`
+  (Meta companion WifiOwner state machine, 18:13 PT) — not Walkaway code.
+
+### [2026-11-06 10:10 PT] Entry #12 — `fe8b99f7` (Option 1 Browser + IE5 Mac Explorer Bar Unification) — COMPLETE
+
+- **Unified `/Users/mac/hermes-blitz-browser` (`1bbb8ca`) and `/Users/mac/walkaway-monorepo/apps/hermes-browser` (`310d407`) byte-for-byte:**
+  - Merged `c409979` (React 18+ Streaming SSR `$RC`/`$RS` hydration + `observe.rs` hidden-element filtering), `1ee4149` (CSS subgrid + form border-box + docked `.supbar`), and `1410d7e` (canvas background + PNG alpha compositing) with the complete Option 1 Static Hermes `$SHBuiltin.extern_c` DOM pipeline (`dom_ffi.rs`, `hermes_shim.cpp`, `dom_runtime.ts`), IE5 Mac Collapsible Explorer Bar (`chrome.rs`), Page Holder, and Internet Scrapbook (`scrapbook.rs`).
+- **Verification:**
+  - `cargo test --release` (all 6 suites: `--selftest`, `--runtime-test`, `--ui-test`, `--observe-test`, `--supervisor-test`, `--hurdle-test` including live `aol.com`): **PASS**
+  - `HERMES_HIDDEN_WINDOW=1 python3 tests/e2e/test_muse_mcp_real_browser.py`: **2/2 PASS (`58.781s`)**
+  - `HERMES_HIDDEN_WINDOW=1 python3 tests/e2e/test_10portal_disco_campaign.py`: **3/3 PASS (`15.254s`)**
+- **Remaining for `pebble-mirach` (Partner Lane P):**
+  - Review and commit the modified Android UI theme files (`Color.kt`, `Theme.kt`, `Type.kt`, `Shape.kt`, `ic_launcher_background.xml`) and `docs/TEST_REGISTRY.md` in `/Users/mac/walkaway-monorepo`, and finish item `6.4.1` (moving the Android bus poller into `BridgeKeepAliveService`).
