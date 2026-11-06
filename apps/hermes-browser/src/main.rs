@@ -186,7 +186,7 @@ struct Page {
 /// UA sheet hard-codes `color: black`, so a page that says
 /// `color-scheme: light dark` and leaves its text colour to the UA would render
 /// black on its own dark background.
-const DARK_DEFAULT_TEXT: &str = "html, body { color: #F2F2F7; }";
+const DARK_DEFAULT_TEXT: &str = "html, body { background-color: #1C1C1E; color: #F2F2F7; }";
 
 fn parse_two_string_args(s: &str, call_prefix: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -387,6 +387,7 @@ impl Page {
             blitz_dom::UserAgentStylesheet::default_sheet(),
             blitz_dom::UserAgentStylesheet::parse(
                 r#"
+                html { background-color: #FFFFFF; color: #000000; }
                 select { display: inline-block; min-width: 80px; min-height: 24px; }
                 button, input, select, textarea { box-sizing: border-box; }
                 .grid-cols-subgrid, .sm\:grid-cols-subgrid {
@@ -2571,6 +2572,21 @@ impl BrowserApp {
         let expected = (width * height * 4) as usize;
         if rgba.len() < expected {
             return None;
+        }
+        let bg_rgb: [u8; 3] = if self.theme.is_dark() {
+            [0x1C, 0x1C, 0x1E]
+        } else {
+            [0xFF, 0xFF, 0xFF]
+        };
+        for px in rgba[..expected].chunks_exact_mut(4) {
+            let a = px[3] as u16;
+            if a < 255 {
+                let inv = 255 - a;
+                px[0] = ((px[0] as u16 * a + bg_rgb[0] as u16 * inv) / 255) as u8;
+                px[1] = ((px[1] as u16 * a + bg_rgb[1] as u16 * inv) / 255) as u8;
+                px[2] = ((px[2] as u16 * a + bg_rgb[2] as u16 * inv) / 255) as u8;
+                px[3] = 255;
+            }
         }
         let mut cursor = std::io::Cursor::new(Vec::new());
         {
@@ -5671,6 +5687,21 @@ fn render_to_png(
     if buffer.len() < expected {
         eprintln!("FAIL: short buffer {}", buffer.len());
         return 1;
+    }
+    let bg_rgb: [u8; 3] = if theme.is_dark() {
+        [0x1C, 0x1C, 0x1E]
+    } else {
+        [0xFF, 0xFF, 0xFF]
+    };
+    for px in buffer[..expected].chunks_exact_mut(4) {
+        let a = px[3] as u16;
+        if a < 255 {
+            let inv = 255 - a;
+            px[0] = ((px[0] as u16 * a + bg_rgb[0] as u16 * inv) / 255) as u8;
+            px[1] = ((px[1] as u16 * a + bg_rgb[1] as u16 * inv) / 255) as u8;
+            px[2] = ((px[2] as u16 * a + bg_rgb[2] as u16 * inv) / 255) as u8;
+            px[3] = 255;
+        }
     }
     let file = match std::fs::File::create(path) {
         Ok(f) => f,
