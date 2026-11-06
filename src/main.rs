@@ -268,6 +268,19 @@ impl Page {
         let _guard = browser::enter_runtime();
         self.ctx.doc.resolve(0.0);
     }
+
+    /// Wait up to `timeout` for render-blocking `<head>` stylesheets
+    /// (`has_pending_critical_resources()`) to finish loading before resolving
+    /// layout, so observations never read an unstyled zero-sized layout tree.
+    fn resolve_awaiting_critical(&mut self, timeout: Duration) {
+        let _guard = browser::enter_runtime();
+        let started = Instant::now();
+        self.ctx.doc.resolve(0.0);
+        while self.ctx.doc.has_pending_critical_resources() && started.elapsed() < timeout {
+            std::thread::sleep(Duration::from_millis(25));
+            self.ctx.doc.resolve(0.0);
+        }
+    }
 }
 
 impl Drop for Page {
@@ -622,7 +635,9 @@ impl BrowserApp {
             .iter_mut()
             .find(|tab| tab.canonical.id == tab_id)?;
         let t0 = Instant::now();
-        tab.instance.page.resolve();
+        tab.instance
+            .page
+            .resolve_awaiting_critical(Duration::from_secs(6));
         let snapshot_id = tab.instance.next_snapshot_id;
         tab.instance.next_snapshot_id = tab.instance.next_snapshot_id.wrapping_add(1);
         let snapshot = observe::observe(
@@ -5385,23 +5400,31 @@ fn render_to_png(
         let started = Instant::now();
         let mut last = net_activity.load(Ordering::SeqCst);
         let mut idle = 0;
-        while started.elapsed() < Duration::from_secs(8) {
+        while started.elapsed() < Duration::from_secs(12) {
             std::thread::sleep(Duration::from_millis(60));
             page.resolve();
             let now = net_activity.load(Ordering::SeqCst);
-            if now == last {
+            let pending_critical = page.doc().has_pending_critical_resources();
+            if now == last && !pending_critical && now > 0 {
                 idle += 1;
                 if idle >= 6 {
                     break;
                 }
-            } else {
+            } else if now != last {
                 idle = 0;
                 last = now;
+            } else if !pending_critical {
+                idle += 1;
+                if idle >= 10 {
+                    break;
+                }
             }
         }
+        page.resolve();
         println!(
-            "subresources settled after {:?} ({last} wakeups)",
-            started.elapsed()
+            "subresources settled after {:?} ({last} wakeups, pending_critical={})",
+            started.elapsed(),
+            page.doc().has_pending_critical_resources()
         );
     }
 
@@ -6056,6 +6079,149 @@ fn hurdletest() -> i32 {
         rss > 1.0 && rss < 4096.0,
         "measure_process_rss_mb reports live kernel resident memory in MB",
     );
+
+    // -----------------------------------------------------------------------
+    // Hurdle 5: Real-World Modern Website E2E (aol.com)
+    // -----------------------------------------------------------------------
+    let aol_url = browser::normalize_input("aol.com").expect("normalize aol.com");
+    check(
+        aol_url.as_str() == "https://aol.com/",
+        "normalize_input('aol.com') resolves to https://aol.com/",
+    );
+    match browser::fetch(&app.provider, &aol_url) {
+        Ok(aol_html) => {
+            check(
+                aol_html.len() > 100_000,
+                "fetched live https://aol.com/ HTML payload (>100 KB SSR document)",
+            );
+            {
+                let viewport = page_viewport(app.size, app.scale, app.theme);
+                let provider = app.provider.clone();
+                let theme = app.theme;
+                let tab = app.tab_mut();
+                tab.canonical
+                    .browser
+                    .commit(aol_url.clone(), aol_html.clone());
+                let page = Page::load(
+                    &aol_html,
+                    Some(aol_url.clone()),
+                    Some(provider),
+                    viewport,
+                    theme,
+                );
+                let title = title_for(&aol_url, page.doc());
+                tab.replace_page(page);
+                tab.canonical.title = title;
+            }
+
+            let out = send(
+                &mut app,
+                2,
+                &mut seq_a,
+                json!({
+                    "type": "observe.request",
+                    "session_id": session_id,
+                    "request_id": "obs_aol",
+                    "include_screenshot": true
+                }),
+            );
+            let aol_snap = find_frame(&out, "observe.result").unwrap_or(Value::Null);
+            let aol_title = aol_snap
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let aol_text = aol_snap
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let aol_elements = aol_snap
+                .get("elements")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+
+            check(
+                aol_title.to_ascii_lowercase().contains("aol"),
+                "aol.com document title parsed and exposed in observe.result",
+            );
+            check(
+                aol_text.len() > 200,
+                "aol.com visible text extracted from live DOM",
+            );
+            check(
+                aol_elements.len() >= 5,
+                "aol.com external <head> stylesheets resolved and yielded visible interactive elements with layout bounds",
+            );
+            let has_valid_links = aol_elements.iter().any(|e| {
+                e.get("tag").and_then(Value::as_str) == Some("a")
+                    && e.get("href")
+                        .and_then(Value::as_str)
+                        .is_some_and(|h| h.starts_with("https://"))
+                    && e.get("bounds")
+                        .and_then(|b| b.get("width"))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0)
+                        > 0.0
+                    && e.get("bounds")
+                        .and_then(|b| b.get("height"))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0)
+                        > 0.0
+            });
+            check(
+                has_valid_links,
+                "aol.com interactive links carry resolved https:// hrefs and non-zero Taffy layout bounding boxes",
+            );
+            let has_screenshot = aol_snap
+                .get("screenshot_png_b64")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.len() > 1000)
+                && aol_snap
+                    .get("screenshot_hash")
+                    .and_then(Value::as_str)
+                    .is_some_and(|h| h.len() == 64);
+            check(
+                has_screenshot,
+                "aol.com rendered through Vello on wgpu and produced SHA-256 verified PNG screenshot",
+            );
+
+            // Verify Static Hermes + $SHBuiltin.extern_c DOM FFI on aol.com's 2.2 MB DOM tree
+            // (#atomic is the root <html id="atomic"> element on aol.com).
+            let aol_dom_script = std::ffi::CString::new(
+                r#"
+                var root = document.getElementById("atomic");
+                if (root) {
+                    root.setAttribute("data-hermes-hurdle", "aol-verified-✓");
+                }
+                "#,
+            )
+            .expect("cstring");
+            let aol_eval_ok = unsafe {
+                hermes_app_eval_script(
+                    app.tab().instance.page.hermes,
+                    aol_dom_script.as_ptr(),
+                    c"<hurdle-aol-dom>".as_ptr(),
+                )
+            };
+            let atomic_attr = app
+                .tab()
+                .instance
+                .page
+                .doc()
+                .get_element_by_id("atomic")
+                .and_then(|id| app.tab().instance.page.doc().get_node(id))
+                .and_then(|n| n.attr(LocalName::from("data-hermes-hurdle")))
+                .unwrap_or_default()
+                .to_string();
+            check(
+                aol_eval_ok && atomic_attr == "aol-verified-✓",
+                "Static Hermes $SHBuiltin.extern_c queried and mutated #atomic on live aol.com DOM",
+            );
+        }
+        Err(e) => {
+            check(false, &format!("live https://aol.com/ fetch failed: {e}"));
+        }
+    }
 
     let _ = std::fs::remove_file(&vault_file);
     let _ = std::fs::remove_file(&recall_file);
