@@ -18,22 +18,32 @@ package com.example.walkawaybridge.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-//Start - Partial Color List
+// Cash App paint: signature green #00D54B on black/white, flat surfaces.
+// (Applied per Ryan request 2026-11-05; replaces the scaffold blue/teal.)
 
-//Light Colors
-val primaryLight = Color(0xFF00506E)
-val primaryContainerLight = Color(0xFF23759B)
-val secondaryLight = Color(0xFF486271)
-val tertiaryLight = Color(0xFF613A73)
+//Brand
+val CashGreen = Color(0xFF00D54B)
+val CashGreenPressed = Color(0xFF00B843)
+val CashBlack = Color(0xFF000000)
+val CashWhite = Color(0xFFFFFFFF)
+val CashGrayLight = Color(0xFFF0F0F0)
+val CashGrayMid = Color(0xFFE8E8E8)
+val CashGrayText = Color(0xFF606060)
+val CashDarkSurface = Color(0xFF111111)
+val CashDarkVariant = Color(0xFF1C1C1E)
+val CashGreenContainerLight = Color(0xFFD9FBE7)
+val CashGreenContainerDark = Color(0xFF003B1C)
+val CashError = Color(0xFFE5484D)
 
-
-//Dark Colors
-val primaryDark = Color(0xFF87CFF9)
-val primaryContainerDark = Color(0xFF005C7D)
-val secondaryDark = Color(0xFFB0CADC)
-val tertiaryDark = Color(0xFFE6B5F8)
-
-//End - Partial Color List
+//Legacy names kept for any remaining references; values are Cash paint now.
+val primaryLight = CashGreen
+val primaryContainerLight = CashGreenContainerLight
+val secondaryLight = CashBlack
+val tertiaryLight = Color(0xFF007A33)
+val primaryDark = CashGreen
+val primaryContainerDark = CashGreenContainerDark
+val secondaryDark = CashWhite
+val tertiaryDark = CashGreen
 
 /*
 

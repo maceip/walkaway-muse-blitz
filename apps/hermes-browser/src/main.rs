@@ -18,11 +18,13 @@ mod browser;
 mod chrome;
 mod control;
 mod dom_ffi;
+mod keychain;
 mod observe;
 mod page_endpoint;
 mod recall;
 mod scrapbook;
 mod vault;
+mod webauthn;
 
 use anyrender::WindowRenderer;
 use anyrender_vello::VelloWindowRenderer;

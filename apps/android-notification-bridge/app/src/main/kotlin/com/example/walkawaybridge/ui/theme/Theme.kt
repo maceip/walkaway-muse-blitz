@@ -26,18 +26,41 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
+// Cash App paint applied to Material3 roles: green actions, black/white fields.
 private val DarkColorScheme = darkColorScheme(
-    primary = primaryDark,
-    primaryContainer = primaryContainerDark,
-    secondary = secondaryDark,
-    tertiary = tertiaryDark
+    primary = CashGreen,
+    onPrimary = CashWhite,
+    primaryContainer = CashGreenContainerDark,
+    onPrimaryContainer = CashWhite,
+    secondary = CashWhite,
+    onSecondary = CashBlack,
+    tertiary = CashGreen,
+    background = CashBlack,
+    onBackground = CashWhite,
+    surface = CashDarkSurface,
+    onSurface = CashWhite,
+    surfaceVariant = CashDarkVariant,
+    onSurfaceVariant = CashGrayMid,
+    outline = CashGrayText,
+    error = CashError
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = primaryLight,
-    primaryContainer = primaryContainerLight,
-    secondary = secondaryLight,
-    tertiary = tertiaryLight
+    primary = CashGreen,
+    onPrimary = CashWhite,
+    primaryContainer = CashGreenContainerLight,
+    onPrimaryContainer = CashBlack,
+    secondary = CashBlack,
+    onSecondary = CashWhite,
+    tertiary = tertiaryLight,
+    background = CashWhite,
+    onBackground = CashBlack,
+    surface = CashWhite,
+    onSurface = CashBlack,
+    surfaceVariant = CashGrayLight,
+    onSurfaceVariant = CashGrayText,
+    outline = CashGrayMid,
+    error = CashError
 )
 
 @Composable
@@ -59,6 +82,7 @@ fun WalkawayBridgeTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
+        shapes = WalkawayShapes,
         content = content
     )
 }

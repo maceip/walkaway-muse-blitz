@@ -485,3 +485,16 @@ hop works across devices.
   process stable. Not exercised: full Disconnect->Connect UI cycle in
   this round (user held phone foreground; service start/stop calls are
   unchanged from the previously proven path + new onDestroy guard).
+
+### T-CASHPAINT-001 (Cash App Paint — Host Green, Device Render Pending)
+
+- Change: Cash palette (signature green `#00D54B`, black/white surfaces,
+  flat dark mode), `WalkawayShapes` (12-36dp radii), bold tight type scale,
+  flat green launcher background. Files: `ui/theme/{Color,Theme,Type,Shape}.kt`,
+  `res/drawable/ic_launcher_background.xml`.
+- Last observed: host **PASS** (`:app:testDebugUnitTest :app:assembleDebug`
+  BUILD SUCCESSFUL, fresh APK). On-device install + screenshot comparison
+  **PENDING**: Pixel left USB mid-verification (`adb devices` empty).
+  Owed on reconnect: preserve-data install, screenshot of BridgeScreen in
+  light (and dark if toggled), confirm buttons green/white text and panel
+  radius match theme — visual result is NOT claimed yet.

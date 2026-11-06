@@ -172,18 +172,8 @@ cp -f "${BUILT_BIN}" "${STAGE_APP}/Contents/MacOS/Walkaway"
 chmod 755 "${STAGE_APP}/Contents/MacOS/Walkaway"
 ln -s Walkaway "${STAGE_APP}/Contents/MacOS/hermes-blitz-browser"
 
-# Generate AppIcon.icns from marketing site icon PNG if available
-ICON_SRC="${REPO_ROOT}/apps/marketing-site/assets/download/icon-ios-dark.png"
-if [[ -f "${ICON_SRC}" ]] && command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
-  ICONSET_DIR="$(mktemp -d /tmp/walkaway-icon.XXXXXX.iconset)"
-  for sz in 16 32 128 256 512; do
-    sips -z "${sz}" "${sz}" "${ICON_SRC}" --out "${ICONSET_DIR}/icon_${sz}x${sz}.png" >/dev/null 2>&1
-    sz2=$((sz * 2))
-    sips -z "${sz2}" "${sz2}" "${ICON_SRC}" --out "${ICONSET_DIR}/icon_${sz}x${sz}@2x.png" >/dev/null 2>&1
-  done
-  iconutil -c icns "${ICONSET_DIR}" -o "${STAGE_APP}/Contents/Resources/AppIcon.icns" || true
-  rm -rf "${ICONSET_DIR}"
-fi
+# Generate AppIcon.icns from supplied browser icon artwork
+bash "${BROWSER_DIR}/scripts/build-app-icon.sh" "${STAGE_APP}/Contents/Resources/AppIcon.icns"
 
 cat > "${STAGE_APP}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

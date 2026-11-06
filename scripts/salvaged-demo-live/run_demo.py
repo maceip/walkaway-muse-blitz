@@ -48,7 +48,7 @@ try:
     })
     print("[demo] hermes -> socket", flush=True)
     procs.append(subprocess.Popen(
-        ["/Users/mac/hermes-blitz-browser/target/release/hermes-blitz-browser",
+        ["/Users/mac/walkaway-monorepo/apps/hermes-browser/target/release/hermes-blitz-browser",
          "--control-socket", str(SOCK)],
         cwd=ROOT, env=env, stdout=open(LIVE/"hermes.log","a"), stderr=subprocess.STDOUT))
     t0 = time.monotonic()

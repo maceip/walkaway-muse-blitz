@@ -43,7 +43,7 @@ env.update({"HERMES_HOST_TOKEN": "host-secret-token-campaign-998877",
             "HERMES_RECALL_PATH": "/tmp/hermes-recall.json",
             "HERMES_AUDIT_PATH": "/tmp/hermes-audit.jsonl"})
 hermes = subprocess.Popen(
-    ["/Users/mac/hermes-blitz-browser/target/release/hermes-blitz-browser",
+    ["/Users/mac/walkaway-monorepo/apps/hermes-browser/target/release/hermes-blitz-browser",
      "--control-socket", str(SOCK)], cwd=ROOT, env=env,
     stdout=open(LIVE/"hermes.log","a"), stderr=subprocess.STDOUT, start_new_session=True)
 wait(lambda: SOCK.exists(), "hermes socket")
