@@ -444,15 +444,16 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .menu-item:hover {{ background-color: {hover}; }}
   .menu-sep {{ height: 1px; background-color: {separator}; margin: 5px 4px; }}
 
-  /* supervision bar: overlays the top of the page on the session tab */
+  /* supervision bar: docked in the right side of the top tab strip so it never covers page content */
   .supbar {{
     position: absolute;
-    left: 0; right: 0; top: 88px;
-    height: 46px;
+    right: 10px; top: 3px;
+    height: 32px;
     background-color: {menu_bg};
-    border-bottom: 1px solid {hairline};
+    border: 1px solid {hairline};
+    border-radius: 8px;
     display: flex; flex-direction: row; align-items: center;
-    padding: 0 12px;
+    padding: 0 10px;
     gap: 8px;
   }}
   .sup-title {{ font-size: 13px; color: {ink}; }}

@@ -386,7 +386,47 @@ impl Page {
         let mut ua = vec![
             blitz_dom::UserAgentStylesheet::default_sheet(),
             blitz_dom::UserAgentStylesheet::parse(
-                "select { display: inline-block; min-width: 80px; min-height: 24px; }",
+                r#"
+                select { display: inline-block; min-width: 80px; min-height: 24px; }
+                button, input, select, textarea { box-sizing: border-box; }
+                .grid-cols-subgrid, .sm\:grid-cols-subgrid {
+                    grid-template-columns: repeat(6, minmax(0, 1fr));
+                    column-gap: 1.25rem;
+                    align-self: start !important;
+                    align-content: start !important;
+                }
+                @media (min-width: 768px) {
+                    .md\:col-span-3.grid-cols-subgrid {
+                        grid-template-columns: repeat(3, minmax(0, 1fr));
+                    }
+                    .md\:col-span-6.grid-cols-subgrid {
+                        grid-template-columns: repeat(6, minmax(0, 1fr));
+                    }
+                    .md\:col-span-7.grid-cols-subgrid {
+                        grid-template-columns: repeat(7, minmax(0, 1fr));
+                    }
+                }
+                @media (min-width: 1031px) {
+                    .grid-cols-subgrid, .sm\:grid-cols-subgrid {
+                        column-gap: 2.5rem;
+                    }
+                    .lg\:col-span-2.grid-cols-subgrid {
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                    }
+                    .lg\:col-span-3.grid-cols-subgrid, .lg\:col-span-3.sm\:grid-cols-subgrid {
+                        grid-template-columns: repeat(3, minmax(0, 1fr));
+                    }
+                    .lg\:col-span-6.grid-cols-subgrid {
+                        grid-template-columns: repeat(6, minmax(0, 1fr));
+                    }
+                    .lg\:col-span-7.grid-cols-subgrid {
+                        grid-template-columns: repeat(6, minmax(0, 1fr));
+                    }
+                    .lg\:col-span-8.grid-cols-subgrid {
+                        grid-template-columns: repeat(8, minmax(0, 1fr));
+                    }
+                }
+                "#,
             ),
         ];
         if let Some(css) = extra_ua {
@@ -5545,7 +5585,7 @@ fn render_to_png(
             let now = net_activity.load(Ordering::SeqCst);
             if now == last {
                 idle += 1;
-                if idle >= 6 {
+                if (last > 0 && idle >= 10) || (last == 0 && idle >= 30) {
                     break;
                 }
             } else {
