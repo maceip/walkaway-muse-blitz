@@ -46,6 +46,11 @@ hop works across devices.
   prompt on the user's screen. An access that the operating system would have
   turned into a prompt fails with an error instead, and the run reports that
   failure rather than skipping the check.
+- Note: the fixture subprocess is owned by a `FixtureGuard` that kills it when
+  it goes out of scope. `std::process::Child` does not kill its child when
+  dropped, so without the guard an interrupted or failed run would leave the
+  fixture holding its port and database. The guard is covered by
+  `cargo test --release fixture_guard`.
 - Note: on a locally built, unsigned binary the data protection keychain
   refuses the write (`errSecMissingEntitlement`), and the module falls back to
   the file-based login keychain, where macOS ignores `kSecAttrAccessible`. The
