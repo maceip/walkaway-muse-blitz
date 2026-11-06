@@ -34,7 +34,8 @@ dependencyResolutionManagement {
         username = System.getenv("GITHUB_ACTOR")
           ?: localProperties.getProperty("github_user")
           ?: "maceip"
-        password = System.getenv("GITHUB_TOKEN")
+        password = System.getenv("MWDAT_GITHUB_TOKEN")
+          ?: System.getenv("GITHUB_TOKEN")
           ?: localProperties.getProperty("github_token", "")
       }
     }
