@@ -388,19 +388,54 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
         }
     }
 
+    let scroll = doc.viewport_scroll();
     let base_url = Url::parse(&metadata.url).ok();
     let mut elements = Vec::new();
+    let mut max_doc_bottom: f64 = 0.0;
     let mut stack = vec![doc.root_node().id];
     while let Some(node_id) = stack.pop() {
         let Some(node) = doc.get_node(node_id) else {
             continue;
         };
+        if let Some(data) = node.element_data() {
+            let tag_lc = data.name.local.to_string().to_ascii_lowercase();
+            if matches!(tag_lc.as_str(), "script" | "style" | "noscript" | "template") {
+                continue;
+            }
+            if attr(node, local_name!("hidden")).is_some()
+                || attr(node, local_name!("aria-hidden")) == Some("true")
+            {
+                continue;
+            }
+            let class_attr = attr(node, local_name!("class")).unwrap_or_default();
+            if class_attr
+                .split_whitespace()
+                .any(|c| matches!(c, "hide" | "hidden" | "sr-only" | "invisible"))
+            {
+                continue;
+            }
+            let display = doc.resolved_style_value(node_id, "display");
+            let visibility = doc.resolved_style_value(node_id, "visibility");
+            let opacity = doc.resolved_style_value(node_id, "opacity");
+            if display == "none"
+                || visibility == "hidden"
+                || visibility == "collapse"
+                || opacity == "0"
+            {
+                continue;
+            }
+        }
         for child in node.children.iter().rev() {
             stack.push(*child);
         }
         let Some(data) = node.element_data() else {
             continue;
         };
+        if let Some(rect) = doc.get_client_bounding_rect(node_id) {
+            if rect.width > 0.0 && rect.height > 0.0 {
+                max_doc_bottom = max_doc_bottom.max(rect.y + scroll.y + rect.height);
+            }
+        }
         let tag = data.name.local.to_string().to_ascii_lowercase();
         let input_type = attr(node, local_name!("type"))
             .unwrap_or("text")
@@ -488,10 +523,10 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
             .find(|element| element.node_id == focused)
             .map(|element| element.id.clone())
     });
-    let scroll = doc.viewport_scroll();
     let root = doc.root_node();
     let height = (root.final_layout().size.height as f64)
         .max(root.scrollable_overflow().y1)
+        .max(max_doc_bottom)
         .max(metadata.viewport_height as f64);
     let fingerprint = fingerprint(&metadata, &elements);
     let form_signature = crate::recall::compute_form_signature(&elements);

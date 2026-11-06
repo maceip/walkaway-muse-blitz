@@ -551,7 +551,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
                 buttons.push_str(r#"<div class="sup-btn sup-stop" id="sup-stop">Stop</div>"#);
             }
             format!(
-                r#"<div class="supbar" id="sup-bar" style="left:{content_x:.1}px;top:{top_chrome_h:.1}px;"><div class="sup-title">{}</div><div class="sup-state">{}</div><div class="sup-detail">{}</div>{}</div>"#,
+                r#"<div class="supbar" id="sup-bar"><div class="sup-title">{}</div><div class="sup-state">{}</div><div class="sup-detail">{}</div>{}</div>"#,
                 escape_html(sup.title),
                 escape_html(sup.state),
                 escape_html(sup.detail),
@@ -952,15 +952,16 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .menu-item:hover {{ background-color: {hover}; }}
   .menu-sep {{ height: 1px; background-color: {separator}; margin: 5px 4px; }}
 
-  /* supervision bar */
+  /* supervision bar: docked in the right side of the top tab strip so it never covers page content */
   .supbar {{
     position: absolute;
-    right: 0;
-    height: 46px;
+    right: 10px; top: 3px;
+    height: 32px;
     background-color: {menu_bg};
-    border-bottom: 1px solid {hairline};
+    border: 1px solid {hairline};
+    border-radius: 8px;
     display: flex; flex-direction: row; align-items: center;
-    padding: 0 12px;
+    padding: 0 10px;
     gap: 8px;
   }}
   .sup-title {{ font-size: 13px; color: {ink}; }}
