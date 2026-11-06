@@ -93,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             return self.send_json(401, {"error": "Unauthorized"})
         length = int(self.headers.get("Content-Length", "0"))
-        if length <= 0 or length > 65536:
+        if length <= 0 or length > 131072:
             return self.send_json(413, {"error": "Invalid request size"})
         try:
             payload = json.loads(self.rfile.read(length))
@@ -128,6 +128,11 @@ class Handler(BaseHTTPRequestHandler):
                     message["price"] = price[:40]
                 if detail:
                     message["detail"] = detail[:240]
+                # Base64 page-preview crop from the browser (protocol budget:
+                # max 320px wide, 48k base64 chars — see hermes_task_relay).
+                image_b64 = "".join(str(payload.get("image_b64") or "").split())
+                if image_b64:
+                    message["image_b64"] = image_b64[:48000]
                 NEXT_ID += 1
                 save_next_id()
                 MESSAGES.append(message)

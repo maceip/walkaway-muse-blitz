@@ -11,7 +11,8 @@ data class BusMessage(
   val kind: String,
   val imageUrl: String? = null,
   val price: String? = null,
-  val detail: String? = null
+  val detail: String? = null,
+  val imageB64: String? = null
 )
 
 class BusClient(private val baseUrl: String, private val token: String) {
@@ -28,7 +29,8 @@ class BusClient(private val baseUrl: String, private val token: String) {
       kind = m.optString("kind", "message"),
       imageUrl = m.optString("image_url", "").takeIf { it.isNotBlank() },
       price = m.optString("price", "").takeIf { it.isNotBlank() },
-      detail = m.optString("detail", "").takeIf { it.isNotBlank() }
+      detail = m.optString("detail", "").takeIf { it.isNotBlank() },
+      imageB64 = m.optString("image_b64", "").takeIf { it.isNotBlank() }
     )
   }
 

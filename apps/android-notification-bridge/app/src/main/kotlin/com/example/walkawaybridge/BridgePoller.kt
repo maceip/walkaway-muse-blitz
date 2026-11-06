@@ -180,9 +180,17 @@ object BridgePoller {
       return
     }
     _state.update { it.copy(cardMessage = message) }
+    val cardBody = buildString {
+      append(message.body)
+      if (!message.price.isNullOrBlank()) append("\n").append(message.price)
+      if (!message.detail.isNullOrBlank()) append("\n").append(message.detail)
+    }
     d.sendCard(
       title = message.title,
-      body = message.body,
+      body = cardBody,
+      imageUrl = message.imageUrl,
+      price = message.price,
+      detail = message.detail,
       onAction = { action ->
         if (decidedDedupe?.mark(message.id) == true) {
           _state.update {

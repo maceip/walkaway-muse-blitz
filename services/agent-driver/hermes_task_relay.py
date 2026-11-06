@@ -49,6 +49,43 @@ MESSAGE_BUS_SCRIPT = REPO_ROOT / "services" / "hermes-host" / "message_bus.py"
 
 DEFAULT_LIVE_URL = os.environ.get("WALKAWAY_DEFAULT_TASK_URL", "https://httpbin.org/forms/post")
 
+# Card preview budget: what travels from the browser to the phone/card.
+PREVIEW_MAX_WIDTH_PX = 320
+PREVIEW_MAX_B64_CHARS = 48_000
+
+
+def _downscale_preview_b64(screenshot_png_b64: str | None) -> str | None:
+    """Downscale a browser PNG screenshot to the card preview budget.
+
+    Pipeline: observe.result screenshot_png_b64 -> RGB -> max width 320px ->
+    PNG (then JPEG quality 75 if still over 48k base64 chars) -> base64.
+    """
+    if not screenshot_png_b64:
+        return None
+    try:
+        import base64
+        import io
+
+        from PIL import Image
+
+        raw = base64.b64decode(screenshot_png_b64)
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        if img.width > PREVIEW_MAX_WIDTH_PX:
+            ratio = PREVIEW_MAX_WIDTH_PX / img.width
+            img = img.resize((PREVIEW_MAX_WIDTH_PX, max(1, int(img.height * ratio))))
+        for encode in ("png", "jpeg"):
+            buf = io.BytesIO()
+            if encode == "png":
+                img.save(buf, format="PNG", optimize=True)
+            else:
+                img.save(buf, format="JPEG", quality=75)
+            out = base64.b64encode(buf.getvalue()).decode("ascii")
+            if len(out) <= PREVIEW_MAX_B64_CHARS:
+                return out
+        return None
+    except Exception:
+        return None
+
 
 def _http_json(
     url: str,
@@ -125,6 +162,7 @@ class HermesTaskManager:
         self.steps_acted: int = 0
         self.decision_model: str | None = None
         self.last_snapshot: dict[str, Any] = {}
+        self.preview_b64: str | None = None
         self.pending_decision: dict[str, Any] | None = None
         self.last_decision_receipt: dict[str, Any] | None = None
         self.say: str = "No active browser task."
@@ -217,7 +255,7 @@ class HermesTaskManager:
         self.session_id = None
         self.pending_decision = None
 
-    def _observe_locked(self, label: str = "obs") -> dict[str, Any]:
+    def _observe_locked(self, label: str = "obs", with_screenshot: bool = False) -> dict[str, Any]:
         if self.agent_client is None or not self.session_id:
             return self.last_snapshot
         self.agent_client.send(
@@ -225,11 +263,13 @@ class HermesTaskManager:
                 "type": "observe.request",
                 "session_id": self.session_id,
                 "request_id": f"{label}-{int(time.time() * 1000)}",
-                "include_screenshot": False,
+                "include_screenshot": with_screenshot,
             }
         )
         snap = self.agent_client.read_until_type("observe.result", timeout_s=10.0)
         self.last_snapshot = snap
+        if with_screenshot:
+            self.preview_b64 = _downscale_preview_b64(snap.get("screenshot_png_b64"))
         return snap
 
     def _sync_bridge_decisions_locked(self) -> None:
@@ -266,7 +306,7 @@ class HermesTaskManager:
             if rtype == "executed":
                 # Drain any pending frames on agent socket and refresh live DOM snapshot
                 try:
-                    self._observe_locked("post-commit")
+                    self._observe_locked("post-commit", with_screenshot=True)
                 except Exception:
                     pass
                 self.steps_acted += 1
@@ -397,7 +437,7 @@ class HermesTaskManager:
             if self.agent_client is None or not self.session_id:
                 raise ValueError("No active browser session. Call walkaway_start_task first.")
 
-            snap = self._observe_locked("predict-pre")
+            snap = self._observe_locked("predict-pre", with_screenshot=True)
             plan = hermes_agent_driver.plan_general_web_form_with_local_llm(
                 snapshot=snap,
                 goal=self.goal,
@@ -590,6 +630,7 @@ class HermesTaskManager:
             "goal": self.goal,
             "page": page,
             "result": result,
+            "preview_b64": self.preview_b64,
             "decision": self.pending_decision,
             "last_decision": self.last_decision_receipt,
             "history_count": self.steps_acted,

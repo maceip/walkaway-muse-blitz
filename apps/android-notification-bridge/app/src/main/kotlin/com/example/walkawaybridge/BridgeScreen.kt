@@ -145,6 +145,22 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
     snap.lastMessage?.let { message ->
       Text("Latest card #${message.id} ${message.title}", style = MaterialTheme.typography.titleLarge)
       Text(message.body)
+      // Page-preview crop captured by the browser pipeline (max 320px wide).
+      val preview = remember(message.id) {
+        message.imageB64?.let { b64 ->
+          runCatching {
+            val bytes = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+          }.getOrNull()
+        }
+      }
+      preview?.let { bmp ->
+        androidx.compose.foundation.Image(
+          bitmap = bmp.asImageBitmap(),
+          contentDescription = "Page preview",
+          modifier = Modifier.fillMaxWidth().height(160.dp)
+        )
+      }
       if (snap.pendingDecision?.id == message.id) {
         // Dual-surface approval (alignment §9): phone decisions ack as
         // android_app; the bridge records surface="android_app" and the
