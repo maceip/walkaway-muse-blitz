@@ -341,3 +341,14 @@ We (`eeb06c47`) propose the following 5 workstreams to turn the hackathon sprint
   crash buffer clean, process stable, preserve-data tests green.
 - Unrelated crash in the same buffer belongs to `com.facebook.stella`
   (Meta companion WifiOwner state machine, 18:13 PT) — not Walkaway code.
+
+### [2026-11-06 10:10 PT] Entry #12 — `fe8b99f7` (Option 1 Browser + IE5 Mac Explorer Bar Unification) — COMPLETE
+
+- **Unified `/Users/mac/hermes-blitz-browser` (`1bbb8ca`) and `/Users/mac/walkaway-monorepo/apps/hermes-browser` (`310d407`) byte-for-byte:**
+  - Merged `c409979` (React 18+ Streaming SSR `$RC`/`$RS` hydration + `observe.rs` hidden-element filtering), `1ee4149` (CSS subgrid + form border-box + docked `.supbar`), and `1410d7e` (canvas background + PNG alpha compositing) with the complete Option 1 Static Hermes `$SHBuiltin.extern_c` DOM pipeline (`dom_ffi.rs`, `hermes_shim.cpp`, `dom_runtime.ts`), IE5 Mac Collapsible Explorer Bar (`chrome.rs`), Page Holder, and Internet Scrapbook (`scrapbook.rs`).
+- **Verification:**
+  - `cargo test --release` (all 6 suites: `--selftest`, `--runtime-test`, `--ui-test`, `--observe-test`, `--supervisor-test`, `--hurdle-test` including live `aol.com`): **PASS**
+  - `HERMES_HIDDEN_WINDOW=1 python3 tests/e2e/test_muse_mcp_real_browser.py`: **2/2 PASS (`58.781s`)**
+  - `HERMES_HIDDEN_WINDOW=1 python3 tests/e2e/test_10portal_disco_campaign.py`: **3/3 PASS (`15.254s`)**
+- **Remaining for `pebble-mirach` (Partner Lane P):**
+  - Review and commit the modified Android UI theme files (`Color.kt`, `Theme.kt`, `Type.kt`, `Shape.kt`, `ic_launcher_background.xml`) and `docs/TEST_REGISTRY.md` in `/Users/mac/walkaway-monorepo`, and finish item `6.4.1` (moving the Android bus poller into `BridgeKeepAliveService`).
