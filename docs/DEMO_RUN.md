@@ -22,17 +22,21 @@ second campaign/fixture/Hermes stack — check processes first.
 
 ## Launch (single command, detached stack)
 
+Exactly one launcher exists: `services/agent-driver/run_live_demo.py`
+(the former `scripts/salvaged-demo-live/` `/tmp` copies were consolidated
+into it and deleted; recover them from git `c48b782` if ever needed).
+
 ```sh
-python3 /tmp/demo-live/spawn_demo.py   # fixture 8795 + reset + Hermes + campaign
-tail -f /tmp/demo-live/run3.log        # card announcements + final result
+python3 services/agent-driver/run_live_demo.py --detach   # fixture 8795 + reset + Hermes + campaign
+tail -f /tmp/demo-live/run_live_demo.log                  # card announcements + final result
 ```
 
 Campaign runs `run_10portal_campaign(..., glasses_timeout_s=900)` via
-`/tmp/demo-live/run_campaign3.py` (driver CLI default timeout is 30s —
-too short for a human tap; do not use the CLI). Logs:
-`/tmp/demo-live/{fixture,hermes,reset,run3}.log`, DB
-`/tmp/demo-live/demo.sqlite3`, disco view
-`http://127.0.0.1:8795/disco-workbench`.
+`services/agent-driver/parallel_campaign_driver.py` (driver CLI default
+timeout is 30s — too short for a human tap; do not use the CLI). Logs:
+`/tmp/demo-live/run_live_demo.log` (detached launcher); per-run state in
+a `walkaway-live-demo-*` temp dir (`live_demo.sqlite3`, `vault.json`,
+`audit.jsonl`); disco view `http://127.0.0.1:8795/disco-workbench`.
 
 ## Human script (exactly 3 taps, glasses only)
 

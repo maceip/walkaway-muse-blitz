@@ -43,7 +43,7 @@ Walkaway is a lightweight, native supervised browser and wearable commit gate th
 
 ```bash
 # 1. Run the native browser supervisor & engine self-test suites (54/54 checks)
-/Users/mac/hermes-blitz-browser/target/release/hermes-blitz-browser --supervisortest
+apps/hermes-browser/target/release/hermes-blitz-browser --supervisortest
 
 # 2. Run the host decision bridge & single-instance bus lock suites
 python3 services/hermes-host/test_message_bus_lock.py
