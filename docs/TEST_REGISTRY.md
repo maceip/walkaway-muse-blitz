@@ -35,8 +35,10 @@ hop works across devices.
   assertion ceremony produces nothing until a human approves it; the
   relying party's verifier accepts the assertion; the verifier rejects a
   replayed challenge, an unknown credential, and a mismatched challenge; the
-  broker's prompt redacts the account name.
-- Last observed: **PASS** 2026-11-06 10:5x PT — 11/11 checks. The suite
+  broker's prompt redacts the account name; the harness refuses to run if
+  the macOS Keychain is unreachable, and it removes the passkey it created
+  when it finishes.
+- Last observed: **PASS** 2026-11-06 11:0x PT — 12/12 checks. The suite
   exercises a real `openssl dgst -sha256 -verify` in the fixture, so the
   assertion is checked by an implementation independent of the one under test.
 - Note: on a locally built, unsigned binary the data protection keychain
@@ -538,3 +540,39 @@ hop works across devices.
   Owed on reconnect: preserve-data install, screenshot of BridgeScreen in
   light (and dark if toggled), confirm buttons green/white text and panel
   radius match theme — visual result is NOT claimed yet.
+
+### T-SALVAGE-641-POLLER (6.4.1 — Bus Poller Moved into BridgeKeepAliveService, Activity-Destroyed Ack)
+
+- Change: polling loop moved out of the `BridgeScreen` Activity composition
+  into `BridgePoller` (process-wide scope) started/stopped by
+  `BridgeKeepAliveService` (`BridgePoller.kt`, `BridgeKeepAliveService.kt`,
+  `BridgeScreen.kt`). The screen is a pure `StateFlow` observer + control
+  surface. FGS promotion refusal now leaves polling degraded on the poller
+  scope instead of dying with the Activity.
+- Commands: `./gradlew :app:testDebugUnitTest :app:assembleDebug
+  :app:installDebug` in `apps/android-notification-bridge/` (upgrade in
+  place; DAT registration preserved) + ADB-driven proof on Pixel
+  `67080DLDV009AD` against live bus `127.0.0.1:19099`
+  (`WALKAWAY_BUS_TOKEN=walkaway-dev-bus-token`, `adb reverse tcp:19099`):
+  launch app -> `cmd activity stack remove <taskId>` (Activity destroyed)
+  -> `am kill com.example.walkawaybridge` -> `POST /messages` ->
+  `GET /acks`.
+- Last observed: **PASS** 2026-11-06 18:36 PT (2026-11-05 07:23 PT era
+  evidence for the service half remains in `T-SALVAGE-WS3`).
+  1. Host: `BridgeStateTest` 8/8 PASS; `assembleDebug` BUILD SUCCESSFUL.
+  2. FGS: `dumpsys activity services` `isForeground=true foregroundId=4101
+     types=0x00000010` (connectedDevice) while polling.
+  3. Activity destroyed: `cmd activity stack remove 4692` ->
+     `walkawaybridge/.MainActivity` count in `dumpsys activity activities`
+     is **0**; `am kill` does NOT kill the process (pid 10417 alive —
+     FGS-protected).
+  4. **6.4.1 evidence**: `POST /messages` (id 60, 18:36:26.364Z) with zero
+     Activity alive -> `GET /acks` shows
+     `{message_id: 60, action: "received", source: "android_app"}` at
+     18:36:26.811Z (~0.45s).
+- Note: bus state was restarted with `next_id: 60` because the phone's
+  persisted `last_message_id` cursor (54) outranked the fresh bus ids —
+  setup artifact only, not product behavior.
+- Not exercised (needs worn glasses): DAT card delivery for #60
+  (expected `dat_failed` without glasses), live session-reuse fast path,
+  dismissal-after-sent `onCardGone`.

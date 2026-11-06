@@ -2,8 +2,8 @@
 
 | Component | Wrapper | Canonical working source today | Migration rule |
 |---|---|---|---|
-| Hermes browser | `apps/hermes-browser/` | `/Users/mac/hermes-blitz-browser` | Migrate only the frozen demo build |
-| Credential & passkey broker | `apps/hermes-browser/src/credentials.rs`, `apps/hermes-browser/src/webauthn/`, `apps/hermes-browser/src/keychain.rs` | `/Users/mac/walkaway-monorepo/apps/hermes-browser/src/` (this tree only, per Ryan's instruction of 2026-11-06) | The WebAuthn authenticator and the password/passkey brokers live here. Ported from the Equipped Browser iOS authenticator (`WebAuthnManager.swift`, `CredentialStore.swift`). **Not yet synced to the canonical browser tree** — see the `docs/STATUS.md` row for the sync conflict |
+| Hermes browser | `apps/hermes-browser/` | `/Users/mac/walkaway-monorepo/apps/hermes-browser/` — the standalone `/Users/mac/hermes-blitz-browser` tree was removed by commit `bce5572` (2026-11-06 10:19), so this wrapper is now the only canonical source | Migrate only the frozen demo build |
+| Credential & passkey broker | `apps/hermes-browser/src/credentials.rs`, `apps/hermes-browser/src/webauthn/`, `apps/hermes-browser/src/keychain.rs`, `apps/hermes-browser/src/passkeytest.rs` | `/Users/mac/walkaway-monorepo/apps/hermes-browser/src/` | The WebAuthn authenticator and the password/passkey brokers live here, ported from the Equipped Browser iOS authenticator (`WebAuthnManager.swift`, `CredentialStore.swift`). **Single implementation** — the browser wrapper is the only canonical tree, so there is no second tree to sync. The pre-existing `src/vault.rs` DOM-fill WebAuthn path is superseded but not yet retired; see the `docs/STATUS.md` row |
 | Android bridge | `apps/android-notification-bridge/` | Generated empty Activity in this repo | Build behavior after demo selection |
 | Glasses web | DELETED 2026-11-05 (vapor stub) | `/Users/mac/walkaway-hackathon/glasses` (separate older app, not in this repo) | Native DAT is the glasses surface; resurrect only as real code on Ryan decision |
 | Meta sample references | external | `/Users/mac/meta_glasses_webmcp/examples` | Reference only; do not vendor blindly |
