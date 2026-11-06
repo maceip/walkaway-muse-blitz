@@ -3473,7 +3473,7 @@ impl BrowserApp {
         let left_w_px = ((self.left_chrome_width() * scale) as u32).min(width);
         let content_w_px = width.saturating_sub(left_w_px).max(1);
         let content_h_px = height.saturating_sub(top_h_px).max(1);
-        let ph_x_px = ((EXPLORER_RAIL_WIDTH * scale) as u32).min(width);
+        let ph_x_px = 0u32;
         let ph_y_px = (((self.top_chrome_height() + PH_HEADER_HEIGHT) * scale) as u32).min(height);
         let ph_w_px =
             ((EXPLORER_DRAWER_WIDTH * scale) as u32).min(width.saturating_sub(ph_x_px)).max(1);
