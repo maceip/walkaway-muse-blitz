@@ -377,3 +377,22 @@ We (`eeb06c47`) propose the following 5 workstreams to turn the hackathon sprint
   `onCardGone`), which are not claimed.
 - All background mutations stopped after the proof; bus left healthy on
   `127.0.0.1:19099` (lock file `/tmp/walkaway-bus-19099.lock`).
+
+### [2026-11-06 19:05 PT] Entry #14 — salvage agent — alignment 6.4.3 DONE (one lifecycle owner)
+
+- Deleted `scripts/salvaged-demo-live/` (`spawn_demo.py`, `run_demo.py`,
+  `run_campaign3.py` — preserved in git `c48b782`). Exactly one launcher
+  remains: `services/agent-driver/run_live_demo.py` (stack flock,
+  `--detach`, `glasses_timeout_s=900`). `docs/DEMO_RUN.md` no longer
+  references `/tmp/demo-live/spawn_demo.py`; `README.md` quickstart step 1
+  now points at `apps/hermes-browser/target/release/hermes-blitz-browser`
+  (the removed standalone tree was a stale path).
+- Evidence (`T-SALVAGE-643-LAUNCHER`, README steps 1–3 from repo root):
+  `--supervisortest` PASS; `test_message_bus_lock.py` OK;
+  `test_decision_bridge_e2e.py` 4/4 OK; full `tests/e2e` discovery
+  **11/11 OK** (`60.585s`); second `run_live_demo.py` exits 1 with
+  `STACK LOCK BUSY` while the first holds `/tmp/walkaway-demo-stack.lock`.
+- Remaining open on the salvage list: only the named worn-glasses passes
+  (DAT session-reuse fast path, dismissal-after-sent `onCardGone`) and the
+  cross-agent `src/vault.rs` retirement (STATUS open item 1, owner
+  `eeb06c47`). Neither is claimed here.

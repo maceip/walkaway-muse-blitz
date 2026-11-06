@@ -612,3 +612,29 @@ hop works across devices.
 - Not exercised (needs worn glasses): DAT card delivery for #60
   (expected `dat_failed` without glasses), live session-reuse fast path,
   dismissal-after-sent `onCardGone`.
+
+### T-SALVAGE-643-LAUNCHER (alignment 6.4.3 — One Lifecycle Owner / Single Launcher)
+
+- Change: deleted `scripts/salvaged-demo-live/` (`spawn_demo.py`,
+  `run_demo.py`, `run_campaign3.py` — the salvaged `/tmp/demo-live` copies;
+  recoverable from git `c48b782`). Exactly one launcher remains:
+  `services/agent-driver/run_live_demo.py` (stack flock + `--detach` +
+  `glasses_timeout_s=900`). `docs/DEMO_RUN.md` launch section rewritten to
+  that launcher; `README.md` quickstart step 1 re-pointed to
+  `apps/hermes-browser/target/release/hermes-blitz-browser` (the removed
+  standalone `/Users/mac/hermes-blitz-browser` tree was a stale path).
+- Commands (from README only, repo root): `--supervisortest`;
+  `python3 services/hermes-host/test_message_bus_lock.py`;
+  `python3 services/hermes-host/test_decision_bridge_e2e.py`;
+  `python3 -m unittest discover -s tests/e2e -p "test_*.py" -v`; plus a
+  stack-lock fail-fast check (hold `/tmp/walkaway-demo-stack.lock`, run
+  `run_live_demo.py`, expect non-zero).
+- Last observed: **PASS** 2026-11-06 ~19:0x PT. `SUPERVISOR TEST PASS`;
+  bus lock 1/1 OK; bridge e2e 4/4 OK (`14.481s`); full e2e discovery
+  **11/11 OK** (`60.585s`); second launcher exits 1 with
+  `STACK LOCK BUSY: ... Stop the existing stack before starting a second one.`
+- Not claimed: a literal fresh-machine boot of README step 4
+  (`run_live_demo.py --detach` with physical glasses) — that remains the
+  physical glasses runbook (`LIVE DEMO RUN` row in `docs/STATUS.md`); the
+  launcher path, lock, and suites above are the host-side evidence for
+  "exactly one launcher".
