@@ -4,6 +4,34 @@ A test belongs here only when the exact command, real components, assertion,
 and last observed result are known. Passing a unit test never proves a demo
 hop works across devices.
 
+## T-ADDRESS-IN-TAB — canonical Safari-style mode (2026-11-06)
+
+- Owner: ZCode, existing `feat/netscape-gooey-debugger` task branch.
+- User correction: address is inside each original Swift tab. Components:
+  unmodified CompactTabStrip `.address` mode, original cell field/delegate,
+  native bridge, Rust stable tab routing, Modern toolbar without Location row.
+- Commands: release `--nativetabtest`, `--tabhosttest`, `cargo test --release`,
+  `--capture-window /tmp/walkaway-address-tabs.png --exit-after 2`; signed local
+  DMG mounted suites. No mocks or substitute address widget accepted.
+- Acceptance: no standalone address field or Location row; tab row y74..112,
+  page offset112; CmdL/select-all/Enter/Escape/clipboard use original selected
+  cell; distinct URLs/drafts do not leak across tabs; Search/reload/loading
+  bind stable tab IDs; supervised tabs cannot regain native editing via layout;
+  native pixels and teardown remain correct, original sources unchanged.
+- Observed **PASS 2026-11-06**: release build; **72 real AppKit assertions**
+  in `--nativetabtest`; all **35 Cargo tests**; **10 host checks** including
+  rejection of stale inactive-tab Search; actual native+Vello capture at
+  `/tmp/walkaway-address-tabs.png` shows original in-tab placeholder/address,
+  no Location row, native slot74..112 and page112. Vendor originals remain
+  byte-identical. Signed mounted-image `--selftest`, `--supervisortest`,
+  `--uitest`, `--debuggertest` (28), `--nativetabtest` (72), `--tabhosttest`
+  (10) PASS. Local Developer ID/Hardened Runtime DMG is not notarized; existing
+  optional icon-generation warning remains nonfatal.
+- Native timing sample (not input/display latency): unchanged update CPU p95
+  0.0045ms/1000, selection CPU p95 0.6489ms/100, 120Hz RunLoop interval p95
+  8.392ms/max15.024ms across35 intervals. Live capture first submission345.41ms;
+  no cold-cache/perceptual parity claim.
+
 ## T-NATIVE-TAB-UX — shortcut removal continuation (2026-11-06)
 
 - Owner: ZCode, existing `feat/netscape-gooey-debugger` task branch.

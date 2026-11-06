@@ -5,10 +5,12 @@ A browser assembled from existing engines, following the composition described i
 (compiled ahead of time to C), **Blitz** (Stylo + Taffy) owns HTML/CSS and layout,
 and **Vello on wgpu** rasterises. No browser engine was written from scratch.
 
-It has a working **Netscape 6 Modern-inspired** chrome: blue-grey beveled
-navigation tools, a recessed Location field, compact menu controls and animated
-the original MIT-licensed Swift `CompactTabStrip` hosted in the existing macOS
-window. This replaces the earlier partial Rust imitation on macOS.
+It has **Netscape 6 Modern-inspired** navigation tools and compact menu controls,
+with the original MIT-licensed Swift `CompactTabStrip` hosted in the existing
+macOS window. Each tab carries its own address; the selected tab is the native
+address/search editor, using the existing Safari-style `.address` component
+mode. There is no separate Location row or second address widget. This replaces
+the earlier partial Rust imitation and separate address-field integration.
 The integrated Hermes JavaScript debugger runs explicitly loaded local scripts
 in an isolated interpreter, with real breakpoints, stepping and frame evaluation.
 Every control is wired to real state:
@@ -56,9 +58,9 @@ own behavior, capture, lifecycle and timing checks.
 | Tab title | From the document `<title>`, falling back to the host |
 | Back / forward | Real history stack, truncated on new navigation; greyed when exhausted |
 | Reload | Re-fetches the current URL and replaces the history entry |
-| Address bar | Native NSTextField: click or `⌘L`, normal cursor/selection/clipboard/IME, `Enter` to navigate, `Esc` to revert; internal start URL is hidden |
+| Address inside each tab | Original CompactAddressField: select a tab, click its address or `⌘L`; normal cursor/selection/clipboard/IME, Enter to navigate that tab, Esc to revert; internal start URL is hidden |
 | Loading | Real indeterminate native spinner and Modern throbber/status; Reload becomes Stop during an in-flight navigation; no fabricated percentage |
-| Padlock | Drawn from a shackle and body; shown only for `https:` |
+| Tab identity | Original native tab identity/security state follows its own URL; no shared Location widget |
 | Browser menu | Home, Reload, Back, Forward, JavaScript debugger, Close tab — each performs the real action |
 | Debugger | Toolbar/menu, `F12` or `⌘⌥J` toggles the isolated local script debugger |
 | URL handling | Absolute URLs, bare hosts (`example.com` → `https://`), anything else becomes a DuckDuckGo search |
@@ -95,8 +97,10 @@ arrive.
   used. Five observed fresh-process runs: 390.49, 476.80, 336.95, 273.01,
   277.03ms; no comparative speedup is claimed from these measurements.
 
-The native address delegate keeps the draft/query seam and a stable field anchor
-for future autocomplete; no suggestions provider or fake popover is installed.
+The original per-tab field notifications keep the draft/query seam and a stable
+cell anchor for future autocomplete; no suggestions provider or fake popover is
+installed. The tab row starts at 74px and page content at 112px, reclaiming the
+former 32px Location row.
 The Browser dropdown temporarily hides native overlays so its items remain
 clickable; showing them again preserves their retained views.
 
@@ -134,9 +138,9 @@ viewport, and pane input never falls through to the page.
 |---|---|---|
 | Headless end-to-end | `--selftest` | PASS — Hermes mutation, history, URL normalization, toolbar hit-tests with menu closed and all dropdown actions with menu open |
 | Local JS debugger | `--debuggertest` | PASS — 28 real Hermes assertions for breakpoint/stack/locals, all step modes, eval, isolation, output/errors, pause, restart and interrupt/teardown |
-| Release tests | `cargo test --release` | PASS — 34 tests, including retained debugger DOM, Modern layout/address/loading, real backend and native browser suites |
-| Original native tabs/address | `--nativetabtest` | PASS — 56 real AppKit assertions |
-| Real tab ownership | `--tabhosttest` | PASS — 9 checks including same runtime/history transfer and pinned grouping |
+| Release tests | `cargo test --release` | PASS — 35 tests, including retained debugger DOM, compact address-in-tab layout/loading, real backend and native browser suites |
+| Original native tabs/address | `--nativetabtest` | PASS — 72 real AppKit assertions |
+| Real tab ownership | `--tabhosttest` | PASS — 10 checks including same runtime/history transfer, pinned grouping and stale-address rejection |
 | Chrome interactions | `--uitest` | PASS — real hit-tests for tabs/navigation, stable identity, debugger opening/focus, viewport reservation, actual Hermes breakpoint and close |
 | Real window + GPU | `--exit-after 4` | Runs, submits frames, exits cleanly |
 | Offscreen render | `--render out.png [--click] [--menu] [--url <url>] [--dark] [--size WxH]` | Renders start page, menu, or a fetched page, in either theme, at any size |

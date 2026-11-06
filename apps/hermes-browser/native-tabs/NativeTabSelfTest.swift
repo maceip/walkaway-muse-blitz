@@ -82,69 +82,132 @@ private func runNativeTabComponentTests() throws -> Int32 {
     }
     let initialItems = (1...5).map { number in
         WalkawayTabSnapshot.Item(id: UInt64(number), title: "Real native tab \(number)",
-            url: "https://example.test/\(number)", loading: number == 3, secure: true, pinned: false, transferable: true)
+            url: "https://example.test/\(number)", loading: number == 3, secure: true, pinned: false, transferable: true, editable: true)
     }
     var state = WalkawayTabSnapshot(items: initialItems, selected: 1)
     try install(source, state)
     try install(target, .init(items: [.init(id: UInt64.max, title: "Destination", url: "https://example.test/destination",
-        loading: false, secure: true, pinned: false, transferable: true)], selected: UInt64.max))
+        loading: false, secure: true, pinned: false, transferable: true, editable: true)], selected: UInt64.max))
     guard let strip = source.stripView, let destination = target.stripView else {
         throw WalkawayTabError("native tab selftest: NSHostingView failed to create original CompactTabStripView")
     }
     try check(strip.window === sourceWindow && destination.window === destinationWindow, "original strips inhabit their existing windows")
     try check(strip.previewSourceView === sourceContent, "preview captures actual contentView")
-    try check(strip.labelMode == .fixed && strip.hoverPreview != nil, "fixed labels and original hover controller enabled")
+    try check(strip.labelMode == .address && strip.hoverPreview != nil, "original address-in-tab mode and hover controller enabled")
     try check(strip.items.count == 5 && strip.slotFrames.count == 5, "original layout has real cells")
     try check(walkawayTabUUID(UInt64.max) == destination.items[0].id && walkawayTabUUID(1) != walkawayTabUUID(UInt64.max), "stable full-width UInt64 identity")
     let originalHost = source.hostingView
     try install(source, state)
     try check(source.stripView === strip && source.hostingView === originalHost, "equal snapshot preserves native view identity")
-    try check(source.hostingView?.frame.minY == 106 && source.hostingView?.frame.height == 38, "only original 106..144 row is overlaid")
+    try check(source.hostingView?.frame.minY == 74 && source.hostingView?.frame.height == 38, "only original 74..112 row is overlaid")
     try check(sourceContent.subviews.count == 1, "renderer contentView remains in place")
 
-    // Native omnibox uses the actual AppKit field editor; no hand-built key
-    // append/backspace simulation, clipboard replacement or navigation fixture.
-    let canonicalAddress = "https://example.test/original"
-    try source.setAddressFrame(x: 64, y: 78, width: 826, height: 24)
-    try source.setAddress(text: canonicalAddress, loading: true, secure: true, editable: true)
+    // Use only the ORIGINAL cells and their delegates/field editors. These
+    // component checks do not fabricate browser navigation or autocomplete.
+    guard let first = source.tabCells.first(where: { $0.item.id == walkawayTabUUID(1) }),
+          let second = source.tabCells.first(where: { $0.item.id == walkawayTabUUID(2) }) else {
+        throw WalkawayTabError("native tab selftest: missing original address cells")
+    }
+    let canonicalAddress = state.items[0].url
+    let field = first.address
+    try check(first.address !== second.address && first.item.address != second.item.address,
+              "two original cells retain distinct actual address fields and URLs")
+    try check(field.delegate === first && second.address.delegate === second,
+              "original cells remain their own field delegates")
+    try check(descendants(sourceContent).compactMap { $0 as? NSTextField }.allSatisfy { text in
+        var view: NSView? = text.superview
+        while let ancestor = view {
+            if ancestor is CompactTabCell { return true }
+            view = ancestor.superview
+        }
+        return false
+    }, "no standalone, hidden or imitation NSTextField exists outside original tabs")
+    var observedEdits: [(UInt64, String, NSRect)] = []
+    source.onAddressTextChange = { observedEdits.append(($0, $1, $2)) }
     sourceWindow.makeKeyAndOrderFront(nil)
     try source.focusAddress()
-    guard let field = source.addressField, let editor = field.currentEditor() as? NSTextView else {
-        throw WalkawayTabError("native tab selftest: NSTextField did not create a real NSTextView editor")
+    guard let editor = field.currentEditor() as? NSTextView else {
+        throw WalkawayTabError("native tab selftest: original field did not create its NSTextView editor")
     }
-    try check(editor.selectedRange().length == canonicalAddress.utf16.count, "native focus selects complete URL")
+    try check(first.isEditingAddress && editor.selectedRange().length == canonicalAddress.utf16.count,
+              "Cmd+L bridge focuses original field and selects complete URL")
     editor.insertText("https://example.test/edited", replacementRange: editor.selectedRange())
-    try check(editor.string == "https://example.test/edited", "native field editor inserts and replaces selection")
-    let selectAll = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
-        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: sourceWindow.windowNumber,
-        context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)!
-    try check(field.performKeyEquivalent(with: selectAll) && editor.selectedRange().length == editor.string.utf16.count,
-              "Cmd+A routes to actual AppKit field editor without winit Edit menu")
-    try source.setAddress(text: canonicalAddress, loading: false, secure: true, editable: true)
-    try check(editor.string == "https://example.test/edited", "authoritative refresh does not overwrite native draft")
+    try check(editor.string == "https://example.test/edited", "original editor inserts and replaces selection")
+    try check(observedEdits.last?.0 == 1 && observedEdits.last?.1 == editor.string
+        && (observedEdits.last?.2.width ?? 0) > 0, "autocomplete seam observes actual field with stable tab ID and anchor")
+    func key(_ text: String, code: UInt16, flags: NSEvent.ModifierFlags = .command, in window: NSWindow) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: code)!
+    }
+    editor.setSelectedRange(NSRange(location: 2, length: 0))
+    NSApp.sendEvent(key("a", code: 0, in: sourceWindow))
+    try check(editor.selectedRange().length == editor.string.utf16.count,
+              "actual local Cmd+A monitor selects original field without an Edit menu")
+    editor.setSelectedRange(NSRange(location: 2, length: 0))
+    NSApp.sendEvent(key("l", code: 37, in: sourceWindow))
+    try check(editor.selectedRange().length == editor.string.utf16.count,
+              "Cmd+L still selects all while original field owns first responder")
+    try check(!source.handleAddressKey(key("a", code: 0, in: destinationWindow)),
+              "native keyboard monitor never consumes another window's event")
+    state.items[0].loading = true
+    try install(source, state)
+    try check(editor.string == "https://example.test/edited", "status update preserves actual original editing draft")
+    try check(first.item.isBusy && first.item.isTrusted
+        && descendants(first).compactMap { $0 as? NSProgressIndicator }.contains { !$0.isHidden },
+              "per-tab loading and secure model reach original cell and spinner")
+    // Simulate an already queued select while this real cell is still editing.
+    // Original onSearch has no id, so routing must prefer this actual editor.
+    strip.onSelect(walkawayTabUUID(2))
     recorder.values.removeAll()
-    try check(source.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))), "native Enter handled")
+    editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
     try check(recorder.values.last?["action"] as? String == "search"
         && recorder.values.last?["text"] as? String == "https://example.test/edited"
-        && recorder.values.last?["tab_id"] as? UInt64 == 1, "native Enter queues selected-tab navigation without claiming success")
+        && recorder.values.last?["tab_id"] as? UInt64 == 1, "original Enter binds edited cell, not queued/global selection")
+    state.selected = 2
+    try install(source, state)
     try source.focusAddress()
-    guard let escapeEditor = field.currentEditor() as? NSTextView else { throw WalkawayTabError("missing second native editor") }
-    escapeEditor.insertText("discard this draft", replacementRange: escapeEditor.selectedRange())
+    guard let secondEditor = second.address.currentEditor() as? NSTextView else { throw WalkawayTabError("missing second cell editor") }
+    try check(secondEditor.string == state.items[1].url, "switching tabs never inherits another tab's edited URL")
+    secondEditor.insertText("https://second.test/draft", replacementRange: secondEditor.selectedRange())
+    state.selected = 1
+    try install(source, state)
+    try source.focusAddress()
+    guard let returningEditor = field.currentEditor() as? NSTextView else { throw WalkawayTabError("missing returning editor") }
+    try check(returningEditor.string == "https://example.test/edited", "first tab retains its own native draft after switching")
+    returningEditor.insertText("discard this draft", replacementRange: returningEditor.selectedRange())
     recorder.values.removeAll()
-    try check(source.control(field, textView: escapeEditor, doCommandBy: #selector(NSResponder.cancelOperation(_:))), "native Escape handled")
-    try check(field.stringValue == canonicalAddress && recorder.values.isEmpty, "Escape restores canonical URL without navigation")
-    try source.setAddress(text: canonicalAddress, loading: false, secure: true, editable: false)
-    try check(!field.isEditable && field.currentEditor() == nil, "supervised address editing disabled")
-    try source.setAddress(text: canonicalAddress, loading: false, secure: true, editable: true)
-    let (addressPixels, addressBytes, addressWidth, addressHeight) = try source.capture(address: true)
-    try check(addressBytes == Int(addressWidth) * Int(addressHeight) * 4 && addressWidth > 0,
-              "native address capture returns real pixels")
-    walkawayTabsFreeRGBA(addressPixels)
+    NSApp.sendEvent(key("\u{001b}", code: 53, flags: [], in: sourceWindow))
+    try check(field.stringValue == canonicalAddress && field.currentEditor() == nil && recorder.values.isEmpty,
+              "original Escape restores canonical URL and resigns without navigation")
+    try source.focusAddress()
+    try check(field.currentEditor()?.string == canonicalAddress, "Escape does not resurrect a discarded draft on refocus")
+    state.items[0].editable = false
+    try install(source, state)
+    try check(!field.isEditable && !field.isSelectable && field.currentEditor() == nil,
+              "supervision revokes live original field editor immediately")
+    first.configure(item: first.item, selected: true)
+    first.layoutSubtreeIfNeeded()
+    try check(!field.isEditable && !field.isSelectable, "original reconfigure cannot re-enable supervised field")
+    try check(walkawayTabsFocusAddress(sourceHandle) == 0, "Cmd+L refuses supervised original field")
+    recorder.values.removeAll()
+    strip.onSearch("https://blocked.test/")
+    try check(recorder.values.isEmpty, "supervised original search callback cannot enqueue navigation")
+    state.items[0].editable = true
+    state.items[0].loading = false
+    try install(source, state)
+    try source.focusAddress()
+    let (tabPixels, tabBytes, tabWidth, tabHeight) = try source.capture()
+    try check(tabBytes == Int(tabWidth) * Int(tabHeight) * 4 && tabWidth > 0 && field.currentEditor() != nil,
+              "single original tab-row capture includes the live in-tab editor")
+    walkawayTabsFreeRGBA(tabPixels)
     source.setOverlaysVisible(false)
-    try check(field.isHidden && source.hostingView?.isHidden == true, "renderer dropdown is not occluded by native overlays")
+    try check(source.hostingView?.isHidden == true && field.currentEditor() == nil,
+              "renderer dropdown hides original row and safely resigns editor")
     source.setOverlaysVisible(true)
-    try check(!field.isHidden && source.hostingView?.isHidden == false && source.stripView === strip,
-              "dismissed dropdown restores same native views")
+    try check(source.hostingView?.isHidden == false && source.stripView === strip,
+              "dismissed dropdown restores same original address-in-tab views")
+    source.onAddressTextChange = nil
 
     // CPU/model-call and RunLoop observations, deliberately NOT display-frame
     // or physical input-latency claims. The same original retained view is used.

@@ -2437,11 +2437,6 @@ impl BrowserApp {
             capture
                 .composite_into(&mut rgba, width, height, scale)
                 .ok()?;
-            native
-                .capture_address_rgba()
-                .ok()?
-                .composite_into(&mut rgba, width, height, scale)
-                .ok()?;
         }
         let mut cursor = std::io::Cursor::new(Vec::new());
         {
@@ -2465,7 +2460,7 @@ impl BrowserApp {
             .tabs
             .iter()
             .map(|tab| {
-                let url = tab.canonical.browser.display_url();
+                let url = tab.canonical.browser.address_display();
                 native_tabs::NativeTabItem {
                     id: tab.canonical.id.0,
                     title: tab.canonical.title.clone(),
@@ -2473,6 +2468,15 @@ impl BrowserApp {
                     url,
                     loading: tab.canonical.browser.loading,
                     pinned: tab.canonical.pinned,
+                    editable: !self.control.as_ref().is_some_and(|session| {
+                        session.tab_id == tab.canonical.id
+                            && matches!(
+                                session.state,
+                                ControlState::Agent
+                                    | ControlState::AwaitingDecision
+                                    | ControlState::ActionRequired
+                            )
+                    }),
                     transferable: !self
                         .control
                         .as_ref()
@@ -2481,24 +2485,11 @@ impl BrowserApp {
             })
             .collect();
         let selected = self.tab().canonical.id.0;
-        let address = self.tab().canonical.browser.address_display();
-        let loading = self.tab().canonical.browser.loading;
-        let secure = address.starts_with("https://");
-        let editable = !self.session_blocks_input();
         let native = self.native_tabs.as_mut().expect("native strip checked");
         if let Err(error) = native
-            .set_frame(0.0, 106.0, self.size.0 as f64 / self.scale, 38.0)
+            .set_frame(0.0, 74.0, self.size.0 as f64 / self.scale, 38.0)
             .and_then(|_| native.set_dark_mode(Some(self.theme.is_dark())))
             .and_then(|_| native.update(&items, selected))
-            .and_then(|_| native.set_address(&address, loading, secure, editable))
-            .and_then(|_| {
-                native.set_address_frame(
-                    64.0,
-                    78.0,
-                    (self.size.0 as f64 / self.scale - 74.0).max(40.0),
-                    24.0,
-                )
-            })
             .and_then(|_| native.set_overlays_visible(!self.menu_open))
         {
             eprintln!("[tabs] native update failed: {error}");
@@ -2763,11 +2754,14 @@ impl BrowserApp {
             NativeTabAction::Move => self.move_tab(id, event.target_index),
             NativeTabAction::Pin => self.pin_tab(id, event.pinned),
             NativeTabAction::Reload => {
-                if let Some(index) = index {
-                    self.select_tab(index);
-                }
+                let Some(index) = index else { return };
+                self.select_tab(index);
                 if !self.session_blocks_input() {
-                    self.reload();
+                    if self.tab().canonical.browser.loading {
+                        self.stop_navigation();
+                    } else {
+                        self.reload();
+                    }
                 }
             }
             NativeTabAction::Search => {
@@ -3148,7 +3142,7 @@ impl BrowserApp {
             self.sync_chrome();
             self.request_redraw();
         }
-        if self.native_tabs.is_some() && (106.0..CHROME_HEIGHT as f32).contains(&y) {
+        if self.native_tabs.is_some() && (74.0..CHROME_HEIGHT as f32).contains(&y) {
             return;
         }
         if y >= CHROME_HEIGHT as f32 {
@@ -3691,7 +3685,7 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
                     (position.y / self.scale) as f32,
                 );
                 let native_row = self.native_tabs.is_some()
-                    && (106.0..CHROME_HEIGHT as f32).contains(&self.cursor.1);
+                    && (74.0..CHROME_HEIGHT as f32).contains(&self.cursor.1);
                 let chrome_hover = !native_row
                     && (self.cursor.1 < CHROME_HEIGHT as f32
                         || self.debugger_contains(self.cursor.1)

@@ -18,24 +18,22 @@ int32_t walkaway_tabs_is_main_thread(void);
 size_t walkaway_tabs_last_error(uint8_t *buffer, size_t capacity);
 void *walkaway_tabs_create(void *winit_content_view, uint64_t window_token,
                            walkaway_tab_callback callback, void *context);
-/* UTF-8 {"items":[{id,title,url,loading,secure,pinned,transferable}],"selected":u64}.
+/* UTF-8 {"items":[{id,title,url,loading,secure,pinned,transferable,editable}],"selected":u64}.
  * IDs are full UInt64 JSON integers, mapped injectively to stable native UUIDs.
  * Model order should be pinned-first; target_index is the insertion index after
  * removing the moving tab (the original component clamps to its pinned group).
- * A non-transferable item also prevents transfers into its supervised window. */
+ * A non-transferable item also prevents transfers into its supervised window.
+ * editable is required per item; false revokes the original tab field editor. */
 int32_t walkaway_tabs_update(void *handle, const uint8_t *json, size_t length);
-/* Logical content-view points; y is measured from the TOP, normally 106..144. */
+/* Logical content-view points; y is measured from the TOP, normally 74..112. */
 int32_t walkaway_tabs_frame(void *handle, double x, double y, double width, double height);
 /* -1=inherited appearance, 0=light, 1=dark. */
 int32_t walkaway_tabs_appearance(void *handle, int32_t dark);
 /* Yield to renderer-owned dropdown without destroying the native views. */
 int32_t walkaway_tabs_overlays_visible(void *handle, int32_t visible);
-/* Native NSTextField/field-editor lifecycle. Updates preserve an active draft;
- * Enter queues action=search with text and the selected tab_id; Escape restores
- * the authoritative address. No completion entries are invented. */
-int32_t walkaway_tabs_set_address(void *handle, const uint8_t *text, size_t length,
-                                  int32_t loading, int32_t secure, int32_t editable);
-int32_t walkaway_tabs_address_frame(void *handle, double x, double y, double width, double height);
+/* Focus/select all in the selected ORIGINAL CompactTabCell.address. Enter and
+ * Escape remain original cell delegate actions; search carries the edited cell's
+ * stable tab_id, never an unrelated queued/global selection. No extra field. */
 int32_t walkaway_tabs_focus_address(void *handle);
 /* Synchronously cancels drag/hover/timers, unregisters, detaches hosting/tracking
  * views and disables the callback before the Rust callback context is released. */
@@ -44,7 +42,6 @@ void walkaway_tabs_destroy(void *handle);
  * TOP-TO-BOTTOM and STRAIGHT ALPHA, captured from the actual native NSView.
  * Ownership transfers to the caller, which MUST call the matching free. */
 size_t walkaway_tabs_capture_rgba(void *handle, uint8_t **bytes, uint32_t *width, uint32_t *height);
-size_t walkaway_tabs_capture_address_rgba(void *handle, uint8_t **bytes, uint32_t *width, uint32_t *height);
 void walkaway_tabs_free_rgba(uint8_t *bytes);
 /* x/y from detach events are AppKit global points, BOTTOM-LEFT origin.
  * Converts to a constrained native window position without a DPI mismatch. */

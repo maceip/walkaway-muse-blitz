@@ -254,6 +254,23 @@ pub(super) fn selftest() -> i32 {
         !host.transfer(0, 1, TabId(u64::MAX), 0),
         "stale transfer cannot consume an unrelated tab",
     );
+    let selected = host.windows[1].tab().canonical.id;
+    host.windows[1].handle_native_tab(native_tabs::NativeTabEvent {
+        window_token: 2,
+        action: native_tabs::NativeTabAction::Search,
+        tab_id: moving.0,
+        target_index: 0,
+        pinned: false,
+        dest_window_token: 0,
+        screen_x: 0.0,
+        screen_y: 0.0,
+        text: Some("example.org".into()),
+    });
+    check(
+        host.windows[1].tab().canonical.id == selected
+            && !host.windows[1].tab().canonical.browser.loading,
+        "stale inactive-tab address submission never navigates selected tab",
+    );
     if failures == 0 {
         println!("TAB HOST TEST PASS");
         0

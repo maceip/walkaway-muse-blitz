@@ -1,11 +1,11 @@
 //! The browser chrome, rendered by the same HTML/CSS engine as the page.
 //!
-//! Netscape 6 Modern-inspired silver-blue chrome: sculpted circular tools,
-//! a recessed Location field, and a compass with honest loading state. Live
-//! macOS tabs belong to the original Swift strip in `native_tabs`; an empty
+//! Netscape 6 Modern-inspired silver-blue chrome: sculpted circular tools
+//! and a compass with honest loading state. Live macOS tabs and their inline
+//! addresses belong to the original Swift strip in `native_tabs`; an empty
 //! `tabs` slice reserves its one native slot. `gooey_tabs` is only the existing
-//! offscreen/non-native fallback, not a claim of Swift parity. No page JavaScript
-//! participates in chrome interaction.
+//! offscreen/non-native fallback, with the active address inside its tab, not
+//! a claim of Swift parity. No page JavaScript participates in chrome interaction.
 //!
 //! Also renders the supervised Semantic X-Ray overlay layer (DOM element role
 //! tags, Blind Vault shield, Engine Commit Freeze shield, and live-measured
@@ -179,9 +179,9 @@ pub struct ChromeState<'a> {
     pub telemetry: Option<EngineTelemetry>,
 }
 
-/// Menu y0..24, navigation y24..74, Location y74..106, native tabs y106..144.
+/// Menu y0..24, Modern navigation y24..74, native address-in-tabs y74..112.
 /// Main uses this same offset for page layout, pointer input, and screenshots.
-pub const CHROME_HEIGHT: f64 = 144.0;
+pub const CHROME_HEIGHT: f64 = 112.0;
 pub const DEBUGGER_HEIGHT: f64 = 300.0;
 
 /// Keep debugger content below the chrome in short windows. Main uses this
@@ -197,16 +197,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
     let p = palette(state.theme);
     let back_class = button_class(state.can_back);
     let forward_class = button_class(state.can_forward);
-    let bar_class = if state.focused {
-        "bar bar-focused"
-    } else {
-        "bar"
-    };
-    let caret = if state.focused {
-        r#"<div class="caret"></div>"#
-    } else {
-        ""
-    };
     // Blitz resolves this shell at fixed timestamps: no CSS animation that
     // merely appears to run, no invented completion fraction. Native chrome
     // owns the live NSProgressIndicator; this stripe and label express only
@@ -420,19 +410,16 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .compass-loading .compass-disc {{ border-color:#E9C780; }}
   .compass-loading .compass-orbit {{ border-color:#FFE7B0; }}
 
-  /* Native frame contract at every width: x64, y78, width=W-74, height24.
-     Padding10 + fixed label46 + gap8; no trailing status or responsive shift. */
-  .location-row {{ height:32px; display:flex; align-items:center; gap:8px; padding:0 10px; background-color:{nav}; background-image:linear-gradient(to bottom, {metal_mid} 0%, {nav} 100%); border-top:1px solid {highlight}; border-bottom:1px solid {shadow}; }}
-  .location-label {{ font-size:11px; width:46px; flex:0 0 46px; white-space:nowrap; }}
-  .bar {{ flex:1; min-width:0; height:24px; background-color:{pill}; background-image:linear-gradient(to bottom, {metal_mid} 0%, {pill} 18%, {pill} 100%); border:1px solid {shadow}; border-radius:5px; box-shadow:inset 0 1px 2px rgba(28,42,66,0.25), 0 1px 0 {highlight}; display:flex; align-items:center; padding:0 7px; gap:7px; overflow:hidden; cursor:text; }}
-  .bar-focused {{ background-color:{pill_focus}; background-image:none; border-color:{accent}; box-shadow:inset 0 0 0 1px {accent}, 0 1px 0 {highlight}; }}
+  /* Inline address in the active fallback tab only; native Swift owns its field. */
+  .tab-address {{ flex:1; min-width:0; height:24px; display:flex; align-items:center; gap:4px; padding:0 4px; border:1px solid transparent; border-radius:4px; overflow:hidden; cursor:text; }}
+  .tab-address-focused {{ background-color:{pill_focus}; border-color:{accent}; }}
   .url {{ font-size:12px; color:{ink}; white-space:nowrap; overflow:hidden; min-width:0; }}
+  .url-placeholder {{ color:{muted}; }}
   .caret {{ width:1px; height:15px; background-color:{accent}; flex-shrink:0; }}
   .lock {{ display:flex; flex-direction:column; align-items:center; flex-shrink:0; }}
   .shackle {{ width:6px; height:5px; border:1.5px solid {favicon_ink}; border-bottom-width:0; border-radius:3px 3px 0 0; }}
   .lock-body {{ width:9px; height:7px; background-color:{favicon_ink}; border-radius:1px; }}
   .insecure-dot {{ width:7px; height:7px; border:1px solid {muted}; border-radius:50%; flex-shrink:0; }}
-  #address-popup-anchor {{ display:none; position:absolute; left:64px; right:10px; top:102px; z-index:95; }}
 
   /* Existing offscreen/non-native fallback only. Native Swift tabs are untouched. */
   .tabstrip {{ height:38px; background-color:{strip}; display:flex; align-items:flex-end; gap:8px; padding:0 8px; border-top:1px solid {highlight}; border-bottom:2px solid {shadow}; overflow:hidden; }}
@@ -443,7 +430,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .tab-content {{ position:absolute; left:13px; right:10px; top:3px; height:26px; display:flex; align-items:center; gap:6px; overflow:hidden; }}
   .favicon {{ width:13px; height:15px; flex-shrink:0; border:1px solid {highlight}; background-color:{favicon_bg}; color:#FFFFFF; font-size:9px; line-height:13px; text-align:center; }}
   .tab-title {{ font-size:11px; white-space:nowrap; overflow:hidden; flex:1; min-width:0; }}
-  .tab-active .tab-title {{ font-weight:bold; }}
   .tab-close {{ width:19px; height:19px; line-height:16px; text-align:center; font-size:15px; color:{favicon_ink}; flex-shrink:0; border:1px solid transparent; }}
   .tab-close:hover {{ border-top-color:{highlight}; border-left-color:{highlight}; border-right-color:{shadow}; border-bottom-color:{shadow}; background-color:{hover}; }}
   .tab-neck {{ position:absolute; top:0; height:32px; pointer-events:none; }}
@@ -546,7 +532,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
 
   .progress {{
     position:absolute;
-    left:0; right:0; top:103px;
+    left:0; right:0; top:71px;
     height:3px;
     background-color:{tool_bottom};
     background-image:repeating-linear-gradient(to right, {tool_bottom} 0px, {tool_bottom} 8px, {metal_mid} 8px, {metal_mid} 14px);
@@ -569,13 +555,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
     <div class="btn" id="btn-debugger" role="button" aria-label="JavaScript debugger" aria-pressed="{debugger_open}" title="Local Hermes JavaScript debugger"><div class="glyph tool-face debug-glyph" aria-hidden="true">JS</div><span>Debugger</span></div>
     <div class="brand"><div class="brand-copy"><div class="brand-word">Walkaway</div><div class="load-status {status_class}" id="page-load-status" role="status" aria-live="polite">{load_status}</div></div><div class="compass {compass_class}" id="walkaway-throbber" role="img" aria-label="{load_label}" title="{load_label}"><div class="compass-disc" aria-hidden="true"><div class="compass-orbit"></div><div class="compass-star"></div><div class="compass-needle"></div></div></div></div>
   </div>
-  <div class="location-row" id="chrome-location">
-    <div class="location-label">Location:</div>
-    <div class="{bar_class}" id="address" role="textbox" aria-label="Location" aria-multiline="false" title="Enter a URL or search">
-      {security}<div class="url">{url}</div>{caret}
-    </div>
-  </div>
-  <div id="address-popup-anchor" popover="manual" hidden aria-hidden="true"></div>
   {tab_row}
   {xray_layer}
   {debugger}
@@ -623,16 +602,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
         },
         back_class = back_class,
         forward_class = forward_class,
-        bar_class = bar_class,
-        security = if state.url.is_empty() {
-            ""
-        } else if state.secure {
-            r#"<div class="lock" role="img" aria-label="HTTPS connection" title="HTTPS connection"><div class="shackle"></div><div class="lock-body"></div></div>"#
-        } else {
-            r#"<div class="insecure-dot" role="img" aria-label="Not HTTPS" title="Not HTTPS"></div>"#
-        },
-        url = escape_html(state.url),
-        caret = caret,
         xray_layer = xray_layer,
         menu = menu,
         supbar = supbar,
@@ -696,10 +665,39 @@ fn render_tabs(state: &ChromeState<'_>, p: &Palette) -> String {
         );
         let class = if tab.active { "tab tab-active" } else { "tab" };
         let title = escape_html(tab.title);
+        let content = if tab.active {
+            let address_class = if state.focused {
+                "tab-address tab-address-focused"
+            } else {
+                "tab-address"
+            };
+            let security = if state.url.is_empty() {
+                ""
+            } else if state.secure {
+                r#"<div class="lock" role="img" aria-label="HTTPS connection" title="HTTPS connection"><div class="shackle"></div><div class="lock-body"></div></div>"#
+            } else {
+                r#"<div class="insecure-dot" role="img" aria-label="Not HTTPS" title="Not HTTPS"></div>"#
+            };
+            let (url_class, url) = if state.url.is_empty() {
+                ("url url-placeholder", "Search or enter address".to_string())
+            } else {
+                ("url", escape_html(state.url))
+            };
+            let caret = if state.focused {
+                r#"<div class="caret"></div>"#
+            } else {
+                ""
+            };
+            format!(
+                r#"<div class="{address_class}" id="address" role="textbox" aria-label="Search or enter address" aria-multiline="false" title="Enter a URL or search">{security}<div class="{url_class}">{url}</div>{caret}</div>"#
+            )
+        } else {
+            format!(r#"<div class="tab-title">{title}</div>"#)
+        };
         html.push_str(&format!(
             r#"<div class="{class}" id="tab-{index}" role="tab" aria-selected="{active}" title="{title}" style="left:{x:.3}px;width:{width:.3}px;">
               <div class="tab-shape" aria-hidden="true" style="clip-path:path('{path}');"></div>
-              <div class="tab-content"><div class="favicon" aria-hidden="true">{letter}</div><div class="tab-title">{title}</div><div class="tab-close" id="tab-close-{index}" role="button" aria-label="Close {title}">&#215;</div></div>
+              <div class="tab-content"><div class="favicon" aria-hidden="true">{letter}</div>{content}<div class="tab-close" id="tab-close-{index}" role="button" aria-label="Close {title}">&#215;</div></div>
             </div>"#,
             active = tab.active, x = slot.x, width = slot.width, letter = escape_html(&first_letter(tab.title)),
         ));
@@ -851,7 +849,14 @@ mod tests {
         assert!(!html.contains(">File<"));
         assert!(!html.contains(">Edit<"));
         assert!(html.contains("clip-path:path('M"));
-        assert!(html.contains("Location:"));
+        assert!(!html.contains("Location:"));
+        assert!(!html.contains("chrome-location"));
+        assert!(!html.contains("address-popup-anchor"));
+        let doc = document(&chrome);
+        assert_eq!(
+            doc.query_selector("#tab-0 #address").unwrap(),
+            Some(element(&doc, "address"))
+        );
     }
 
     #[test]
@@ -898,36 +903,119 @@ mod tests {
     }
 
     #[test]
-    fn blank_location_and_empty_autocomplete_anchor_stay_honest() {
+    fn blank_fallback_address_is_only_inside_the_active_tab() {
+        let tabs = [
+            TabInfo {
+                title: "Inactive page",
+                active: false,
+            },
+            TabInfo {
+                title: "Start",
+                active: true,
+            },
+        ];
         for focused in [false, true] {
-            let mut chrome = state(&[]);
+            let mut chrome = state(&tabs);
             chrome.url = "";
             chrome.focused = focused;
             // A stale secure flag must not turn an empty internal page into an
             // HTTPS claim. The host supplies the same empty value to AppKit.
             let html = render(&chrome);
+            assert_eq!(html.matches("id=\"address\"").count(), 1);
             assert!(!html.contains("aria-label=\"HTTPS connection\""));
             assert!(!html.contains("aria-label=\"Not HTTPS\""));
+            assert!(!html.contains("chrome-location"));
+            assert!(!html.contains("address-popup-anchor"));
+            assert!(!html.contains("muse://"));
             assert!(!html.contains("<script"));
             let doc = document(&chrome);
-            let address = doc.get_node(element(&doc, "address")).unwrap();
-            assert_eq!(address.text_content().trim(), "");
+            let address_id = element(&doc, "address");
+            let address = doc.get_node(address_id).unwrap();
+            assert_eq!(address.text_content(), "Search or enter address");
+            assert_eq!(address.attr(LocalName::from("role")), Some("textbox"));
+            assert_eq!(
+                doc.query_selector("#tab-1 #address").unwrap(),
+                Some(address_id)
+            );
+            assert!(doc.query_selector("#tab-0 #address").unwrap().is_none());
+            let inactive_title = doc.query_selector("#tab-0 .tab-title").unwrap().unwrap();
+            assert_eq!(
+                doc.get_node(inactive_title).unwrap().text_content(),
+                "Inactive page"
+            );
             assert_eq!(
                 doc.query_selector_all("#address .caret").unwrap().len(),
                 usize::from(focused)
             );
-            let anchor_id = element(&doc, "address-popup-anchor");
-            let anchor = doc.get_node(anchor_id).unwrap();
-            assert!(anchor.children.is_empty());
-            assert_eq!(anchor.attr(LocalName::from("popover")), Some("manual"));
-            assert!(anchor.attr(LocalName::from("hidden")).is_some());
-            assert_eq!(doc.resolved_style_value(anchor_id, "display"), "none");
             assert_eq!(
                 doc.get_node(element(&doc, "page-load-status"))
                     .unwrap()
                     .text_content(),
                 "Ready"
             );
+        }
+    }
+
+    #[test]
+    fn fallback_address_tracks_the_active_tab_without_another_row() {
+        for active in 0..2 {
+            let tabs = [
+                TabInfo {
+                    title: "First page",
+                    active: active == 0,
+                },
+                TabInfo {
+                    title: "Second page",
+                    active: active == 1,
+                },
+            ];
+            for width in [360, 560, 600, 601, 800, 1280] {
+                let mut chrome = state(&tabs);
+                chrome.surface_width = f64::from(width);
+                chrome.url = if active == 0 {
+                    "https://first.test/?a=1&b=2"
+                } else {
+                    "https://second.test/"
+                };
+                let html = render(&chrome);
+                assert_eq!(html.matches("id=\"address\"").count(), 1);
+                assert_eq!(html.matches(&escape_html(chrome.url)).count(), 1);
+                assert!(!html.contains("chrome-location"));
+                assert!(!html.contains("address-popup-anchor"));
+                let doc = document(&chrome);
+                let address_id = element(&doc, "address");
+                assert_eq!(
+                    doc.query_selector(&format!("#tab-{active} #address"))
+                        .unwrap(),
+                    Some(address_id)
+                );
+                assert_eq!(doc.get_node(address_id).unwrap().text_content(), chrome.url);
+                let inactive = 1 - active;
+                let title = doc
+                    .query_selector(&format!("#tab-{inactive} .tab-title"))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    doc.get_node(title).unwrap().text_content(),
+                    tabs[inactive].title
+                );
+                assert!(
+                    doc.query_selector(&format!("#tab-{active} .tab-title"))
+                        .unwrap()
+                        .is_none()
+                );
+                let strip = doc.query_selector(".tabstrip").unwrap().unwrap();
+                let strip = doc.get_node(strip).unwrap();
+                assert_eq!(strip.absolute_position(0.0, 0.0).y, 74.0);
+                assert_eq!(strip.final_layout().size.width, width as f32);
+                assert_eq!(strip.final_layout().size.height, 38.0);
+                let [x, y, w, h] = rect(&doc, "address");
+                let [tab_x, tab_y, tab_w, tab_h] = rect(&doc, &format!("tab-{active}"));
+                assert!(w > 0.0 && h > 0.0);
+                assert!(x >= tab_x && x + w <= tab_x + tab_w);
+                assert!(y >= tab_y && y + h <= tab_y + tab_h);
+                assert!(y >= 74.0 && y + h <= CHROME_HEIGHT as f32);
+            }
         }
     }
 
@@ -979,13 +1067,13 @@ mod tests {
                     progress.attr(LocalName::from("aria-valuetext")),
                     Some("Loading…")
                 );
-                assert_eq!(rect(&doc, "page-load-progress"), [0.0, 103.0, 800.0, 3.0]);
+                assert_eq!(rect(&doc, "page-load-progress"), [0.0, 71.0, 800.0, 3.0]);
             }
         }
     }
 
     #[test]
-    fn native_slot_and_address_frame_stay_exact_in_real_blitz_layout() {
+    fn three_chrome_rows_reserve_only_one_native_tab_slot() {
         for width in [360, 560, 600, 601, 800, 1280] {
             for theme in [Theme::Light, Theme::Dark] {
                 let mut chrome = state(&[]);
@@ -998,12 +1086,18 @@ mod tests {
                 assert!(!html.contains("role=\"tablist\""));
                 assert!(!html.contains("id=\"btn-newtab\""));
                 assert!(!html.contains("id=\"tab-"));
+                assert!(!html.contains("id=\"address\""));
+                assert!(!html.contains("role=\"textbox\""));
+                assert!(!html.contains("chrome-location"));
+                assert!(!html.contains("location-row"));
+                assert!(!html.contains("address-popup-anchor"));
+                assert!(!html.contains(".bar "));
+                assert!(!html.contains(chrome.url));
                 let doc = document(&chrome);
                 for (id, y, height) in [
                     ("chrome-menubar", 0.0, 24.0),
                     ("chrome-navigation", 24.0, 50.0),
-                    ("chrome-location", 74.0, 32.0),
-                    ("native-tab-slot", 106.0, 38.0),
+                    ("native-tab-slot", 74.0, 38.0),
                 ] {
                     assert_eq!(
                         rect(&doc, id),
@@ -1012,10 +1106,12 @@ mod tests {
                     );
                 }
                 assert_eq!(
-                    rect(&doc, "address"),
-                    [64.0, 78.0, (width - 74) as f32, 24.0],
-                    "native address frame at {width}px {theme:?}"
+                    rect(&doc, "page-load-progress"),
+                    [0.0, 71.0, width as f32, 3.0],
+                    "loading stripe at toolbar bottom at {width}px {theme:?}"
                 );
+                assert!(doc.get_element_by_id("address").is_none());
+                assert!(doc.query_selector(".tab-address").unwrap().is_none());
                 let slot = doc.get_node(element(&doc, "native-tab-slot")).unwrap();
                 assert!(slot.children.is_empty(), "no imitation below native tabs");
                 for id in [
@@ -1056,7 +1152,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(CHROME_HEIGHT, 144.0);
+        assert_eq!(CHROME_HEIGHT, 112.0);
     }
 
     #[test]
@@ -1125,8 +1221,8 @@ mod tests {
             assert!(html.contains(&format!("id=\"{id}\"")), "#{id}");
         }
         assert!(!html.contains("id=\"sup-done\""));
-        assert!(html.contains("top: 144px;"));
-        assert!(html.contains("top:164.0px;"));
+        assert!(html.contains(&format!("top: {CHROME_HEIGHT}px;")));
+        assert!(html.contains(&format!("top:{:.1}px;", CHROME_HEIGHT + 20.0)));
         assert!(html.contains("Task &lt;untrusted&gt;"));
         assert!(html.contains("FormSignature: &lt;sig&gt;"));
     }

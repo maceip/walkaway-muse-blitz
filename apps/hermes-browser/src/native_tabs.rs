@@ -22,6 +22,9 @@ pub struct NativeTabItem {
     pub pinned: bool,
     /// False while moving the tab would break a supervised session's owner.
     pub transferable: bool,
+    /// Whether this tab's original native address field may accept user edits.
+    /// The host must revalidate this policy when consuming a queued Search event.
+    pub editable: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -154,7 +157,6 @@ pub struct NativeTabStrip {
     items: Vec<NativeTabItem>,
     selection: Option<u64>,
     frame: Cell<(f64, f64, f64, f64)>,
-    address_frame: Cell<(f64, f64, f64, f64)>,
     _main_thread_only: PhantomData<Rc<()>>,
 }
 
@@ -189,8 +191,7 @@ impl NativeTabStrip {
                 _window: window,
                 items: Vec::new(),
                 selection: None,
-                frame: Cell::new((0.0, 106.0, 0.0, 38.0)),
-                address_frame: Cell::new((64.0, 78.0, 0.0, 24.0)),
+                frame: Cell::new((0.0, 74.0, 0.0, 38.0)),
                 _main_thread_only: PhantomData,
             })
         }
@@ -230,7 +231,7 @@ impl NativeTabStrip {
     }
 
     /// Frame in AppKit/content logical points, with y measured from the top.
-    /// The normal browser row is (0, 106, logical_window_width, 38).
+    /// The normal browser row is (0, 74, logical_window_width, 38).
     pub fn set_frame(&self, x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         {
@@ -290,61 +291,8 @@ impl NativeTabStrip {
         }
     }
 
-    /// Native NSTextField with real selection, cursor, clipboard and IME.
-    /// Authoritative updates do not overwrite an in-progress native draft.
-    pub fn set_address(
-        &self,
-        text: &str,
-        loading: bool,
-        secure: bool,
-        editable: bool,
-    ) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        {
-            mac::require_main_thread()?;
-            if unsafe {
-                mac::walkaway_tabs_set_address(
-                    self.handle.as_ptr(),
-                    text.as_ptr(),
-                    text.len(),
-                    i32::from(loading),
-                    i32::from(secure),
-                    i32::from(editable),
-                )
-            } == 0
-            {
-                return Err(mac::last_error());
-            }
-            Ok(())
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = (text, loading, secure, editable);
-            Err("native address field is available only on macOS".into())
-        }
-    }
-
-    pub fn set_address_frame(&self, x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        {
-            mac::require_main_thread()?;
-            if unsafe {
-                mac::walkaway_tabs_address_frame(self.handle.as_ptr(), x, y, width, height)
-            } == 0
-            {
-                return Err(mac::last_error());
-            }
-            self.address_frame.set((x, y, width, height));
-            Ok(())
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = (x, y, width, height);
-            Err("native address field is available only on macOS".into())
-        }
-    }
-
-    /// Cmd+L focuses the native editor and selects the complete canonical URL.
+    /// Cmd+L focuses the selected original tab cell's native editor and selects all.
+    /// URL/loading/security/editability come only from that tab's snapshot item.
     pub fn focus_address(&self) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         {
@@ -360,27 +308,20 @@ impl NativeTabStrip {
         }
     }
 
-    pub fn capture_address_rgba(&self) -> Result<NativeTabCapture, String> {
-        self.capture_view(true)
-    }
-
+    /// Capture the original tab row, including its actual address field/editor.
     pub fn capture_rgba(&self) -> Result<NativeTabCapture, String> {
-        self.capture_view(false)
-    }
-
-    fn capture_view(&self, address: bool) -> Result<NativeTabCapture, String> {
         #[cfg(target_os = "macos")]
         {
             mac::require_main_thread()?;
             let mut bytes = std::ptr::null_mut();
             let (mut width, mut height) = (0, 0);
             let len = unsafe {
-                let capture = if address {
-                    mac::walkaway_tabs_capture_address_rgba
-                } else {
-                    mac::walkaway_tabs_capture_rgba
-                };
-                capture(self.handle.as_ptr(), &mut bytes, &mut width, &mut height)
+                mac::walkaway_tabs_capture_rgba(
+                    self.handle.as_ptr(),
+                    &mut bytes,
+                    &mut width,
+                    &mut height,
+                )
             };
             if bytes.is_null() || len == 0 {
                 return Err(mac::last_error());
@@ -394,11 +335,7 @@ impl NativeTabStrip {
                 return Err("invalid RGBA dimensions from native capture".into());
             }
             let rgba = unsafe { std::slice::from_raw_parts(allocation.0, len) }.to_vec();
-            let (x, y, logical_width, logical_height) = if address {
-                self.address_frame.get()
-            } else {
-                self.frame.get()
-            };
+            let (x, y, logical_width, logical_height) = self.frame.get();
             Ok(NativeTabCapture {
                 rgba,
                 width,
@@ -538,30 +475,9 @@ mod mac {
         pub fn walkaway_tabs_frame(handle: *mut c_void, x: f64, y: f64, w: f64, h: f64) -> i32;
         pub fn walkaway_tabs_appearance(handle: *mut c_void, dark: i32) -> i32;
         pub fn walkaway_tabs_overlays_visible(handle: *mut c_void, visible: i32) -> i32;
-        pub fn walkaway_tabs_set_address(
-            handle: *mut c_void,
-            text: *const u8,
-            len: usize,
-            loading: i32,
-            secure: i32,
-            editable: i32,
-        ) -> i32;
-        pub fn walkaway_tabs_address_frame(
-            handle: *mut c_void,
-            x: f64,
-            y: f64,
-            w: f64,
-            h: f64,
-        ) -> i32;
         pub fn walkaway_tabs_focus_address(handle: *mut c_void) -> i32;
         pub fn walkaway_tabs_destroy(handle: *mut c_void);
         pub fn walkaway_tabs_capture_rgba(
-            handle: *mut c_void,
-            bytes: *mut *mut u8,
-            width: *mut u32,
-            height: *mut u32,
-        ) -> usize;
-        pub fn walkaway_tabs_capture_address_rgba(
             handle: *mut c_void,
             bytes: *mut *mut u8,
             width: *mut u32,

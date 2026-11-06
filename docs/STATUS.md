@@ -40,6 +40,30 @@ never blur which browser executed an action.
 - Runbook: `docs/DEMO_RUN.md`. No demo stack needs to stay running;
   fixture 8795 `/campaign-receipt` serves the receipt page.
 
+## Address-in-tab correction — 2026-11-06
+
+- Owner: ZCode on existing `feat/netscape-gooey-debugger` task branch/worktree.
+- User correction: use the already-implemented Safari-style address IN EACH TAB,
+  not a separate Location row. Original Swift and HTML implementations exist in
+  `maceip/liquid-tabs`; retain original Swift behavior rather than add another
+  address widget. `.address` is the existing canonical component mode.
+- Claimed scope: existing native bridge/address routing, chrome row removal and
+  offsets, browser-specific tests/docs/packaging. No Android/host/frozen demo edits.
+- Next action: remove standalone native field and Location row; focus/edit the
+  selected original tab field, bind Enter/reload/loading to its stable tab ID,
+  preserve native drag/transfer and supervision constraints. Verify real native
+  editor/capture plus full suites and signed local DMG. No parity claim by fiat.
+- Observed: canonical `.address` native mode compiles; **72 real AppKit checks**,
+  **35 Cargo tests** and **10 real host checks** PASS. Actual native/Vello
+  capture `/tmp/walkaway-address-tabs.png` confirms one original tab editor,
+  no separate Location row; page offset is112px. Original Swift source hashes
+  remain untouched. Signed local DMG mounted suites PASS (native72/host10/
+  debugger28 plus selftest/supervisor/UI); not notarized.
+- Next action: task-owned commit/push and
+  isolated merge check. No physical-gesture/perceptual parity claim.
+- Known blockers: none; prior branch pushed at `feae97a`, unrelated main
+  checkout work remains untouched.
+
 ## Tab UX hardening continuation — 2026-11-06
 
 - Owner: ZCode, existing task branch `feat/netscape-gooey-debugger`, isolated
