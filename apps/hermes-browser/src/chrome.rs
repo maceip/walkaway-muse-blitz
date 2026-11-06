@@ -9,22 +9,25 @@
 //!      `#tab-close-N`, `#btn-newtab`), and right window zoom/shade boxes.
 //!   2. Fluted/ribbed horizontal pinstripe Aqua button bar (`48px`) with 3D glossy
 //!      Aqua Blue icons (`Back`, `Forward`, `Stop`, `Refresh`, `Home`, beaded
-//!      divider, `AutoFill`, `Print`, `Sherlock`) and the 3D Aqua `e` emblem on
-//!      the far right.
+//!      divider, `AutoFill`, `Print`, `Mail`, `Sherlock`) and the 3D Aqua `e`
+//!      emblem on the far right.
 //!   3. Full-height 3D cylindrical Aqua Blue `Address :` bar (`30px`) with `@`
 //!      swirl badge, sunken white URL input (`#address`), and `▸ go` button
 //!      (`#btn-go`) on the right.
 //!   4. Fluted/ribbed horizontal pinstripe Favorites bar (`24px`: `@ Web Gallery`,
 //!      `@ Office for Macintosh`, `@ Products for Mac`, `@ Microsoft Internet`,
-//!      plus Aqua `»` chevron on the right).
+//!      `@ Apple`, `@ Google`, `@ Developer Hub`, plus Aqua `»` chevron `#btn-fav-overflow`
+//!      on the right).
 //! - Left vertical Explorer Bar rail (`EXPLORER_RAIL_WIDTH = 36.0`) with
 //!   `#btn-collapse-toolbar` (3D Aqua Blue `◀|||` / `|||▶`) and five interlocking
 //!   angled folder tabs (`Favorites`, `History`, `Search`, `Scrapbook`,
 //!   `Page Holder`) with horizontal fluted pinstripes and 90°-rotated sideways
-//!   labels. When an Explorer Bar drawer (`EXPLORER_DRAWER_WIDTH = 280.0`) is open,
-//!   the drawer sits on the left (`x = 0..280`) and the vertical tab rail attaches
-//!   to the right edge of the drawer (`x = 280..316`), with the active tab
+//!   labels. When an Explorer Bar drawer (`EXPLORER_DRAWER_WIDTH = 286.0`) is open,
+//!   the drawer sits on the left (`x = 0..286`) and the vertical tab rail attaches
+//!   to the right edge of the drawer (`x = 286..322`), with the active tab
 //!   merging seamlessly into the drawer and highlighted in bold Aqua Blue.
+
+use std::fmt::Write;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Theme {
@@ -94,8 +97,6 @@ struct Palette {
     muted: &'static str,
     menu_bg: &'static str,
     separator: &'static str,
-    favicon_bg: &'static str,
-    favicon_ink: &'static str,
     accent: &'static str,
     aqua_badge: &'static str,
     rail_bg: &'static str,
@@ -104,8 +105,9 @@ struct Palette {
     drawer_header_bg: &'static str,
     brand_teal: &'static str,
     link_blue: &'static str,
-    rib_a: &'static str,
-    rib_b: &'static str,
+    rib_base: &'static str,
+    rib_hi: &'static str,
+    rib_lo: &'static str,
 }
 
 fn palette(theme: Theme) -> Palette {
@@ -113,28 +115,27 @@ fn palette(theme: Theme) -> Palette {
         Theme::Light => Palette {
             strip: "#D4D4D4",
             tab_active: "#F2F2F2",
-            nav: "#E8E8E8",
-            hairline: "#707070",
+            nav: "#E6E6E6",
+            hairline: "#555555",
             bevel_light: "#FFFFFF",
             bevel_dark: "#6A6A6A",
             pill: "#FFFFFF",
             pill_focus: "#FFFFFF",
             ink: "#111111",
-            muted: "#7D8B96",
+            muted: "#727E88",
             menu_bg: "#E6E6E6",
             separator: "#B0B0B0",
-            favicon_bg: "#2678B2",
-            favicon_ink: "#FFFFFF",
             accent: "#16689E",
             aqua_badge: "#2476AE",
             rail_bg: "#D8D8D8",
             rail_tab_bg: "#E6E6E6",
             drawer_bg: "#EAEAEA",
             drawer_header_bg: "#DEDEDE",
-            brand_teal: "#16689A",
+            brand_teal: "#146696",
             link_blue: "#0000EE",
-            rib_a: "#F3F3F3",
-            rib_b: "#DDDDDD",
+            rib_base: "#E6E6E6",
+            rib_hi: "#F7F7F7",
+            rib_lo: "#D2D2D2",
         },
         Theme::Dark => Palette {
             strip: "#1E1E20",
@@ -149,8 +150,6 @@ fn palette(theme: Theme) -> Palette {
             muted: "#7E8894",
             menu_bg: "#2C2C2E",
             separator: "#3A3A3C",
-            favicon_bg: "#2B6CB0",
-            favicon_ink: "#FFFFFF",
             accent: "#38A3F8",
             aqua_badge: "#1E5B88",
             rail_bg: "#222225",
@@ -159,8 +158,9 @@ fn palette(theme: Theme) -> Palette {
             drawer_header_bg: "#28282B",
             brand_teal: "#58B4F8",
             link_blue: "#5AC8FA",
-            rib_a: "#2A2A2E",
-            rib_b: "#212124",
+            rib_base: "#262629",
+            rib_hi: "#303034",
+            rib_lo: "#1D1D20",
         },
     }
 }
@@ -242,9 +242,100 @@ pub const CHROME_HEIGHT: f64 = 128.0;
 /// Width of the vertical IE5 Mac Explorer Bar folder-tab rail.
 pub const EXPLORER_RAIL_WIDTH: f64 = 36.0;
 /// Width of the collapsible Explorer Bar drawer panel when open.
-pub const EXPLORER_DRAWER_WIDTH: f64 = 280.0;
+pub const EXPLORER_DRAWER_WIDTH: f64 = 286.0;
 /// Height of the Page Holder drawer's top control header bar.
 pub const PH_HEADER_HEIGHT: f64 = 52.0;
+
+/// Generates an SVG with explicit horizontal fluted/ribbed Aqua pinstripe `<path>` lines
+/// (`anyrender_svg` renders `<path>` strokes directly without `<pattern>` fallback).
+fn ribbed_rect_svg(width: u32, height: u32, base: &str, hi: &str, lo: &str) -> String {
+    let mut hi_path = String::new();
+    let mut lo_path = String::new();
+    let mut y = 1u32;
+    while y < height {
+        let _ = write!(hi_path, "M0,{}.5 H{} ", y, width);
+        if y + 1 < height {
+            let _ = write!(lo_path, "M0,{}.5 H{} ", y + 1, width);
+        }
+        y += 3;
+    }
+    format!(
+        r##"<svg class="rib-bg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><rect width="{width}" height="{height}" fill="{base}"/><path d="{hi_path}" stroke="{hi}" stroke-width="1"/><path d="{lo_path}" stroke="{lo}" stroke-width="1"/></svg>"##
+    )
+}
+
+/// Generates an interlocking angled IE5 Mac Explorer Bar folder tab SVG (`34x96px`) with
+/// horizontal fluted/ribbed pinstripes inside inactive tabs, solid seamless drawer fill
+/// inside the active tab (`media_1794004131108_320b1153.jpg`), and `/` diagonal joints.
+fn folder_tab_svg(
+    first_tab: bool,
+    active: bool,
+    drawer_open: bool,
+    base: &str,
+    hi: &str,
+    lo: &str,
+    drawer_bg: &str,
+) -> String {
+    // Tab geometry: width = 34, height = 96.
+    // Top edge:
+    //   if first_tab: flat (0, 0) -> (33, 0)
+    //   else: diagonal `/` matching previous tab's bottom: (0, 14) -> (33, 0)
+    // Bottom edge: diagonal `/` (33, 82) -> (0, 96)
+    let fill_col = if active { drawer_bg } else { base };
+    let poly_pts = if first_tab {
+        "0,0 33,0 33,82 0,96"
+    } else {
+        "0,14 33,0 33,82 0,96"
+    };
+
+    let mut ribs = String::new();
+    // In Figure 6 (`media_1794004131108_320b1153.jpg`), inactive folder tabs have horizontal
+    // fluted ribs while the active tab has a smooth solid fill matching the open drawer.
+    if !active {
+        let mut y = 2u32;
+        while y < 95 {
+            let yf = y as f64;
+            let x_left = if !first_tab && yf < 14.0 {
+                ((14.0 - yf) * (33.0 / 14.0)).ceil() as u32
+            } else {
+                1
+            };
+            let x_right = if yf > 82.0 {
+                (((96.0 - yf) * (33.0 / 14.0)).floor() as u32).min(32)
+            } else {
+                32
+            };
+            if x_right > x_left + 1 {
+                let stroke_col = if (y / 2) % 2 == 0 { hi } else { lo };
+                let _ = write!(
+                    ribs,
+                    r#"<line x1="{x_left}" y1="{y}.5" x2="{x_right}" y2="{y}.5" stroke="{stroke_col}" stroke-width="1"/>"#
+                );
+            }
+            y += 2;
+        }
+    }
+
+    let left_border = if active && drawer_open {
+        // Active tab seamlessly joins the open drawer on its left with zero vertical seam
+        String::new()
+    } else {
+        let y_top = if first_tab { 0 } else { 14 };
+        format!(
+            r##"<line x1="0.5" y1="{y_top}" x2="0.5" y2="96" stroke="#333333" stroke-width="1.1"/><line x1="1.5" y1="{y_top}" x2="1.5" y2="95" stroke="#FFFFFF" stroke-width="1"/>"##
+        )
+    };
+
+    let top_border = if first_tab {
+        r##"<line x1="0" y1="0.5" x2="33" y2="0.5" stroke="#FFFFFF" stroke-width="1.2"/>"##
+    } else {
+        r##"<line x1="0" y1="14" x2="33" y2="0" stroke="#444444" stroke-width="1.3"/><line x1="1" y1="14.8" x2="32.5" y2="1.2" stroke="#FFFFFF" stroke-width="1.1"/>"##
+    };
+
+    format!(
+        r##"<svg class="exp-tab-bg" width="34" height="96" viewBox="0 0 34 96"><polygon points="{poly_pts}" fill="{fill_col}"/>{ribs}{top_border}{left_border}<line x1="33" y1="0" x2="33" y2="82" stroke="#444444" stroke-width="1.2"/><line x1="31.8" y1="1" x2="31.8" y2="81.5" stroke="#BDBDBD" stroke-width="0.9"/><line x1="0" y1="96" x2="33" y2="82" stroke="#444444" stroke-width="1.4"/></svg>"##
+    )
+}
 
 pub fn render(state: &ChromeState<'_>) -> String {
     let p = palette(state.theme);
@@ -287,29 +378,28 @@ pub fn render(state: &ChromeState<'_>) -> String {
         ""
     };
 
-    // Classic grey 3D `@` swirl icon used in Title bar, Address bar, and Favorites bar.
-    let at_swirl_svg = r##"<svg class="at-svg" width="15" height="15" viewBox="0 0 16 16"><defs><linearGradient id="atg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF"/><stop offset="100%" stop-color="#A8B0B8"/></linearGradient></defs><circle cx="8" cy="8" r="6.8" fill="url(#atg)" stroke="#555E68" stroke-width="1.2"/><text x="4.1" y="11.3" font-family="Geneva,Helvetica,Arial,sans-serif" font-size="9.5" font-weight="bold" fill="#222B34">@</text></svg>"##;
+    // Classic grey 3D `@` swirl icon using vector `<path>` curves (no `<text>` node so `anyrender_svg` renders the `@` swirl!).
+    let at_swirl_svg = r##"<svg class="at-svg" width="15" height="15" viewBox="0 0 16 16"><defs><linearGradient id="atg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF"/><stop offset="100%" stop-color="#A8B0B8"/></linearGradient></defs><circle cx="8" cy="8" r="6.8" fill="url(#atg)" stroke="#555E68" stroke-width="1.2"/><path d="M9.6,9.4 C9.1,10.0 8.4,10.3 7.6,10.3 C6.2,10.3 5.2,9.3 5.2,7.9 C5.2,6.5 6.3,5.4 7.7,5.4 C9.1,5.4 10.1,6.4 10.1,7.8 L10.1,9.2 C10.1,9.8 10.5,10.1 11.0,10.0 C11.8,9.7 12.3,8.8 12.3,7.7 C12.3,5.3 10.3,3.6 7.8,3.6 C5.2,3.6 3.3,5.5 3.3,8.0 C3.3,10.5 5.2,12.3 7.9,12.3 C9.0,12.3 10.0,12.0 10.7,11.5" fill="none" stroke="#26323E" stroke-width="1.25" stroke-linecap="round"/><circle cx="7.7" cy="7.9" r="1.4" fill="none" stroke="#26323E" stroke-width="1.2"/></svg>"##;
 
     let mut tabs = String::new();
     for (index, tab) in state.tabs.iter().enumerate() {
         let class = if tab.active { "tab tab-active" } else { "tab" };
-        let letter = first_letter(tab.title);
         tabs.push_str(&format!(
             r#"<div class="{class}" id="tab-{index}">
-                 <div class="favicon">{letter}</div>
+                 {at_swirl_svg}
                  <div class="tab-title">{title}</div>
                  <div class="tab-close" id="tab-close-{index}">&#215;</div>
                </div>"#,
             class = class,
             index = index,
-            letter = letter,
+            at_swirl_svg = at_swirl_svg,
             title = escape_html(tab.title),
         ));
     }
 
     // Horizontal Favorites Bar items rendered directly from `state.favorites`
     let mut fav_strip_items = String::new();
-    for (i, fav) in state.favorites.iter().take(5).enumerate() {
+    for (i, fav) in state.favorites.iter().take(7).enumerate() {
         fav_strip_items.push_str(&format!(
             r#"<div class="fav-pill" id="fav-bar-{i}" data-url="{url}">{at_swirl_svg}<span class="fav-pill-text">{title}</span></div>"#,
             i = i,
@@ -321,19 +411,10 @@ pub fn render(state: &ChromeState<'_>) -> String {
 
     let secure_attr = if state.secure { "https" } else { "http" };
 
-    // Fluted / ribbed horizontal pinstripe SVG background for the 48px Aqua button bar
-    let nav_rib_bg = format!(
-        r##"<svg class="rib-bg" width="2400" height="48" viewBox="0 0 2400 48"><defs><pattern id="navrib" width="16" height="4" patternUnits="userSpaceOnUse"><rect width="16" height="2" fill="{rib_a}"/><rect y="2" width="16" height="2" fill="{rib_b}"/></pattern></defs><rect width="2400" height="48" fill="url(#navrib)"/></svg>"##,
-        rib_a = p.rib_a,
-        rib_b = p.rib_b,
-    );
-
-    // Fluted / ribbed horizontal pinstripe SVG background for the 24px Favorites bar
-    let fav_rib_bg = format!(
-        r##"<svg class="rib-bg" width="2400" height="24" viewBox="0 0 2400 24"><defs><pattern id="favrib" width="16" height="4" patternUnits="userSpaceOnUse"><rect width="16" height="2" fill="{rib_a}"/><rect y="2" width="16" height="2" fill="{rib_b}"/></pattern></defs><rect width="2400" height="24" fill="url(#favrib)"/></svg>"##,
-        rib_a = p.rib_a,
-        rib_b = p.rib_b,
-    );
+    // Fluted / ribbed horizontal pinstripe SVG backgrounds
+    let nav_rib_bg = ribbed_rect_svg(2400, 48, p.rib_base, p.rib_hi, p.rib_lo);
+    let fav_rib_bg = ribbed_rect_svg(2400, 24, p.rib_base, p.rib_hi, p.rib_lo);
+    let status_rib_bg = ribbed_rect_svg(2400, 19, p.rib_base, p.rib_hi, p.rib_lo);
 
     // 3D Cylindrical Aqua Blue tube SVG background for the 30px Address bar row
     let addr_aqua_tube_bg = r##"<svg class="rib-bg" width="2400" height="30" viewBox="0 0 2400 30"><defs><linearGradient id="aquatube" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0E3958"/><stop offset="18%" stop-color="#2D80B5"/><stop offset="42%" stop-color="#76CBF7"/><stop offset="56%" stop-color="#48A2DA"/><stop offset="84%" stop-color="#175885"/><stop offset="100%" stop-color="#09263B"/></linearGradient></defs><rect width="2400" height="30" fill="url(#aquatube)"/><line x1="0" y1="0.5" x2="2400" y2="0.5" stroke="#051826" stroke-width="1"/><line x1="0" y1="29.5" x2="2400" y2="29.5" stroke="#051826" stroke-width="1"/></svg>"##;
@@ -365,10 +446,12 @@ pub fn render(state: &ChromeState<'_>) -> String {
 
     let print_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="apr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#82D6FF"/><stop offset="48%" stop-color="#1B80C0"/><stop offset="100%" stop-color="#0A3F66"/></linearGradient></defs><rect x="8" y="2" width="12" height="7" fill="#FFFFFF" stroke="#4A6478" stroke-width="1.1"/><rect x="4" y="8" width="20" height="10" rx="2.5" fill="url(#apr)" stroke="#083659" stroke-width="1.2"/><rect x="6.5" y="9.5" width="15" height="2.2" rx="1" fill="#C8EEFF" fill-opacity="0.75"/><rect x="7" y="15" width="14" height="6.5" fill="#FFFFFF" stroke="#4A6478" stroke-width="1.1"/><line x1="9.5" y1="18" x2="18.5" y2="18" stroke="#246A9E" stroke-width="1.2"/></svg>"##;
 
+    let mail_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="aml" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F8FCFF"/><stop offset="100%" stop-color="#B8D4E8"/></linearGradient></defs><rect x="4" y="5" width="20" height="14" rx="1.5" fill="url(#aml)" stroke="#185A88" stroke-width="1.2"/><polyline points="4.5,5.5 14,13 23.5,5.5" fill="none" stroke="#185A88" stroke-width="1.2"/><rect x="18.5" y="7" width="3" height="3" fill="#2288CC"/></svg>"##;
+
     let sherlock_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="ash" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#9BE2FF"/><stop offset="50%" stop-color="#1D84C6"/><stop offset="100%" stop-color="#0A3F66"/></linearGradient></defs><line x1="14" y1="13" x2="6" y2="21" stroke="#1E293B" stroke-width="3.4" stroke-linecap="round"/><circle cx="16.5" cy="9.5" r="6.5" fill="url(#ash)" stroke="#08385C" stroke-width="1.4"/><ellipse cx="14.8" cy="7.2" rx="3.2" ry="2" fill="#DDF6FF" fill-opacity="0.8"/></svg>"##;
 
-    // 3D Glossy Aqua Blue `e` emblem on the far right of the toolbar (`media_1794004131120_b4ecd3e6.jpg`)
-    let ie_aqua_emblem_svg = r##"<svg width="34" height="34" viewBox="0 0 34 34"><defs><radialGradient id="ieorb" cx="35%" cy="30%" r="70%"><stop offset="0%" stop-color="#B8ECFF"/><stop offset="45%" stop-color="#2894D8"/><stop offset="100%" stop-color="#0B4268"/></radialGradient></defs><ellipse cx="17" cy="17" rx="15" ry="9" transform="rotate(-24 17 17)" fill="none" stroke="#58B8F0" stroke-width="2.2"/><circle cx="17" cy="17" r="12" fill="url(#ieorb)" stroke="#083659" stroke-width="1.2"/><text x="10.5" y="23.5" font-family="Georgia,serif" font-size="21" font-weight="bold" fill="#FFFFFF">e</text></svg>"##;
+    // 3D Glossy Aqua Blue `e` emblem on the far right of the toolbar using vector `<path>` for the `e`
+    let ie_aqua_emblem_svg = r##"<svg width="36" height="36" viewBox="0 0 36 36"><defs><radialGradient id="ieorb" cx="35%" cy="30%" r="70%"><stop offset="0%" stop-color="#C4F0FF"/><stop offset="45%" stop-color="#2290D6"/><stop offset="100%" stop-color="#093D63"/></radialGradient></defs><ellipse cx="18" cy="18" rx="16" ry="9.5" transform="rotate(-24 18 18)" fill="none" stroke="#68C4F8" stroke-width="2.2"/><circle cx="18" cy="18" r="12.5" fill="url(#ieorb)" stroke="#073252" stroke-width="1.3"/><path d="M22.5,17.2 C22.5,14.0 20.4,11.8 17.6,11.8 C14.6,11.8 12.5,14.2 12.5,17.5 C12.5,20.8 14.7,23.2 17.9,23.2 C19.8,23.2 21.4,22.4 22.3,21.0 M13.2,16.8 L22.2,16.8" fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round"/></svg>"##;
 
     let beaded_sep_svg = r##"<svg class="nav-sep-svg" width="6" height="38" viewBox="0 0 6 38"><circle cx="3" cy="3" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="7" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="11" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="15" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="19" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="23" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="27" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="31" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="35" r="1.1" fill="#6E6E6E"/></svg>"##;
 
@@ -419,6 +502,10 @@ pub fn render(state: &ChromeState<'_>) -> String {
                    {print_icon_svg}
                    <div class="btn-lbl">Print</div>
                  </div>
+                 <div class="btn" id="btn-mail">
+                   {mail_icon_svg}
+                   <div class="btn-lbl">Mail</div>
+                 </div>
                  <div class="btn" id="btn-menu">
                    {sherlock_icon_svg}
                    <div class="btn-lbl">Sherlock</div>
@@ -434,14 +521,14 @@ pub fn render(state: &ChromeState<'_>) -> String {
                    {caret}
                  </div>
                  <div class="go-btn" id="btn-go">
-                   <span class="go-tri">&#9656;</span>
+                   <svg width="8" height="10" viewBox="0 0 8 10"><polygon points="1,1 7,5 1,9" fill="#FFFFFF"/></svg>
                    <span class="go-lbl">go</span>
                  </div>
                </div>
                <div class="favbar">
                  {fav_rib_bg}
                  {fav_strip_items}
-                 <div class="fav-chevron">&#187;</div>
+                 <div class="fav-chevron" id="btn-fav-overflow">&#187;</div>
                </div>"##,
             grip_ridges_left_svg = grip_ridges_left_svg,
             grip_ridges_right_svg = grip_ridges_right_svg,
@@ -458,6 +545,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
             beaded_sep_svg = beaded_sep_svg,
             autofill_icon_svg = autofill_icon_svg,
             print_icon_svg = print_icon_svg,
+            mail_icon_svg = mail_icon_svg,
             sherlock_icon_svg = sherlock_icon_svg,
             ie_aqua_emblem_svg = ie_aqua_emblem_svg,
             addr_aqua_tube_bg = addr_aqua_tube_bg,
@@ -518,29 +606,58 @@ pub fn render(state: &ChromeState<'_>) -> String {
     let scrp_cls = exp_tab_class(state.explorer_tab == Some(ExplorerTab::Scrapbook));
     let ph_cls = exp_tab_class(state.explorer_tab == Some(ExplorerTab::PageHolder));
 
-    // Interlocking vertical folder tabs with horizontal fluted/ribbed pinstripes and `/` diagonal joints
-    let tab_svg_inactive = format!(
-        r##"<svg class="exp-tab-bg" width="34" height="90" viewBox="0 0 34 90"><defs><pattern id="tabrib" width="12" height="4" patternUnits="userSpaceOnUse"><rect width="12" height="2" fill="{rib_a}"/><rect y="2" width="12" height="2" fill="{rib_b}"/></pattern></defs><polygon points="0,0 33,0 33,76 0,90" fill="url(#tabrib)"/><line x1="0.5" y1="0" x2="0.5" y2="90" stroke="#555555" stroke-width="1"/><line x1="1.5" y1="1" x2="1.5" y2="89" stroke="#FFFFFF" stroke-width="1"/><line x1="33" y1="0" x2="33" y2="76" stroke="#4A4A4A" stroke-width="1.2"/><line x1="0" y1="90" x2="33" y2="76" stroke="#4A4A4A" stroke-width="1.4"/><line x1="0" y1="88.5" x2="32.5" y2="74.5" stroke="#FFFFFF" stroke-width="1"/></svg>"##,
-        rib_a = p.rib_a,
-        rib_b = p.rib_b,
+    let fav_bg = folder_tab_svg(
+        true,
+        state.explorer_tab == Some(ExplorerTab::Favorites),
+        drawer_open,
+        p.rib_base,
+        p.rib_hi,
+        p.rib_lo,
+        p.drawer_bg,
     );
-    // Active tab merges seamlessly with the open drawer on its left (no left border line, solid drawer background fill, bold Aqua Blue text)
-    let tab_svg_active = format!(
-        r##"<svg class="exp-tab-bg" width="34" height="90" viewBox="0 0 34 90"><polygon points="0,0 33,0 33,76 0,90" fill="{drawer_bg}"/><line x1="0" y1="1" x2="33" y2="1" stroke="#FFFFFF" stroke-width="1.4"/><line x1="33" y1="0" x2="33" y2="76" stroke="#4A4A4A" stroke-width="1.3"/><line x1="0" y1="90" x2="33" y2="76" stroke="#4A4A4A" stroke-width="1.5"/></svg>"##,
-        drawer_bg = p.drawer_bg,
+    let hist_bg = folder_tab_svg(
+        false,
+        state.explorer_tab == Some(ExplorerTab::History),
+        drawer_open,
+        p.rib_base,
+        p.rib_hi,
+        p.rib_lo,
+        p.drawer_bg,
+    );
+    let srch_bg = folder_tab_svg(
+        false,
+        state.explorer_tab == Some(ExplorerTab::Search),
+        drawer_open,
+        p.rib_base,
+        p.rib_hi,
+        p.rib_lo,
+        p.drawer_bg,
+    );
+    let scrp_bg = folder_tab_svg(
+        false,
+        state.explorer_tab == Some(ExplorerTab::Scrapbook),
+        drawer_open,
+        p.rib_base,
+        p.rib_hi,
+        p.rib_lo,
+        p.drawer_bg,
+    );
+    let ph_bg = folder_tab_svg(
+        false,
+        state.explorer_tab == Some(ExplorerTab::PageHolder),
+        drawer_open,
+        p.rib_base,
+        p.rib_hi,
+        p.rib_lo,
+        p.drawer_bg,
     );
 
-    let fav_bg = if state.explorer_tab == Some(ExplorerTab::Favorites) { &tab_svg_active } else { &tab_svg_inactive };
-    let hist_bg = if state.explorer_tab == Some(ExplorerTab::History) { &tab_svg_active } else { &tab_svg_inactive };
-    let srch_bg = if state.explorer_tab == Some(ExplorerTab::Search) { &tab_svg_active } else { &tab_svg_inactive };
-    let scrp_bg = if state.explorer_tab == Some(ExplorerTab::Scrapbook) { &tab_svg_active } else { &tab_svg_inactive };
-    let ph_bg = if state.explorer_tab == Some(ExplorerTab::PageHolder) { &tab_svg_active } else { &tab_svg_inactive };
-
-    let rail_rib_bg = format!(
-        r##"<svg class="rib-bg" width="36" height="1600" viewBox="0 0 36 1600"><defs><pattern id="railrib" width="12" height="4" patternUnits="userSpaceOnUse"><rect width="12" height="2" fill="{rib_a}"/><rect y="2" width="12" height="2" fill="{rib_b}"/></pattern></defs><rect width="36" height="1600" fill="url(#railrib)"/></svg>"##,
-        rib_a = p.rib_a,
-        rib_b = p.rib_b,
-    );
+    let rail_rib_bg = ribbed_rect_svg(36, 1200, p.rib_base, p.rib_hi, p.rib_lo);
+    let rail_bottom_border_cls = if drawer_open {
+        "rail-globe rail-globe-bordered"
+    } else {
+        "rail-globe"
+    };
 
     let explorer_rail = format!(
         r##"<div class="exp-rail" id="exp-rail" style="top:{top_chrome_h:.1}px;left:{rail_left_x:.1}px;">
@@ -552,7 +669,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
              <div class="{srch_cls}" id="exp-search">{srch_bg}<div class="exp-tab-label">Search</div></div>
              <div class="{scrp_cls}" id="exp-scrapbook">{scrp_bg}<div class="exp-tab-label">Scrapbook</div></div>
              <div class="{ph_cls}" id="exp-pageholder">{ph_bg}<div class="exp-tab-label">Page Holder</div></div>
-             <div class="rail-globe">
+             <div class="{rail_bottom_border_cls}">
                <svg width="18" height="18" viewBox="0 0 18 18"><defs><radialGradient id="glbg" cx="35%" cy="30%" r="65%"><stop offset="0%" stop-color="#A6E8FF"/><stop offset="50%" stop-color="#1E82C4"/><stop offset="100%" stop-color="#093658"/></radialGradient></defs><circle cx="9" cy="9" r="7" fill="url(#glbg)" stroke="#072842" stroke-width="1.2"/><ellipse cx="9" cy="9" rx="3.5" ry="7" fill="none" stroke="#B5E6FF" stroke-width="0.9"/><line x1="2" y1="9" x2="16" y2="9" stroke="#B5E6FF" stroke-width="0.9"/></svg>
              </div>
            </div>"##,
@@ -560,6 +677,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
 
     // Camera-and-page icon used for Scrapbook entries (PDF Page 1 Figure 6).
     let sb_doc_icon = r##"<svg width="18" height="15" viewBox="0 0 18 15"><rect x="1" y="2.5" width="11" height="10" rx="1.8" fill="#7A8B99" stroke="#2F3E4C" stroke-width="1.1"/><circle cx="6.5" cy="7.5" r="2.6" fill="#D9E6F2" stroke="#2F3E4C" stroke-width="1"/><rect x="10" y="1" width="7" height="12.5" fill="#FFFFFF" stroke="#4A5568" stroke-width="1"/><line x1="11.5" y1="4.5" x2="15" y2="4.5" stroke="#286090" stroke-width="1"/><line x1="11.5" y1="7.5" x2="15" y2="7.5" stroke="#718096" stroke-width="1"/></svg>"##;
+    let link_tri_svg = r##"<svg class="ph-tri-svg" width="8" height="10" viewBox="0 0 8 10"><polygon points="1,1 7,5 1,9" fill="#146696"/></svg>"##;
+    let btn_tri_svg = r##"<svg class="ph-tri-svg" width="6" height="8" viewBox="0 0 6 8"><polygon points="1,1 5,4 1,7" fill="#111111"/></svg>"##;
 
     let explorer_drawer = match state.explorer_tab {
         None => String::new(),
@@ -579,16 +698,17 @@ pub fn render(state: &ChromeState<'_>) -> String {
                     for (i, link) in state.page_holder.links.iter().enumerate() {
                         rows.push_str(&format!(
                             r#"<div class="ph-link-row" id="ph-link-{i}" data-href="{url}">
-                                 <span class="ph-tri">&#9656;</span>
+                                 {link_tri_svg}
                                  <span class="ph-link-text">{label}</span>
                                </div>"#,
                             i = i,
                             url = escape_html(link.url),
+                            link_tri_svg = link_tri_svg,
                             label = escape_html(link.label),
                         ));
                     }
                 }
-                format!(r#"<div class="drawer-body" id="ph-links-list">{rows}</div>"#)
+                format!(r#"<div class="drawer-body drawer-body-white" id="ph-links-list">{rows}</div>"#)
             } else if state.page_holder.has_doc {
                 // Transparent body so the live `page_holder_doc` painted in its clipped Vello layer underneath shows through.
                 r#"<div class="drawer-body-transparent" id="ph-canvas"></div>"#.to_string()
@@ -639,13 +759,14 @@ pub fn render(state: &ChromeState<'_>) -> String {
                     if item.is_folder {
                         rows.push_str(&format!(
                             r#"<div class="{cls}" id="sb-entry-{i}" data-sb-id="{id}" data-ts="{ts}">
-                                 <span class="ph-tri">&#9662;</span>
+                                 {link_tri_svg}
                                  <span class="sb-row-title">{title}</span>
                                </div>"#,
                             cls = cls,
                             i = i,
                             id = escape_html(item.id),
                             ts = escape_html(item.timestamp),
+                            link_tri_svg = link_tri_svg,
                             title = escape_html(item.title),
                         ));
                     } else {
@@ -671,7 +792,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
                        <div class="drawer-brand"><div>Internet</div><div>Scrapbook</div></div>
                        <div class="mac-btn" id="sb-add">Add</div>
                        <div class="{delete_btn_cls}" id="sb-delete">Delete</div>
-                       <div class="mac-btn" id="sb-organize">Organize &#9656;</div>
+                       <div class="mac-btn" id="sb-organize"><span>Organize</span>{btn_tri_svg}</div>
                      </div>
                      <div class="drawer-subbar"></div>
                      <div class="drawer-body" id="sb-list">{rows}</div>
@@ -741,17 +862,17 @@ pub fn render(state: &ChromeState<'_>) -> String {
                        <div class="mac-btn" id="exp-search-focus">Address</div>
                      </div>
                      <div class="drawer-subbar"></div>
-                     <div class="drawer-body" id="search-list">
+                     <div class="drawer-body drawer-body-white" id="search-list">
                        <div class="ph-link-row" id="search-item-0">
-                         <span class="ph-tri">&#9656;</span>
+                         {link_tri_svg}
                          <span class="ph-link-text">DuckDuckGo Lite</span>
                        </div>
                        <div class="ph-link-row" id="search-item-1">
-                         <span class="ph-tri">&#9656;</span>
+                         {link_tri_svg}
                          <span class="ph-link-text">Wikipedia Encyclopedia</span>
                        </div>
                        <div class="ph-link-row" id="search-item-2">
-                         <span class="ph-tri">&#9656;</span>
+                         {link_tri_svg}
                          <span class="ph-link-text">AOL Portal</span>
                        </div>
                      </div>
@@ -760,23 +881,26 @@ pub fn render(state: &ChromeState<'_>) -> String {
         }
     };
 
-    // Classic IE5 Mac Bottom Aqua Horizontal Scrollbar + "Internet zone" Status Bar (`media_1794004131111_bc216b24.jpg`)
+    // Classic IE5 Mac Bottom Aqua Horizontal Scrollbar + "Internet zone" Status Bar + Right Vertical Aqua Scrollbar (`media_1794004131120_b4ecd3e6.jpg`)
     let bottom_aqua_bar = format!(
-        r##"<div class="aqua-bottom-wrap" style="left:{content_x:.1}px;">
+        r##"<div class="aqua-vscroll" style="top:{top_chrome_h:.1}px;">
+             <svg width="15" height="1200" viewBox="0 0 15 1200"><defs><linearGradient id="aqvth" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#14649C"/><stop offset="35%" stop-color="#7AD4FF"/><stop offset="75%" stop-color="#228ED2"/><stop offset="100%" stop-color="#0B436B"/></linearGradient></defs><rect width="15" height="1200" fill="#EAEAEA"/><line x1="0.5" y1="0" x2="0.5" y2="1200" stroke="#7A7A7A" stroke-width="1"/><rect x="1" y="1" width="13" height="36" rx="2" fill="url(#aqvth)" stroke="#083252" stroke-width="1"/><line x1="4" y1="15" x2="11" y2="15" stroke="#083252" stroke-width="1"/><line x1="4" y1="18" x2="11" y2="18" stroke="#083252" stroke-width="1"/><line x1="4" y1="21" x2="11" y2="21" stroke="#083252" stroke-width="1"/></svg>
+           </div>
+           <div class="aqua-bottom-wrap" style="left:{content_x:.1}px;">
              <div class="aqua-hscroll">
                <svg class="rib-bg" width="2400" height="15" viewBox="0 0 2400 15"><defs><linearGradient id="aqscr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#14649C"/><stop offset="30%" stop-color="#42B0ED"/><stop offset="55%" stop-color="#7AD4FF"/><stop offset="85%" stop-color="#1D84C6"/><stop offset="100%" stop-color="#0D4B78"/></linearGradient></defs><rect width="2400" height="15" fill="url(#aqscr)"/><line x1="0" y1="0.5" x2="2400" y2="0.5" stroke="#083252" stroke-width="1"/><line x1="0" y1="14.5" x2="2400" y2="14.5" stroke="#083252" stroke-width="1"/></svg>
              </div>
              <div class="aqua-statusbar">
-               <svg class="rib-bg" width="2400" height="19" viewBox="0 0 2400 19"><defs><pattern id="strib" width="16" height="4" patternUnits="userSpaceOnUse"><rect width="16" height="2" fill="{rib_a}"/><rect y="2" width="16" height="2" fill="{rib_b}"/></pattern></defs><rect width="2400" height="19" fill="url(#strib)"/></svg>
+               {status_rib_bg}
                <div class="status-zone">
                  <svg width="13" height="13" viewBox="0 0 18 18"><defs><radialGradient id="glbs" cx="35%" cy="30%" r="65%"><stop offset="0%" stop-color="#A6E8FF"/><stop offset="50%" stop-color="#1E82C4"/><stop offset="100%" stop-color="#093658"/></radialGradient></defs><circle cx="9" cy="9" r="7" fill="url(#glbs)" stroke="#072842" stroke-width="1.2"/></svg>
                  <span>Internet zone</span>
                </div>
              </div>
            </div>"##,
+        top_chrome_h = top_chrome_h,
         content_x = content_x,
-        rib_a = p.rib_a,
-        rib_b = p.rib_b,
+        status_rib_bg = status_rib_bg,
     );
 
     let supbar = match &state.supervision {
@@ -886,17 +1010,20 @@ pub fn render(state: &ChromeState<'_>) -> String {
     };
 
     let menu = if state.menu_open {
-        r#"<div class="menu" id="menu">
-             <div class="menu-item" id="menu-home">Home</div>
-             <div class="menu-item" id="menu-reload">Reload</div>
-             <div class="menu-sep"></div>
-             <div class="menu-item" id="menu-back">Back</div>
-             <div class="menu-item" id="menu-forward">Forward</div>
-             <div class="menu-sep"></div>
-             <div class="menu-item" id="menu-close-tab">Close tab</div>
-           </div>"#
+        format!(
+            r#"<div class="menu" id="menu">
+                 <div class="menu-item" id="menu-home">{at_swirl_svg}<span>Home</span></div>
+                 <div class="menu-item" id="menu-reload">{at_swirl_svg}<span>Reload</span></div>
+                 <div class="menu-sep"></div>
+                 <div class="menu-item" id="menu-back">{at_swirl_svg}<span>Back</span></div>
+                 <div class="menu-item" id="menu-forward">{at_swirl_svg}<span>Forward</span></div>
+                 <div class="menu-sep"></div>
+                 <div class="menu-item" id="menu-close-tab">{at_swirl_svg}<span>Close tab</span></div>
+               </div>"#,
+            at_swirl_svg = at_swirl_svg,
+        )
     } else {
-        ""
+        String::new()
     };
 
     format!(
@@ -917,7 +1044,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
     left: 0;
     pointer-events: none;
   }}
-  .at-svg {{
+  .at-svg, .ph-tri-svg {{
     flex-shrink: 0;
     pointer-events: none;
   }}
@@ -984,19 +1111,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
     background-color: {tab_active};
     border-bottom: 1px solid {tab_active};
   }}
-  .favicon {{
-    width: 14px;
-    height: 14px;
-    border-radius: 7px;
-    background-color: {favicon_bg};
-    color: {favicon_ink};
-    font-size: 9px;
-    font-weight: 700;
-    text-align: center;
-    line-height: 14px;
-    flex-shrink: 0;
-    pointer-events: none;
-  }}
   .tab-title {{
     flex: 1;
     white-space: nowrap;
@@ -1038,19 +1152,19 @@ pub fn render(state: &ChromeState<'_>) -> String {
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 0 16px;
-    gap: 10px;
+    padding: 0 18px;
+    gap: 12px;
     overflow: hidden;
   }}
   .btn {{
     position: relative;
-    min-width: 68px;
+    min-width: 72px;
     height: 42px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 2px 8px;
+    padding: 2px 10px;
     color: {ink};
     gap: 2px;
   }}
@@ -1156,13 +1270,13 @@ pub fn render(state: &ChromeState<'_>) -> String {
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    gap: 4px;
+    gap: 5px;
     margin-left: 4px;
     color: #FFFFFF;
     font-size: 12.5px;
     font-weight: 700;
   }}
-  .go-tri, .go-lbl {{
+  .go-btn svg, .go-lbl {{
     pointer-events: none;
   }}
 
@@ -1200,11 +1314,11 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .fav-chevron {{
     position: relative;
     margin-left: auto;
+    padding: 0 4px;
     color: {brand_teal};
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 800;
     line-height: 20px;
-    pointer-events: none;
   }}
 
   /* ---- Left Vertical Explorer Bar Rail (36px wide, Sideways Folder Tabs) ---- */
@@ -1227,7 +1341,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
     height: 26px;
     background-color: {rail_tab_bg};
     border-top: 1px solid {bevel_light};
-    border-left: 1px solid {bevel_light};
+    border-left: 1px solid #333333;
     border-right: 1px solid {bevel_dark};
     border-bottom: 1px solid {bevel_dark};
     display: flex;
@@ -1244,7 +1358,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
     height: 28px;
     background-color: {rail_tab_bg};
     border-top: 1px solid {bevel_light};
-    border-left: 1px solid {bevel_light};
+    border-left: 1px solid #333333;
     border-right: 1px solid {bevel_dark};
     border-bottom: 1px solid {bevel_dark};
     display: flex;
@@ -1263,12 +1377,13 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .exp-tab {{
     position: relative;
     width: 34px;
-    height: 90px;
+    height: 96px;
     display: flex;
     align-items: center;
     justify-content: center;
     color: {ink};
-    margin-bottom: -12px;
+    margin-bottom: -14px;
+    padding-bottom: 4px;
   }}
   .exp-tab-active {{
     color: {brand_teal};
@@ -1278,12 +1393,12 @@ pub fn render(state: &ChromeState<'_>) -> String {
     top: 0;
     left: 0;
     width: 34px;
-    height: 90px;
+    height: 96px;
     pointer-events: none;
   }}
   .exp-tab-label {{
     position: relative;
-    width: 82px;
+    width: 86px;
     height: 18px;
     font-size: 11.5px;
     font-weight: 700;
@@ -1295,23 +1410,24 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
   .rail-globe {{
     position: relative;
-    margin-top: auto;
-    margin-bottom: 6px;
-    margin-left: 5px;
-    width: 24px;
-    height: 24px;
+    flex: 1;
+    width: 34px;
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: center;
+    padding-bottom: 8px;
     pointer-events: none;
   }}
+  .rail-globe-bordered {{
+    border-left: 1px solid #333333;
+  }}
 
-  /* ---- Explorer Bar Collapsible Drawer (280px wide, left of the vertical tab rail) ---- */
+  /* ---- Explorer Bar Collapsible Drawer (286px wide, left of the vertical tab rail) ---- */
   .exp-drawer {{
     position: absolute;
     left: 0;
     bottom: 0;
-    width: 280px;
+    width: 286px;
     background-color: {drawer_bg};
     border-left: 4px solid {rail_bg};
     border-top: 4px solid {rail_bg};
@@ -1331,12 +1447,12 @@ pub fn render(state: &ChromeState<'_>) -> String {
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 0 10px;
-    gap: 7px;
+    padding: 0 8px;
+    gap: 5px;
   }}
   .drawer-brand {{
     color: {brand_teal};
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 700;
     line-height: 13px;
     margin-right: auto;
@@ -1345,21 +1461,30 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .drawer-subbar {{
     height: 4px;
     background-color: {rail_bg};
+    border-left: 1px solid #333333;
+    border-right: 1px solid #333333;
     border-bottom: 1px solid {bevel_dark};
   }}
   .mac-btn {{
-    height: 24px;
-    padding: 0 10px;
+    height: 23px;
+    padding: 0 8px;
     background-color: {nav};
     border-top: 1px solid {bevel_light};
     border-left: 1px solid {bevel_light};
     border-right: 1.5px solid #222222;
     border-bottom: 1.5px solid #222222;
     color: {ink};
-    font-size: 11.5px;
+    font-size: 11px;
     font-weight: 600;
-    line-height: 21px;
+    line-height: 20px;
     white-space: nowrap;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+  }}
+  .mac-btn span {{
+    pointer-events: none;
   }}
   .mac-btn-active {{
     background-color: #B8D6EC;
@@ -1377,10 +1502,17 @@ pub fn render(state: &ChromeState<'_>) -> String {
     flex: 1;
     background-color: {drawer_bg};
     border-left: 1px solid #333333;
-    border-right: 1px solid #333333;
     overflow: hidden;
     display: flex;
     flex-direction: column;
+  }}
+  .drawer-body-white {{
+    background-color: #FFFFFF;
+    margin-right: 4px;
+    margin-bottom: 4px;
+    border-top: 1px solid #555555;
+    border-right: 1px solid #555555;
+    border-bottom: 1px solid #555555;
   }}
   .drawer-body-transparent {{
     flex: 1;
@@ -1396,20 +1528,12 @@ pub fn render(state: &ChromeState<'_>) -> String {
   /* ---- Page Holder Links View Rows (PDF Page 2 Right) ---- */
   .ph-link-row {{
     min-height: 24px;
-    padding: 3px 10px;
+    padding: 3px 12px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     background-color: #FFFFFF;
-    border-bottom: 1px solid #EAEAEA;
-  }}
-  .ph-tri {{
-    color: #16689A;
-    font-size: 11px;
-    line-height: 18px;
-    flex-shrink: 0;
-    pointer-events: none;
   }}
   .ph-link-text {{
     color: {link_blue};
@@ -1454,7 +1578,15 @@ pub fn render(state: &ChromeState<'_>) -> String {
     pointer-events: none;
   }}
 
-  /* ---- Bottom Aqua Blue Scrollbar + Internet zone Status Bar ---- */
+  /* ---- Right Vertical Scrollbar + Bottom Aqua Blue Scrollbar + Internet zone Status Bar ---- */
+  .aqua-vscroll {{
+    position: absolute;
+    right: 0;
+    bottom: 34px;
+    width: 15px;
+    overflow: hidden;
+    pointer-events: none;
+  }}
   .aqua-bottom-wrap {{
     position: absolute;
     right: 0;
@@ -1500,19 +1632,30 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
   .menu {{
     position: absolute;
-    top: 76px;
-    left: 520px;
-    width: 170px;
+    top: 126px;
+    right: 8px;
+    width: 210px;
     background-color: {menu_bg};
-    border: 1px solid {hairline};
-    padding: 4px;
+    border-top: 1px solid {bevel_light};
+    border-left: 1px solid {bevel_light};
+    border-right: 1.5px solid #222222;
+    border-bottom: 1.5px solid #222222;
+    padding: 6px 8px;
   }}
   .menu-item {{
     height: 24px;
-    padding: 0 10px;
+    padding: 0 6px;
     font-size: 12px;
+    font-weight: 600;
     line-height: 24px;
     color: {ink};
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }}
+  .menu-item span {{
+    pointer-events: none;
   }}
   .menu-sep {{
     height: 1px;
@@ -1662,8 +1805,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
         muted = p.muted,
         menu_bg = p.menu_bg,
         separator = p.separator,
-        favicon_bg = p.favicon_bg,
-        favicon_ink = p.favicon_ink,
         accent = p.accent,
         aqua_badge = p.aqua_badge,
         rail_bg = p.rail_bg,
@@ -1699,14 +1840,6 @@ fn exp_tab_class(active: bool) -> &'static str {
     } else {
         "exp-tab"
     }
-}
-
-fn first_letter(s: &str) -> String {
-    s.chars()
-        .find(|c| c.is_alphanumeric())
-        .and_then(|c| c.to_uppercase().next())
-        .unwrap_or('M')
-        .to_string()
 }
 
 fn escape_html(s: &str) -> String {

@@ -1042,10 +1042,13 @@ impl BrowserApp {
             Some(0)
         };
         let favorites = vec![
-            ("Start Page".to_string(), START_URL.to_string()),
-            ("AOL Portal".to_string(), "https://aol.com/".to_string()),
-            ("Wikipedia".to_string(), "https://en.wikipedia.org/".to_string()),
-            ("DuckDuckGo".to_string(), "https://lite.duckduckgo.com/lite/".to_string()),
+            ("Web Gallery".to_string(), "https://www.apple.com/".to_string()),
+            ("Office for Macintosh".to_string(), "https://www.microsoft.com/".to_string()),
+            ("Products for Mac".to_string(), "https://en.wikipedia.org/".to_string()),
+            ("Microsoft Internet".to_string(), "https://www.aol.com/".to_string()),
+            ("Apple".to_string(), "https://www.apple.com/mac/".to_string()),
+            ("Google".to_string(), "https://www.google.com/".to_string()),
+            ("Developer Hub".to_string(), "https://lite.duckduckgo.com/lite/".to_string()),
         ];
         let mut app = Self {
             window: None,
@@ -4246,7 +4249,7 @@ impl BrowserApp {
         }
         if id_is("ph-canvas") {
             let top_h = self.top_chrome_height() as f32;
-            let local_x = x - EXPLORER_RAIL_WIDTH as f32;
+            let local_x = x.max(0.0);
             let local_y = y - (top_h + PH_HEADER_HEIGHT as f32);
             let nav_target = self.page_holder.as_ref().and_then(|ph| {
                 let ph_hit = ph.doc.hit(local_x, local_y)?;
@@ -4383,10 +4386,14 @@ impl BrowserApp {
             return;
         }
 
-        if id_is("btn-menu") {
+        if id_is("btn-menu") || id_is("btn-fav-overflow") {
             self.menu_open = !self.menu_open;
             self.sync_chrome();
             self.request_redraw();
+            return;
+        }
+        if id_is("btn-mail") {
+            self.navigate("https://mail.aol.com/");
             return;
         }
 
@@ -4432,6 +4439,15 @@ impl BrowserApp {
         }
         if id_is("btn-reload") {
             self.reload();
+            return;
+        }
+        if id_is("btn-home") {
+            self.navigate(START_URL);
+            return;
+        }
+        if id_is("btn-go") {
+            let input = self.tab().canonical.browser.address.clone();
+            self.navigate(&input);
             return;
         }
         if id_is("address") {
@@ -4679,7 +4695,7 @@ impl BrowserApp {
         let left_w_px = ((self.left_chrome_width() * scale_f) as u32).min(width);
         let content_w_px = width.saturating_sub(left_w_px).max(1);
         let content_h_px = height.saturating_sub(top_h_px).max(1);
-        let ph_x_px = ((EXPLORER_RAIL_WIDTH * scale_f) as u32).min(width);
+        let ph_x_px = 0u32;
         let ph_y_px =
             (((self.top_chrome_height() + PH_HEADER_HEIGHT) * scale_f) as u32).min(height);
         let ph_w_px =
@@ -5731,6 +5747,37 @@ fn uitest() -> i32 {
     ) {
         failures += 1;
     }
+    if let Some((x, y)) = find_click(&app, "btn-fav-overflow") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.menu_open,
+        "clicking #btn-fav-overflow opens the favorites overflow menu",
+    ) {
+        failures += 1;
+    }
+    if let Some((x, y)) = find_click(&app, "btn-fav-overflow") {
+        app.handle_chrome_click(x, y);
+    }
+    if let Some((x, y)) = find_click(&app, "btn-home") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.tab().canonical.browser.display_url() == START_URL,
+        "clicking #btn-home navigates to the start page",
+    ) {
+        failures += 1;
+    }
+    app.tab_mut().canonical.browser.address = "https://example.org/go-target".to_string();
+    if let Some((x, y)) = find_click(&app, "btn-go") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.tab().canonical.browser.address == "https://example.org/go-target",
+        "clicking #btn-go triggers navigation to the address bar input",
+    ) {
+        failures += 1;
+    }
 
     // -----------------------------------------------------------------------
     // Deliverable 3: IE5 Mac Page Holder (Rendered Page View, Links View, Retargeting)
@@ -5777,7 +5824,7 @@ fn uitest() -> i32 {
     // Click directly on the link inside the Page Holder's Rendered Page View (#ph-canvas)
     // and verify that it retargets the main active tab while keeping page_holder_doc pinned!
     let ph_click_pt = (
-        (EXPLORER_RAIL_WIDTH + 40.0) as f32,
+        40.0_f32,
         (CHROME_HEIGHT + PH_HEADER_HEIGHT + 20.0) as f32,
     );
     app.handle_chrome_click(ph_click_pt.0, ph_click_pt.1);
@@ -7398,8 +7445,14 @@ fn selftest() -> i32 {
             "btn-forward".to_string(),
             "btn-stop".to_string(),
             "btn-reload".to_string(),
+            "btn-home".to_string(),
+            "btn-autofill".to_string(),
+            "btn-print".to_string(),
+            "btn-mail".to_string(),
             "btn-menu".to_string(),
             "address".to_string(),
+            "btn-go".to_string(),
+            "btn-fav-overflow".to_string(),
             "btn-newtab".to_string(),
             "tab-0".to_string(),
             "tab-close-0".to_string(),
@@ -7670,6 +7723,18 @@ fn render_to_png(
         NavEntryInfo {
             title: "Microsoft Internet",
             url: "https://www.msn.com/",
+        },
+        NavEntryInfo {
+            title: "Apple",
+            url: "https://www.apple.com/mac/",
+        },
+        NavEntryInfo {
+            title: "Google",
+            url: "https://www.google.com/",
+        },
+        NavEntryInfo {
+            title: "Developer Hub",
+            url: "https://lite.duckduckgo.com/lite/",
         },
     ];
     let html = chrome::render(&ChromeState {
