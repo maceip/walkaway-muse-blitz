@@ -16,7 +16,7 @@ pollster = "0.4"
 png = "0.17"
 blitz-net = "0.3.0-beta.4"
 url = "2"
-tokio = { version = "1.54.1", features = ["rt", "net", "time", "rt-multi-thread"] }
+tokio = { version = "1.54.1", features = ["rt", "net", "time", "rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -26,6 +26,10 @@ arboard = { version = "3", default-features = false }
 
 [build-dependencies]
 cc = "1.2"
+# Vendored native-source integrity and swiftc target/runtime discovery. These
+# crates already belong to the browser dependency graph (no Swift packages).
+serde_json = "1"
+sha2 = "0.10"
 
 # The document specifies release-quality rendering; debug builds of the Stylo
 # CSS engine are unusably slow, so even the dev profile gets optimised deps.

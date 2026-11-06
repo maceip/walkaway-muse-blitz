@@ -40,6 +40,55 @@ never blur which browser executed an action.
 - Runbook: `docs/DEMO_RUN.md`. No demo stack needs to stay running;
   fixture 8795 `/campaign-receipt` serves the receipt page.
 
+## Tab UX hardening continuation — 2026-11-06
+
+- Owner: ZCode, existing task branch `feat/netscape-gooey-debugger`, isolated
+  worktree `/Users/mac/walkaway-browser-netscape`; no other browser build or
+  Swift process observed in the process table before starting.
+- User acceptance: remove implementation shortcuts that degrade the original
+  Swift tab strip's responsiveness and interactions. Prior passing geometry
+  tests do not establish perceptual or behavioral parity.
+- Claimed scope: existing browser chrome/render/input/tab integration, exact
+  Swift reference parity audit, real performance/behavior tests and docs.
+  No changes to Android, host services or external frozen browser checkout.
+- Current milestone: auditing original Swift implementation and retained-render
+  options. No performance parity claim and no automatic deletion of feature;
+  owner decides whether to remove it after reviewing the improved result.
+- Next action: remove whole-document animation rebuilds and other confirmed
+  UX shortcuts; implement/test essential missing interactions or state gaps
+  honestly. New platform integration must be recorded in source-map if needed.
+- Decision: replace the partial Rust tab approximation on macOS with the
+  ORIGINAL MIT Swift `CompactTabStrip` hosted in the existing window/tab row.
+  Canonical source `/Users/mac/tab-strip-port` revision `f23ba18`; no external
+  package dependencies. Rust owns tabs/windows, Swift owns original interaction
+  and animation. Additions recorded in source-map. No native parity claim until
+  real build, transfer, teardown, screenshot and behavior checks complete.
+- Observed milestone: original Swift bridge builds and `--nativetabtest` PASS
+  31 real AppKit assertions; `--tabhosttest` PASS9 (same runtime/document/history
+  moves without reconstruction); Cargo release tests PASS26. Native animation
+  no longer drives whole-document chrome reparsing. Debugger retained updates
+  preserve real scroll/focus/selection across repeated snapshots (7/7 tests).
+- User scope extension: Netscape 6 MODERN (not Classic), standard responsive
+  address field with future autocomplete anchor/popover seam, no visible
+  `muse://`, real loading indicator/Stop action, improve measured cold startup.
+  Native field keeps actual AppKit editing/IME/clipboard rather than appending
+  keystrokes into rebuilt HTML. Native address and Modern chrome owners are
+  disjoint files under this same task claim.
+- Final milestone: original native tabs/address and Netscape 6 MODERN chrome
+  complete; no native animation-time HTML parser/rebuild loop. Native field
+  standard editing, loading spinner, autocomplete seam, hidden internal start
+  URL, cancellable Reload/Stop verified. Release Cargo **34/34 PASS**; native
+  **56**, real host-transfer **9**, debugger **28** checks PASS. Final signed
+  local DMG and all six mounted suites PASS; not notarized. Actual native+Vello
+  screenshot captured; main-entry→first-submission final run **291.83ms**, five
+  fresh-process runs median **336.95ms** (unpurged caches, no cold-boot claim).
+- Next action: final diff review, task-owned commit/push, snapshot merge check.
+  Owner controls acceptance/perceptual review and merging; no auto-removal.
+- Known limits: Computer Use cannot read standalone accessibility window, so
+  no physical gesture/perceptual parity claim. Native captures omit separate
+  transient hover/drag panels; steady-state native chrome is real. Optional
+  ICNS generation remains a pre-existing nonfatal failure.
+
 ## Browser chrome / debugger task — 2026-11-06
 
 - Owner: ZCode (`feat/netscape-gooey-debugger`, isolated worktree

@@ -5,9 +5,10 @@ A browser assembled from existing engines, following the composition described i
 (compiled ahead of time to C), **Blitz** (Stylo + Taffy) owns HTML/CSS and layout,
 and **Vello on wgpu** rasterises. No browser engine was written from scratch.
 
-It has a working **Netscape 6 Classic-inspired** chrome: blue-grey beveled
+It has a working **Netscape 6 Modern-inspired** chrome: blue-grey beveled
 navigation tools, a recessed Location field, compact menu controls and animated
-gooey tabs adapted from the existing local MIT-licensed tab implementations.
+the original MIT-licensed Swift `CompactTabStrip` hosted in the existing macOS
+window. This replaces the earlier partial Rust imitation on macOS.
 The integrated Hermes JavaScript debugger runs explicitly loaded local scripts
 in an isolated interpreter, with real breakpoints, stepping and frame evaluation.
 Every control is wired to real state:
@@ -31,9 +32,19 @@ winit ──input──> chrome hit-test ──> back / forward / reload / addre
 
 The browser keeps its existing Blitz-rendered chrome and native event routing.
 The Netscape-inspired skin does not embed another browser or change the page
-engine. Gooey neck geometry and spring animation are computed in Rust; use
-`--reduced-motion` for settled tabs without animation. Source provenance and
-license notices are in `THIRD_PARTY_NOTICES.txt`.
+engine. On macOS, the actual Swift tab component owns retained native views,
+Core Animation, drag reordering, pinning, close-width behavior, hover panels and
+tear-off visuals. Rust callbacks move the real tab/document/runtime between
+browser windows. The native row replaces the Rust row; both are never active
+at once. Supervised tabs cannot detach or transfer while bound to an approval
+session, so moving a tab cannot bypass host authority.
+
+Original Swift source, revision and file hashes are in `native-tabs/VENDOR.json`;
+licenses are in `native-tabs/LICENSE` and `THIRD_PARTY_NOTICES.txt`. The
+non-macOS/offscreen fallback is explicitly not claimed to match Swift. Native
+Glass is available on macOS 26+; older versions use the component's own fallback.
+No smoothness parity is inferred from copied math: native integration needs its
+own behavior, capture, lifecycle and timing checks.
 
 | Control | Behaviour |
 |---|---|
@@ -45,7 +56,8 @@ license notices are in `THIRD_PARTY_NOTICES.txt`.
 | Tab title | From the document `<title>`, falling back to the host |
 | Back / forward | Real history stack, truncated on new navigation; greyed when exhausted |
 | Reload | Re-fetches the current URL and replaces the history entry |
-| Address bar | Click or `⌘L` to focus, type, `Enter` to navigate, `Esc` to revert |
+| Address bar | Native NSTextField: click or `⌘L`, normal cursor/selection/clipboard/IME, `Enter` to navigate, `Esc` to revert; internal start URL is hidden |
+| Loading | Real indeterminate native spinner and Modern throbber/status; Reload becomes Stop during an in-flight navigation; no fabricated percentage |
 | Padlock | Drawn from a shackle and body; shown only for `https:` |
 | Browser menu | Home, Reload, Back, Forward, JavaScript debugger, Close tab — each performs the real action |
 | Debugger | Toolbar/menu, `F12` or `⌘⌥J` toggles the isolated local script debugger |
@@ -58,6 +70,35 @@ Navigation runs on a worker thread and reports back through a winit user event,
 so the window stays responsive while a page loads. Subresources (stylesheets,
 images, fonts) load through `blitz-net` on a Tokio runtime and repaint as they
 arrive.
+
+## Native tab/address and startup verification
+
+- `--nativetabtest` exercises the original component in real AppKit windows:
+  editor selection/clipboard commands, Enter/Escape/draft handling, actual
+  spinner state, native cells, move/pin/close-width freeze, guarded transfer,
+  capture, retained identity and teardown. It is a component test, not a claim
+  that physical gestures or perceptual parity were independently measured.
+- `--tabhosttest` verifies the browser moves the same real page/Hermes runtime
+  and history between owners rather than cloning or reconstructing it.
+- `--capture-window /absolute/path.png --exit-after 2` captures actual Vello
+  content plus the native tab/address pixels after the first submitted frame.
+  Separate transient hover/drag panels are not included in this steady-state
+  screenshot API. `--render` alone remains the explicitly non-native fallback.
+- Native tab animations run through the original AppKit/Core Animation code,
+  not the Rust 16ms chrome-reparse loop. Identical bridge updates are no-ops.
+  Debugger backend snapshots mutate retained DOM text/classes and preserve
+  source/details scrolling and selection instead of replacing the document.
+- Startup avoids provisional/duplicate chrome construction before actual
+  window scale/theme/native initialization. `[startup] first_submitted_frame_ms`
+  measures main-entry to GPU submission, **not visible presentation or cold
+  filesystem-cache latency**. No cache purges or unverified Metal cache hack is
+  used. Five observed fresh-process runs: 390.49, 476.80, 336.95, 273.01,
+  277.03ms; no comparative speedup is claimed from these measurements.
+
+The native address delegate keeps the draft/query seam and a stable field anchor
+for future autocomplete; no suggestions provider or fake popover is installed.
+The Browser dropdown temporarily hides native overlays so its items remain
+clickable; showing them again preserves their retained views.
 
 ## JavaScript debugger
 
@@ -93,7 +134,9 @@ viewport, and pane input never falls through to the page.
 |---|---|---|
 | Headless end-to-end | `--selftest` | PASS — Hermes mutation, history, URL normalization, toolbar hit-tests with menu closed and all dropdown actions with menu open |
 | Local JS debugger | `--debuggertest` | PASS — 28 real Hermes assertions for breakpoint/stack/locals, all step modes, eval, isolation, output/errors, pause, restart and interrupt/teardown |
-| Release tests | `cargo test --release` | PASS — 18 tests, including actual debugger backend and native browser suites |
+| Release tests | `cargo test --release` | PASS — 34 tests, including retained debugger DOM, Modern layout/address/loading, real backend and native browser suites |
+| Original native tabs/address | `--nativetabtest` | PASS — 56 real AppKit assertions |
+| Real tab ownership | `--tabhosttest` | PASS — 9 checks including same runtime/history transfer and pinned grouping |
 | Chrome interactions | `--uitest` | PASS — real hit-tests for tabs/navigation, stable identity, debugger opening/focus, viewport reservation, actual Hermes breakpoint and close |
 | Real window + GPU | `--exit-after 4` | Runs, submits frames, exits cleanly |
 | Offscreen render | `--render out.png [--click] [--menu] [--url <url>] [--dark] [--size WxH]` | Renders start page, menu, or a fetched page, in either theme, at any size |
@@ -126,7 +169,11 @@ examples/glyphs.rs         font-coverage probe for toolbar glyphs
 
 ## Build
 
-Prerequisites: Rust (edition 2024), CMake ≥ 3.21, Ninja, Xcode CLT, Python 3.
+Prerequisites: Rust (edition 2024), CMake ≥ 3.21, Ninja, a current Xcode SDK
+with SwiftUI/AppKit Glass declarations, Swift compiler, and Python 3. The native
+component deploys to macOS 13+ with runtime availability guards; packaged app
+minimum remains declared in its Info.plist. No Swift package download or local
+external checkout is needed: pinned sources are vendored and checked at build.
 
 ```sh
 ./scripts/build-hermes.sh     # ~35 s on 18 cores; clones static_h if absent

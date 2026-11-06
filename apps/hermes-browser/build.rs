@@ -16,12 +16,17 @@
 //!   uses aarch64 `asm` statement expressions.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use sha2::{Digest, Sha256};
 
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        build_native_tabs(&manifest_dir, &out_dir);
+    }
 
     let hermes_src = env::var("HERMES_SRC_DIR")
         .map(PathBuf::from)
@@ -146,4 +151,139 @@ fn main() {
 
 fn home() -> PathBuf {
     PathBuf::from(env::var("HOME").expect("HOME"))
+}
+
+/// Compile the complete original component and our C ABI in one Swift module.
+/// All outputs, including Swift's module cache, belong to this Cargo OUT_DIR;
+/// no package resolution, external source checkout, or separate app is used.
+fn build_native_tabs(manifest: &Path, out_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
+    println!("cargo:rerun-if-env-changed=SDKROOT");
+    println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+    let native = manifest.join("native-tabs");
+    println!("cargo:rerun-if-changed={}", native.display());
+    let provenance: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(native.join("VENDOR.json")).expect("read native tab provenance"),
+    )
+    .expect("parse native tab provenance");
+    for entry in provenance["files"].as_array().expect("vendored files") {
+        let relative = entry["path"].as_str().expect("vendored relative path");
+        let path = native.join(relative);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let bytes = std::fs::read(&path).expect("read vendored source");
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        assert_eq!(
+            Some(digest.as_str()),
+            entry["vendored_sha256"].as_str(),
+            "Vendored source changed without an explicit provenance update: {}",
+            path.display()
+        );
+    }
+    let arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => "arm64",
+        Ok("x86_64") => "x86_64",
+        other => panic!("unsupported macOS Swift architecture: {other:?}"),
+    };
+    let deployment = env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "13.0".into());
+    let major: u32 = deployment
+        .split('.')
+        .next()
+        .and_then(|v| v.parse().ok())
+        .expect("valid MACOSX_DEPLOYMENT_TARGET");
+    assert!(
+        major >= 13,
+        "original CompactTabStrip requires macOS 13 or later"
+    );
+    let target = format!("{arch}-apple-macosx{deployment}");
+    let swiftc = command_text(Command::new("xcrun").args(["--find", "swiftc"]));
+    let sdk = command_text(Command::new("xcrun").args(["--sdk", "macosx", "--show-sdk-path"]));
+    let info: serde_json::Value =
+        serde_json::from_str(&command_text(Command::new(&swiftc).args([
+            "-target",
+            &target,
+            "-print-target-info",
+        ])))
+        .expect("parse Swift runtime target information");
+    let mut sources: Vec<PathBuf> = std::fs::read_dir(native.join("Sources/CompactTabStrip"))
+        .expect("read original Swift source directory")
+        .map(|entry| entry.expect("native source entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "swift"))
+        .collect();
+    sources.sort();
+    sources.push(native.join("WalkawayTabBridge.swift"));
+    sources.push(native.join("NativeTabSelfTest.swift"));
+    let archive = out_dir.join("libwalkaway_native_tabs.a");
+    let mut compile = Command::new(&swiftc);
+    compile.args([
+        "-swift-version",
+        "5",
+        "-parse-as-library",
+        "-O",
+        "-whole-module-optimization",
+        "-emit-library",
+        "-static",
+        "-module-name",
+        "WalkawayNativeTabs",
+        "-target",
+        &target,
+        "-sdk",
+        &sdk,
+        "-module-cache-path",
+    ]);
+    compile.arg(out_dir.join("swift-module-cache"));
+    compile.args(&sources).arg("-o").arg(&archive);
+    command_text(&mut compile);
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=walkaway_native_tabs");
+    // The Mach-O Swift objects carry their own framework/runtime autolink
+    // directives. Make SDK stubs and toolchain compatibility archives available
+    // to Apple's linker, without embedding machine-local runtime paths.
+    println!("cargo:rustc-link-search=native={sdk}/usr/lib/swift");
+    for path in info["paths"]["runtimeLibraryPaths"]
+        .as_array()
+        .expect("Swift runtime library paths")
+    {
+        println!(
+            "cargo:rustc-link-search=native={}",
+            path.as_str().expect("runtime path")
+        );
+    }
+    for framework in [
+        "AppKit",
+        "SwiftUI",
+        "Foundation",
+        "CoreGraphics",
+        "QuartzCore",
+        "CoreImage",
+    ] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
+    // main() also installs @executable_path/../Frameworks for bundled Swift
+    // back-deployment libraries (swift-stdlib-tool). Otherwise use macOS's
+    // stable Swift runtime; never embed a machine-local Xcode runtime rpath.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+    println!("cargo:rustc-link-arg=-mmacosx-version-min={deployment}");
+    // Swift compatibility archives must precede system runtime resolution.
+    // Swift driver knows which ones this target needs; do not hardcode a version.
+    if let Some(libraries) = info["target"]["compatibilityLibraries"].as_array() {
+        for library in libraries {
+            if let Some(name) = library["libraryName"].as_str() {
+                println!("cargo:rustc-link-lib=static={name}");
+            }
+        }
+    }
+}
+
+fn command_text(command: &mut Command) -> String {
+    let output = command
+        .output()
+        .unwrap_or_else(|e| panic!("run {command:?}: {e}"));
+    if !output.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+    assert!(output.status.success(), "command failed: {command:?}");
+    String::from_utf8(output.stdout)
+        .expect("UTF-8 compiler output")
+        .trim()
+        .to_owned()
 }

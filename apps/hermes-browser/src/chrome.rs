@@ -1,9 +1,11 @@
 //! The browser chrome, rendered by the same HTML/CSS engine as the page.
 //!
-//! Netscape 6 Classic-inspired slate chrome: compact functional menu, raised
-//! glyph-and-label navigation, recessed Location field and spring-driven curved
-//! tabs. Geometry lives in the canonical `gooey_tabs` module; no web wrapper or
-//! page JavaScript participates in chrome interaction.
+//! Netscape 6 Modern-inspired silver-blue chrome: sculpted circular tools,
+//! a recessed Location field, and a compass with honest loading state. Live
+//! macOS tabs belong to the original Swift strip in `native_tabs`; an empty
+//! `tabs` slice reserves its one native slot. `gooey_tabs` is only the existing
+//! offscreen/non-native fallback, not a claim of Swift parity. No page JavaScript
+//! participates in chrome interaction.
 //!
 //! Also renders the supervised Semantic X-Ray overlay layer (DOM element role
 //! tags, Blind Vault shield, Engine Commit Freeze shield, and live-measured
@@ -46,6 +48,13 @@ struct Palette {
     favicon_bg: &'static str,
     favicon_ink: &'static str,
     accent: &'static str,
+    metal_top: &'static str,
+    metal_mid: &'static str,
+    metal_bottom: &'static str,
+    tool_top: &'static str,
+    tool_mid: &'static str,
+    tool_bottom: &'static str,
+    tool_ink: &'static str,
 }
 
 fn palette(theme: Theme) -> Palette {
@@ -65,7 +74,14 @@ fn palette(theme: Theme) -> Palette {
             menu_bg: "#D4DBE5",
             favicon_bg: "#7387A4",
             favicon_ink: "#354B68",
-            accent: "#254F82",
+            accent: "#3D426F",
+            metal_top: "#F1F4FA",
+            metal_mid: "#D6DFED",
+            metal_bottom: "#A2B1C9",
+            tool_top: "#EAF3FF",
+            tool_mid: "#9DB3D3",
+            tool_bottom: "#627EA7",
+            tool_ink: "#263A61",
         },
         Theme::Dark => Palette {
             strip: "#273449",
@@ -82,7 +98,14 @@ fn palette(theme: Theme) -> Palette {
             menu_bg: "#3C4E67",
             favicon_bg: "#738CAD",
             favicon_ink: "#CAD8E9",
-            accent: "#A6CEF8",
+            accent: "#C1C9F4",
+            metal_top: "#6D7F9C",
+            metal_mid: "#4E617F",
+            metal_bottom: "#303D58",
+            tool_top: "#C1D5EF",
+            tool_mid: "#7E98BC",
+            tool_bottom: "#4C648D",
+            tool_ink: "#142744",
         },
     }
 }
@@ -156,7 +179,7 @@ pub struct ChromeState<'a> {
     pub telemetry: Option<EngineTelemetry>,
 }
 
-/// Menu (24) + traditional toolbar (50) + Location (32) + tab strip (38).
+/// Menu y0..24, navigation y24..74, Location y74..106, native tabs y106..144.
 /// Main uses this same offset for page layout, pointer input, and screenshots.
 pub const CHROME_HEIGHT: f64 = 144.0;
 pub const DEBUGGER_HEIGHT: f64 = 300.0;
@@ -184,10 +207,36 @@ pub fn render(state: &ChromeState<'_>) -> String {
     } else {
         ""
     };
+    // Blitz resolves this shell at fixed timestamps: no CSS animation that
+    // merely appears to run, no invented completion fraction. Native chrome
+    // owns the live NSProgressIndicator; this stripe and label express only
+    // the same real loading boolean. Keep the stripe above the native tab row.
     let progress = if state.loading {
-        r#"<div class="progress"></div>"#
+        r#"<div class="progress progress-indeterminate" id="page-load-progress" role="progressbar" aria-label="Loading page" aria-valuetext="Loading…"></div>"#
     } else {
         ""
+    };
+    // Keep the existing action ID. The host treats it as cancellation while
+    // loading and as Reload otherwise; there is no second inert Stop control.
+    let (reload_label, reload_title, reload_glyph) = if state.loading {
+        (
+            "Stop",
+            "Stop loading page",
+            r#"<div class="stop-glyph"></div>"#,
+        )
+    } else {
+        (
+            "Reload",
+            "Reload page",
+            r#"<div class="ring"></div><div class="arrow"></div>"#,
+        )
+    };
+    let (load_label, load_status) = if state.loading {
+        ("Loading page", "Loading…")
+    } else if state.url.is_empty() {
+        ("Ready", "Ready")
+    } else {
+        ("Page ready", "Done")
     };
 
     let tabs = render_tabs(state, &p);
@@ -327,53 +376,65 @@ pub fn render(state: &ChromeState<'_>) -> String {
   html, body {{ height: {surface_height}px; overflow: hidden; }}
   body {{ background-color: transparent; font-family: Tahoma, Verdana, Arial, sans-serif; position: relative; color: {ink}; }}
 
-  /* Classic menu has actual commands, not inert File/Edit placeholders. */
-  .menubar {{ height:24px; display:flex; align-items:center; gap:4px; padding:0 8px; background-color:{nav}; border-top:1px solid {highlight}; border-bottom:1px solid {shadow}; }}
-  .menubtn {{ height:21px; padding:2px 9px; font-size:11px; display:flex; align-items:center; gap:7px; border:1px solid transparent; cursor:pointer; }}
-  .menubtn:hover, .menubtn-open {{ background-color:{hover}; border-top-color:{highlight}; border-left-color:{highlight}; border-right-color:{shadow}; border-bottom-color:{shadow}; }}
-  .menu-caption {{ font-size:10px; color:{muted}; margin-left:auto; white-space:nowrap; overflow:hidden; }}
+  /* Modern's pale steel shell and blue-violet accents; only real commands. */
+  .menubar {{ height:24px; display:flex; align-items:center; gap:4px; padding:0 10px; background-color:{metal_mid}; background-image:linear-gradient(to bottom, {metal_top} 0%, {metal_mid} 100%); border-top:1px solid {highlight}; border-bottom:1px solid {hairline}; }}
+  .menubtn {{ height:21px; padding:1px 9px; font-size:11px; display:flex; align-items:center; gap:7px; border:1px solid transparent; border-radius:7px 7px 3px 3px; cursor:pointer; }}
+  .menubtn:hover, .menubtn-open {{ background-color:{hover}; background-image:linear-gradient(to bottom, {metal_top} 0%, {metal_bottom} 100%); border-color:{hairline}; box-shadow:inset 0 1px 0 {highlight}; }}
+  .menu-caption {{ font-size:10px; color:{accent}; margin-left:auto; white-space:nowrap; overflow:hidden; }}
   .down {{ width:0; height:0; border-left:3px solid transparent; border-right:3px solid transparent; border-top:4px solid {ink}; }}
 
-  /* Traditional raised toolbar: real glyphs and labels, no capsule controls. */
-  .nav {{ height:50px; background-color:{nav}; border-top:1px solid {highlight}; border-bottom:1px solid {shadow}; display:flex; align-items:center; padding:0 8px; gap:4px; }}
-  .grip {{ width:4px; height:32px; flex-shrink:0; border-left:1px solid {highlight}; border-right:1px solid {shadow}; margin-right:3px; }}
-  .btn {{ width:57px; height:43px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; font-size:10px; border:1px solid transparent; cursor:pointer; }}
-  .btn:hover {{ background-color:{hover}; border-top-color:{highlight}; border-left-color:{highlight}; border-right-color:{shadow}; border-bottom-color:{shadow}; }}
-  .btn:active {{ border-top-color:{shadow}; border-left-color:{shadow}; border-right-color:{highlight}; border-bottom-color:{highlight}; }}
-  .btn-off {{ color:{muted}; }}
-  .btn-off:hover {{ background-color:{nav}; border-color:transparent; }}
-  .glyph {{ height:23px; width:25px; display:flex; align-items:center; justify-content:center; position:relative; }}
-  .nav-arrow {{ width:23px; height:17px; background-color:#38784E; border-bottom:1px solid {shadow}; clip-path:polygon(0% 50%, 42% 0%, 42% 29%, 100% 29%, 100% 71%, 42% 71%, 42% 100%); }}
+  /* Explicit stops are painted by Blitz; sculpted faces, not square OS bevels. */
+  .nav {{ height:50px; background-color:{nav}; background-image:linear-gradient(to bottom, {metal_top} 0%, {metal_mid} 42%, {nav} 60%, {metal_bottom} 100%); border-top:1px solid {highlight}; border-bottom:1px solid {shadow}; display:flex; align-items:center; padding:0 8px; gap:4px; }}
+  .grip {{ width:5px; height:30px; flex-shrink:0; border:1px solid {hairline}; border-radius:4px; background-color:{metal_bottom}; box-shadow:inset 1px 0 0 {highlight}; margin-right:3px; }}
+  .btn {{ width:62px; height:46px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; font-size:11px; line-height:12px; border:1px solid transparent; border-radius:11px; cursor:pointer; }}
+  .btn:hover {{ background-color:{hover}; background-image:linear-gradient(to bottom, {metal_top} 0%, {tool_mid} 100%); border-color:{hairline}; box-shadow:inset 0 1px 0 {highlight}; }}
+  .btn:active, .btn[aria-pressed="true"] {{ background-color:{metal_bottom}; background-image:linear-gradient(to bottom, {metal_bottom} 0%, {metal_mid} 100%); border-color:{shadow}; }}
+  .btn-off {{ color:{muted}; cursor:default; }}
+  .btn-off:hover {{ background-color:transparent; background-image:none; border-color:transparent; box-shadow:none; }}
+  .glyph {{ height:28px; width:28px; flex-shrink:0; display:flex; align-items:center; justify-content:center; position:relative; }}
+  .tool-face, .nav-disc {{ background-color:{tool_mid}; background-image:linear-gradient(to bottom, {tool_top} 0%, {tool_mid} 48%, {tool_bottom} 100%); border:1px solid {shadow}; box-shadow:inset 0 1px 0 #F1F7FF, inset 0 -1px 0 #56729B, 0 1px 0 {highlight}; }}
+  .tool-face {{ border-radius:8px; }}
+  .nav-disc {{ height:30px; width:30px; border-radius:50%; }}
+  .btn-off .nav-disc {{ background-color:{nav}; background-image:linear-gradient(to bottom, {metal_top} 0%, {nav} 100%); border-color:{hairline}; box-shadow:inset 0 1px 0 {highlight}; }}
+  .nav-arrow {{ width:19px; height:15px; background-color:{tool_ink}; background-image:linear-gradient(to bottom, #617BA7 0%, {tool_ink} 100%); clip-path:polygon(0% 50%, 45% 0%, 45% 30%, 100% 30%, 100% 70%, 45% 70%, 45% 100%); }}
   .nav-arrow-right {{ transform:rotate(180deg); }}
-  .btn-off .nav-arrow {{ background-color:{muted}; }}
-  .ring {{ width:19px; height:19px; border-radius:10px; border:3px solid {accent}; border-top-color:transparent; }}
-  .arrow {{ position:absolute; top:0; right:0; width:0; height:0; border-top:5px solid transparent; border-bottom:5px solid transparent; border-left:7px solid {accent}; }}
-  .home-roof {{ position:absolute; top:0; width:0; height:0; border-left:12px solid transparent; border-right:12px solid transparent; border-bottom:11px solid #945A46; }}
-  .home-wall {{ position:absolute; bottom:1px; width:16px; height:12px; background-color:#D5B983; border:1px solid {shadow}; }}
-  .home-door {{ position:absolute; bottom:1px; width:5px; height:8px; background-color:{accent}; }}
-  .debug-glyph {{ font-family:monospace; font-size:17px; font-weight:bold; color:{accent}; }}
-  .toolbar-divider {{ height:34px; width:2px; margin:0 4px; border-left:1px solid {shadow}; border-right:1px solid {highlight}; }}
-  .brand {{ display:flex; align-items:center; gap:8px; margin-left:auto; padding:0 5px; min-width:0; }}
-  .brand-word {{ font-family:Georgia, serif; font-weight:bold; font-size:17px; color:{accent}; white-space:nowrap; }}
-  .compass {{ width:36px; height:36px; flex-shrink:0; background-color:#173658; border-top:2px solid {shadow}; border-left:2px solid {shadow}; border-right:2px solid {highlight}; border-bottom:2px solid {highlight}; display:flex; align-items:center; justify-content:center; }}
-  .compass-disc {{ width:26px; height:26px; border:1px solid #B6C6D9; border-radius:13px; position:relative; }}
-  .compass-needle {{ position:absolute; left:9px; top:2px; width:6px; height:20px; background-color:#E1EAF5; clip-path:polygon(50% 0%, 100% 70%, 50% 55%, 0% 70%); transform:rotate(28deg); }}
-  .compass-loading .compass-disc {{ border:2px solid #E7CB83; }}
-  .compass-loading .compass-needle {{ background-color:#E7CB83; }}
+  .btn-off .nav-arrow {{ background-color:{muted}; background-image:none; }}
+  .ring {{ width:18px; height:18px; border-radius:50%; border:3px solid {tool_ink}; border-top-color:transparent; transform:rotate(-28deg); }}
+  .arrow {{ position:absolute; top:2px; right:2px; width:0; height:0; border-top:4px solid transparent; border-bottom:4px solid transparent; border-left:6px solid {tool_ink}; transform:rotate(28deg); }}
+  .stop-glyph {{ width:15px; height:15px; border:1px solid #702C40; border-radius:3px; background-color:#9B4058; background-image:linear-gradient(to bottom, #D18395 0%, #8B334D 100%); box-shadow:inset 0 1px 0 #F0B8C1; }}
+  .home-roof {{ position:absolute; top:3px; width:0; height:0; border-left:10px solid transparent; border-right:10px solid transparent; border-bottom:9px solid {tool_ink}; }}
+  .home-wall {{ position:absolute; bottom:3px; width:14px; height:11px; background-color:#DFE9F8; background-image:linear-gradient(to bottom, #EFF4FF 0%, #A9BBD7 100%); border:1px solid {tool_ink}; }}
+  .home-door {{ position:absolute; bottom:3px; width:4px; height:7px; background-color:{tool_ink}; }}
+  .debug-glyph {{ font-family:monospace; font-size:15px; font-weight:bold; color:{tool_ink}; }}
+  .toolbar-divider {{ height:30px; width:2px; flex-shrink:0; margin:0 4px; border-left:1px solid {hairline}; border-right:1px solid {highlight}; border-radius:1px; }}
+  .brand {{ display:flex; align-items:center; gap:9px; margin-left:auto; padding:0 2px; min-width:0; flex-shrink:0; }}
+  .brand-copy {{ display:flex; flex-direction:column; align-items:flex-end; gap:2px; }}
+  .brand-word {{ font-family:Georgia, serif; font-weight:bold; font-size:17px; line-height:19px; color:{accent}; white-space:nowrap; }}
+  .load-status {{ font-size:10px; line-height:13px; color:{ink}; white-space:nowrap; }}
+  .load-status-busy {{ color:{accent}; font-weight:bold; }}
+  .compass {{ width:42px; height:42px; flex-shrink:0; border:1px solid {shadow}; border-radius:50%; background-color:{tool_mid}; background-image:linear-gradient(to bottom, #F5F8FF 0%, #A5B9D5 48%, #51698F 100%); box-shadow:inset 0 1px 0 #FFFFFF, 0 1px 0 {highlight}; display:flex; align-items:center; justify-content:center; }}
+  .compass-disc {{ width:32px; height:32px; border:2px solid #536C97; border-radius:50%; position:relative; background-color:#242C58; background-image:radial-gradient(circle at 35% 25%, #657FB2 0%, #303D6D 52%, #1C2349 100%); }}
+  .compass-orbit {{ position:absolute; left:1px; top:6px; width:26px; height:15px; border:1px solid #A9BCD9; border-radius:50%; transform:rotate(-28deg); }}
+  .compass-needle {{ position:absolute; left:9px; top:2px; width:10px; height:24px; background-color:#E5EFFF; background-image:linear-gradient(to bottom, #FFFFFF 0%, #C5D6ED 50%, #6C8ABA 100%); clip-path:polygon(50% 0%, 100% 80%, 50% 60%, 0% 80%); transform:rotate(28deg); }}
+  .compass-star {{ position:absolute; left:5px; top:5px; width:2px; height:2px; border-radius:50%; background-color:#F3F8FF; box-shadow:16px 2px 0 #F3F8FF, 12px 18px 0 #A9BFDF; }}
+  .compass-loading .compass-disc {{ border-color:#E9C780; }}
+  .compass-loading .compass-orbit {{ border-color:#FFE7B0; }}
 
-  .location-row {{ height:32px; display:flex; align-items:center; gap:8px; padding:0 10px; background-color:{nav}; border-top:1px solid {highlight}; border-bottom:1px solid {shadow}; }}
-  .location-label {{ font-size:11px; flex-shrink:0; }}
-  .bar {{ flex:1; min-width:0; height:24px; background-color:{pill}; border-top:2px solid {shadow}; border-left:2px solid {shadow}; border-bottom:2px solid {highlight}; border-right:2px solid {highlight}; display:flex; align-items:center; padding:0 7px; gap:7px; overflow:hidden; cursor:text; }}
-  .bar-focused {{ background-color:{pill_focus}; border-top-color:{accent}; border-left-color:{accent}; }}
+  /* Native frame contract at every width: x64, y78, width=W-74, height24.
+     Padding10 + fixed label46 + gap8; no trailing status or responsive shift. */
+  .location-row {{ height:32px; display:flex; align-items:center; gap:8px; padding:0 10px; background-color:{nav}; background-image:linear-gradient(to bottom, {metal_mid} 0%, {nav} 100%); border-top:1px solid {highlight}; border-bottom:1px solid {shadow}; }}
+  .location-label {{ font-size:11px; width:46px; flex:0 0 46px; white-space:nowrap; }}
+  .bar {{ flex:1; min-width:0; height:24px; background-color:{pill}; background-image:linear-gradient(to bottom, {metal_mid} 0%, {pill} 18%, {pill} 100%); border:1px solid {shadow}; border-radius:5px; box-shadow:inset 0 1px 2px rgba(28,42,66,0.25), 0 1px 0 {highlight}; display:flex; align-items:center; padding:0 7px; gap:7px; overflow:hidden; cursor:text; }}
+  .bar-focused {{ background-color:{pill_focus}; background-image:none; border-color:{accent}; box-shadow:inset 0 0 0 1px {accent}, 0 1px 0 {highlight}; }}
   .url {{ font-size:12px; color:{ink}; white-space:nowrap; overflow:hidden; min-width:0; }}
   .caret {{ width:1px; height:15px; background-color:{accent}; flex-shrink:0; }}
   .lock {{ display:flex; flex-direction:column; align-items:center; flex-shrink:0; }}
   .shackle {{ width:6px; height:5px; border:1.5px solid {favicon_ink}; border-bottom-width:0; border-radius:3px 3px 0 0; }}
-  .lock-body {{ width:9px; height:7px; background-color:{favicon_ink}; }}
-  .insecure-dot {{ width:7px; height:7px; border:1px solid {muted}; border-radius:4px; flex-shrink:0; }}
-  .connection-label {{ font-size:10px; color:{muted}; white-space:nowrap; flex-shrink:0; }}
+  .lock-body {{ width:9px; height:7px; background-color:{favicon_ink}; border-radius:1px; }}
+  .insecure-dot {{ width:7px; height:7px; border:1px solid {muted}; border-radius:50%; flex-shrink:0; }}
+  #address-popup-anchor {{ display:none; position:absolute; left:64px; right:10px; top:102px; z-index:95; }}
 
-  /* The paths themselves change on each native spring tick. */
+  /* Existing offscreen/non-native fallback only. Native Swift tabs are untouched. */
   .tabstrip {{ height:38px; background-color:{strip}; display:flex; align-items:flex-end; gap:8px; padding:0 8px; border-top:1px solid {highlight}; border-bottom:2px solid {shadow}; overflow:hidden; }}
   .tab-track {{ flex:1; min-width:0; height:32px; position:relative; overflow:hidden; }}
   .tab {{ position:absolute; top:0; height:32px; color:{ink}; cursor:pointer; }}
@@ -390,12 +451,13 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .newtab {{ width:30px; height:27px; flex-shrink:0; line-height:22px; margin-bottom:2px; font-size:20px; color:{ink}; text-align:center; background-color:{nav}; border-top:1px solid {highlight}; border-left:1px solid {highlight}; border-right:1px solid {shadow}; border-bottom:1px solid {shadow}; cursor:pointer; }}
   .newtab:hover, .tab-overflow:hover {{ background-color:{hover}; }}
 
-  .menu {{ position:absolute; left:8px; top:24px; width:205px; background-color:{menu_bg}; border-top:2px solid {highlight}; border-left:2px solid {highlight}; border-right:2px solid {shadow}; border-bottom:2px solid {shadow}; padding:3px; z-index:90; }}
-  .menu-item {{ font-size:12px; color:{ink}; padding:7px 12px; cursor:pointer; }}
-  .menu-item:hover {{ background-color:{accent}; color:{pill_focus}; }}
-  .menu-sep {{ height:2px; border-top:1px solid {shadow}; border-bottom:1px solid {highlight}; margin:3px 2px; }}
+  .menu {{ position:absolute; left:8px; top:24px; width:205px; background-color:{menu_bg}; background-image:linear-gradient(to bottom, {metal_top} 0%, {menu_bg} 100%); border:1px solid {shadow}; border-radius:6px; box-shadow:inset 0 1px 0 {highlight}, 0 3px 8px rgba(25,35,60,0.25); padding:3px; z-index:90; }}
+  .menu-item {{ font-size:12px; color:{ink}; padding:7px 12px; border-radius:3px; cursor:pointer; }}
+  .menu-item:hover {{ background-color:#3D426F; background-image:linear-gradient(to bottom, #6579A6 0%, #3D426F 100%); color:#FFFFFF; }}
+  .menu-sep {{ height:2px; border-top:1px solid {hairline}; border-bottom:1px solid {highlight}; margin:3px 2px; }}
   #debugger-pane {{ position:absolute; left:0; right:0; bottom:0; height:{debugger_height}px; background-color:{menu_bg}; color:{ink}; overflow:hidden; z-index:50; border-top:2px solid {highlight}; }}
-  @media (max-width:600px) {{ .brand-word, .connection-label, .menu-caption {{ display:none; }} .btn {{ width:48px; }} .toolbar-divider {{ margin:0 1px; }} .brand {{ padding:0; }} }}
+  @media (max-width:600px) {{ .brand-word, .menu-caption {{ display:none; }} .btn {{ width:48px; font-size:10px; }} .toolbar-divider {{ margin:0 1px; }} .brand {{ padding:0; gap:5px; }} }}
+  @media (max-width:420px) {{ .nav {{ padding:0 6px; gap:3px; }} .grip, .toolbar-divider {{ display:none; }} .btn {{ width:44px; }} .compass {{ width:34px; height:34px; }} .compass-disc {{ width:28px; height:28px; }} }}
 
   /* supervision bar: overlays the top of the page on the session tab */
   .supbar {{
@@ -483,40 +545,38 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
 
   .progress {{
-    position: absolute;
-    left: 0; right: 0; top: {progress_top}px;
-    height: 2px;
-    background-color: {accent};
+    position:absolute;
+    left:0; right:0; top:103px;
+    height:3px;
+    background-color:{tool_bottom};
+    background-image:repeating-linear-gradient(to right, {tool_bottom} 0px, {tool_bottom} 8px, {metal_mid} 8px, {metal_mid} 14px);
     pointer-events:none;
   }}
 </style>
 </head>
-<body>
-  <div class="menubar">
-    <div class="menubtn {menu_class}" id="btn-menu" role="button" aria-haspopup="menu" aria-expanded="{menu_open}">Browser<div class="down"></div></div>
-    <div class="menu-caption">Walkaway Navigator &#183; Classic</div>
+<body data-chrome-theme="netscape-modern">
+  <div class="menubar" id="chrome-menubar">
+    <div class="menubtn {menu_class}" id="btn-menu" role="button" aria-haspopup="menu" aria-expanded="{menu_open}">Browser<div class="down" aria-hidden="true"></div></div>
+    <div class="menu-caption">Walkaway Navigator &#183; Modern</div>
   </div>
-  <div class="nav">
+  <div class="nav" id="chrome-navigation" role="toolbar" aria-label="Navigation">
     <div class="grip" aria-hidden="true"></div>
-    <div class="{back_class}" id="btn-back" role="button" aria-disabled="{back_disabled}" title="Back"><div class="glyph"><div class="nav-arrow"></div></div><span>Back</span></div>
-    <div class="{forward_class}" id="btn-forward" role="button" aria-disabled="{forward_disabled}" title="Forward"><div class="glyph"><div class="nav-arrow nav-arrow-right"></div></div><span>Forward</span></div>
-    <div class="btn" id="btn-reload" role="button" title="Reload"><div class="glyph"><div class="ring"></div><div class="arrow"></div></div><span>Reload</span></div>
-    <div class="btn" id="btn-home" role="button" title="Home"><div class="glyph"><div class="home-roof"></div><div class="home-wall"></div><div class="home-door"></div></div><span>Home</span></div>
+    <div class="{back_class}" id="btn-back" role="button" aria-label="Back" aria-disabled="{back_disabled}" title="Back"><div class="glyph nav-disc" aria-hidden="true"><div class="nav-arrow"></div></div><span>Back</span></div>
+    <div class="{forward_class}" id="btn-forward" role="button" aria-label="Forward" aria-disabled="{forward_disabled}" title="Forward"><div class="glyph nav-disc" aria-hidden="true"><div class="nav-arrow nav-arrow-right"></div></div><span>Forward</span></div>
+    <div class="btn" id="btn-reload" role="button" aria-label="{reload_title}" title="{reload_title}"><div class="glyph tool-face" aria-hidden="true">{reload_glyph}</div><span>{reload_label}</span></div>
+    <div class="btn" id="btn-home" role="button" aria-label="Home" title="Home"><div class="glyph tool-face" aria-hidden="true"><div class="home-roof"></div><div class="home-wall"></div><div class="home-door"></div></div><span>Home</span></div>
     <div class="toolbar-divider" aria-hidden="true"></div>
-    <div class="btn" id="btn-debugger" role="button" aria-pressed="{debugger_open}" title="Local Hermes JavaScript debugger"><div class="glyph debug-glyph">{{js}}</div><span>Debugger</span></div>
-    <div class="brand"><div class="brand-word">Walkaway</div><div class="compass {compass_class}" id="walkaway-throbber" role="status" aria-label="{load_label}"><div class="compass-disc"><div class="compass-needle"></div></div></div></div>
+    <div class="btn" id="btn-debugger" role="button" aria-label="JavaScript debugger" aria-pressed="{debugger_open}" title="Local Hermes JavaScript debugger"><div class="glyph tool-face debug-glyph" aria-hidden="true">JS</div><span>Debugger</span></div>
+    <div class="brand"><div class="brand-copy"><div class="brand-word">Walkaway</div><div class="load-status {status_class}" id="page-load-status" role="status" aria-live="polite">{load_status}</div></div><div class="compass {compass_class}" id="walkaway-throbber" role="img" aria-label="{load_label}" title="{load_label}"><div class="compass-disc" aria-hidden="true"><div class="compass-orbit"></div><div class="compass-star"></div><div class="compass-needle"></div></div></div></div>
   </div>
-  <div class="location-row">
+  <div class="location-row" id="chrome-location">
     <div class="location-label">Location:</div>
-    <div class="{bar_class}" id="address" role="textbox" aria-label="Location" title="Enter a URL or search">
+    <div class="{bar_class}" id="address" role="textbox" aria-label="Location" aria-multiline="false" title="Enter a URL or search">
       {security}<div class="url">{url}</div>{caret}
     </div>
-    <div class="connection-label">{connection_label}</div>
   </div>
-  <div class="tabstrip">
-    <div class="tab-track" role="tablist" aria-label="Browser tabs">{tabs}</div>
-    <div class="newtab" id="btn-newtab" role="button" aria-label="New tab" title="New tab">+</div>
-  </div>
+  <div id="address-popup-anchor" popover="manual" hidden aria-hidden="true"></div>
+  {tab_row}
   {xray_layer}
   {debugger}
   {menu}
@@ -532,7 +592,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
         } else {
             0.0
         },
-        progress_top = CHROME_HEIGHT - 2.0,
         strip = p.strip,
         highlight = p.highlight,
         shadow = p.shadow,
@@ -548,14 +607,29 @@ pub fn render(state: &ChromeState<'_>) -> String {
         favicon_bg = p.favicon_bg,
         favicon_ink = p.favicon_ink,
         accent = p.accent,
-        tabs = tabs,
+        metal_top = p.metal_top,
+        metal_mid = p.metal_mid,
+        metal_bottom = p.metal_bottom,
+        tool_top = p.tool_top,
+        tool_mid = p.tool_mid,
+        tool_bottom = p.tool_bottom,
+        tool_ink = p.tool_ink,
+        tab_row = if state.tabs.is_empty() {
+            r#"<div class="tabstrip" id="native-tab-slot" aria-hidden="true"></div>"#.to_string()
+        } else {
+            format!(
+                r#"<div class="tabstrip"><div class="tab-track" role="tablist" aria-label="Browser tabs">{tabs}</div><div class="newtab" id="btn-newtab" role="button" aria-label="New tab" title="New tab">+</div></div>"#
+            )
+        },
         back_class = back_class,
         forward_class = forward_class,
         bar_class = bar_class,
-        security = if state.secure {
-            r#"<div class="lock"><div class="shackle"></div><div class="lock-body"></div></div>"#
+        security = if state.url.is_empty() {
+            ""
+        } else if state.secure {
+            r#"<div class="lock" role="img" aria-label="HTTPS connection" title="HTTPS connection"><div class="shackle"></div><div class="lock-body"></div></div>"#
         } else {
-            r#"<div class="insecure-dot"></div>"#
+            r#"<div class="insecure-dot" role="img" aria-label="Not HTTPS" title="Not HTTPS"></div>"#
         },
         url = escape_html(state.url),
         caret = caret,
@@ -570,16 +644,16 @@ pub fn render(state: &ChromeState<'_>) -> String {
         back_disabled = !state.can_back,
         forward_disabled = !state.can_forward,
         compass_class = if state.loading { "compass-loading" } else { "" },
-        load_label = if state.loading {
-            "Loading page"
+        status_class = if state.loading {
+            "load-status-busy"
         } else {
-            "Page ready"
+            ""
         },
-        connection_label = if state.secure {
-            "Secure connection"
-        } else {
-            "Not HTTPS"
-        },
+        load_label = load_label,
+        load_status = load_status,
+        reload_label = reload_label,
+        reload_title = reload_title,
+        reload_glyph = reload_glyph,
     )
 }
 
@@ -673,6 +747,38 @@ fn escape_html(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blitz_dom::{DocumentConfig, LocalName, NodeId};
+    use blitz_html::HtmlDocument;
+    use blitz_traits::shell::Viewport;
+
+    fn document(chrome: &ChromeState<'_>) -> HtmlDocument {
+        let mut doc = HtmlDocument::from_html(
+            &render(chrome),
+            DocumentConfig {
+                viewport: Some(Viewport::new(
+                    chrome.surface_width as u32,
+                    chrome.surface_height as u32,
+                    1.0,
+                    chrome.theme.color_scheme(),
+                )),
+                ..Default::default()
+            },
+        );
+        doc.resolve(0.0);
+        doc
+    }
+
+    fn element(doc: &HtmlDocument, id: &str) -> NodeId {
+        doc.get_element_by_id(id)
+            .unwrap_or_else(|| panic!("missing #{id}"))
+    }
+
+    fn rect(doc: &HtmlDocument, id: &str) -> [f32; 4] {
+        let node = doc.get_node(element(doc, id)).unwrap();
+        let position = node.absolute_position(0.0, 0.0);
+        let size = node.final_layout().size;
+        [position.x, position.y, size.width, size.height]
+    }
 
     fn state<'a>(tabs: &'a [TabInfo<'a>]) -> ChromeState<'a> {
         ChromeState {
@@ -746,6 +852,211 @@ mod tests {
         assert!(!html.contains(">Edit<"));
         assert!(html.contains("clip-path:path('M"));
         assert!(html.contains("Location:"));
+    }
+
+    #[test]
+    fn modern_tools_have_resolved_gradients_and_named_controls() {
+        for theme in [Theme::Light, Theme::Dark] {
+            let mut chrome = state(&[]);
+            chrome.theme = theme;
+            let html = render(&chrome);
+            assert!(html.contains("data-chrome-theme=\"netscape-modern\""));
+            assert!(html.contains("Navigator &#183; Modern"));
+            assert!(!html.contains("Classic"));
+            assert!(!html.contains("@keyframes"));
+            assert!(!html.contains("animation:"));
+            let doc = document(&chrome);
+            for selector in [
+                "#chrome-navigation",
+                "#btn-back .nav-disc",
+                "#btn-reload .tool-face",
+                "#walkaway-throbber",
+                "#walkaway-throbber .compass-disc",
+            ] {
+                let node = doc.query_selector(selector).unwrap().unwrap();
+                let image = doc.resolved_style_value(node, "background-image");
+                assert!(image.contains("gradient("), "{theme:?} {selector}: {image}");
+            }
+            let back_disc = doc.query_selector("#btn-back .nav-disc").unwrap().unwrap();
+            assert_eq!(
+                doc.resolved_style_value(back_disc, "border-top-left-radius"),
+                "50%"
+            );
+            for (id, label) in [
+                ("btn-back", "Back"),
+                ("btn-forward", "Forward"),
+                ("btn-reload", "Reload page"),
+                ("btn-home", "Home"),
+                ("btn-debugger", "JavaScript debugger"),
+            ] {
+                let node = doc.get_node(element(&doc, id)).unwrap();
+                assert_eq!(node.attr(LocalName::from("role")), Some("button"));
+                assert_eq!(node.attr(LocalName::from("aria-label")), Some(label));
+                assert!(!node.text_content().trim().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn blank_location_and_empty_autocomplete_anchor_stay_honest() {
+        for focused in [false, true] {
+            let mut chrome = state(&[]);
+            chrome.url = "";
+            chrome.focused = focused;
+            // A stale secure flag must not turn an empty internal page into an
+            // HTTPS claim. The host supplies the same empty value to AppKit.
+            let html = render(&chrome);
+            assert!(!html.contains("aria-label=\"HTTPS connection\""));
+            assert!(!html.contains("aria-label=\"Not HTTPS\""));
+            assert!(!html.contains("<script"));
+            let doc = document(&chrome);
+            let address = doc.get_node(element(&doc, "address")).unwrap();
+            assert_eq!(address.text_content().trim(), "");
+            assert_eq!(
+                doc.query_selector_all("#address .caret").unwrap().len(),
+                usize::from(focused)
+            );
+            let anchor_id = element(&doc, "address-popup-anchor");
+            let anchor = doc.get_node(anchor_id).unwrap();
+            assert!(anchor.children.is_empty());
+            assert_eq!(anchor.attr(LocalName::from("popover")), Some("manual"));
+            assert!(anchor.attr(LocalName::from("hidden")).is_some());
+            assert_eq!(doc.resolved_style_value(anchor_id, "display"), "none");
+            assert_eq!(
+                doc.get_node(element(&doc, "page-load-status"))
+                    .unwrap()
+                    .text_content(),
+                "Ready"
+            );
+        }
+    }
+
+    #[test]
+    fn loading_state_switches_one_action_and_indeterminate_feedback() {
+        let mut chrome = state(&[]);
+        for loading in [false, true, false] {
+            chrome.loading = loading;
+            let html = render(&chrome);
+            assert_eq!(html.matches("id=\"btn-reload\"").count(), 1);
+            assert!(!html.contains("id=\"btn-stop\""));
+            assert!(!html.contains("aria-valuenow"));
+            let doc = document(&chrome);
+            let action = doc.get_node(element(&doc, "btn-reload")).unwrap();
+            assert_eq!(
+                action.text_content(),
+                if loading { "Stop" } else { "Reload" }
+            );
+            assert_eq!(
+                action.attr(LocalName::from("aria-label")),
+                Some(if loading {
+                    "Stop loading page"
+                } else {
+                    "Reload page"
+                })
+            );
+            assert_eq!(
+                doc.get_node(element(&doc, "page-load-status"))
+                    .unwrap()
+                    .text_content(),
+                if loading { "Loading…" } else { "Done" }
+            );
+            assert_eq!(
+                doc.query_selector_all(".compass-loading").unwrap().len(),
+                usize::from(loading)
+            );
+            assert_eq!(
+                doc.query_selector_all(".stop-glyph").unwrap().len(),
+                usize::from(loading)
+            );
+            assert_eq!(
+                doc.get_element_by_id("page-load-progress").is_some(),
+                loading
+            );
+            if loading {
+                let progress = doc.get_node(element(&doc, "page-load-progress")).unwrap();
+                assert_eq!(progress.attr(LocalName::from("role")), Some("progressbar"));
+                assert_eq!(
+                    progress.attr(LocalName::from("aria-valuetext")),
+                    Some("Loading…")
+                );
+                assert_eq!(rect(&doc, "page-load-progress"), [0.0, 103.0, 800.0, 3.0]);
+            }
+        }
+    }
+
+    #[test]
+    fn native_slot_and_address_frame_stay_exact_in_real_blitz_layout() {
+        for width in [360, 560, 600, 601, 800, 1280] {
+            for theme in [Theme::Light, Theme::Dark] {
+                let mut chrome = state(&[]);
+                chrome.surface_width = f64::from(width);
+                chrome.theme = theme;
+                chrome.loading = true;
+                chrome.focused = true;
+                let html = render(&chrome);
+                assert_eq!(html.matches("id=\"native-tab-slot\"").count(), 1);
+                assert!(!html.contains("role=\"tablist\""));
+                assert!(!html.contains("id=\"btn-newtab\""));
+                assert!(!html.contains("id=\"tab-"));
+                let doc = document(&chrome);
+                for (id, y, height) in [
+                    ("chrome-menubar", 0.0, 24.0),
+                    ("chrome-navigation", 24.0, 50.0),
+                    ("chrome-location", 74.0, 32.0),
+                    ("native-tab-slot", 106.0, 38.0),
+                ] {
+                    assert_eq!(
+                        rect(&doc, id),
+                        [0.0, y, width as f32, height],
+                        "{width} {theme:?} #{id}"
+                    );
+                }
+                assert_eq!(
+                    rect(&doc, "address"),
+                    [64.0, 78.0, (width - 74) as f32, 24.0],
+                    "native address frame at {width}px {theme:?}"
+                );
+                let slot = doc.get_node(element(&doc, "native-tab-slot")).unwrap();
+                assert!(slot.children.is_empty(), "no imitation below native tabs");
+                for id in [
+                    "btn-back",
+                    "btn-forward",
+                    "btn-reload",
+                    "btn-home",
+                    "btn-debugger",
+                    "walkaway-throbber",
+                    "page-load-status",
+                ] {
+                    let [x, y, w, h] = rect(&doc, id);
+                    assert!(
+                        w > 0.0 && h > 0.0 && x >= 0.0 && x + w <= width as f32,
+                        "{width} {theme:?} #{id}: {x},{y} {w}x{h}"
+                    );
+                    assert!(
+                        y >= 24.0 && y + h <= 74.0,
+                        "#{id} must stay in navigation row"
+                    );
+                }
+                for id in [
+                    "btn-back",
+                    "btn-forward",
+                    "btn-reload",
+                    "btn-home",
+                    "btn-debugger",
+                ] {
+                    let [x, y, w, h] = rect(&doc, id);
+                    let hit = doc
+                        .hit(x + w / 2.0, y + h / 2.0)
+                        .expect("visible navigation control");
+                    assert_eq!(
+                        crate::dom_ffi::bubble_target(&doc, hit.node_id),
+                        element(&doc, id),
+                        "{width} {theme:?} #{id}"
+                    );
+                }
+            }
+        }
+        assert_eq!(CHROME_HEIGHT, 144.0);
     }
 
     #[test]

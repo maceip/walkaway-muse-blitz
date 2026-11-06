@@ -78,3 +78,22 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+3. Original CompactTabStrip native macOS component
+
+Upstream: https://github.com/maceip/compact-tab-strip.git
+Revision: f23ba1819f7b3a3c4587aebb75e7adde59dbad58
+
+All five original Swift files in swift/Sources/CompactTabStrip are vendored
+under native-tabs/Sources/CompactTabStrip. The original MIT license is
+preserved in native-tabs/LICENSE; native-tabs/VENDOR.json records each
+upstream path, original SHA-256 and vendored SHA-256, plus any explicit
+integration changes. The notice and permission in section 1 apply to this
+complete native component as well as to the historical Rust geometry port.
+
+On macOS the original component replaces the Rust tab approximation in the
+existing browser tab row. WalkawayTabBridge.swift and src/native_tabs.rs
+provide host lifecycle, queued events, browser-owned model synchronization,
+and real native pixel capture; they do not reimplement the original tab
+interactions. Swift sources are compiled from this repository, with no local
+absolute source dependency or external Swift package resolution.

@@ -64,6 +64,22 @@ impl Browser {
             .unwrap_or_else(|| self.address.clone())
     }
 
+    pub fn address_display(&self) -> String {
+        let url = self.display_url();
+        if url.starts_with("muse://") {
+            String::new()
+        } else {
+            url
+        }
+    }
+
+    pub fn stop_loading(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.loading = false;
+        self.error = None;
+        self.sync_address();
+    }
+
     /// Begin a navigation: validates the input, records the generation, and
     /// returns the URL to fetch. The caller performs the fetch off-thread.
     pub fn begin_navigation(&mut self, input: &str) -> Result<Url, String> {
@@ -148,11 +164,27 @@ pub fn normalize_input(input: &str) -> Result<Url, String> {
         return Url::parse(trimmed).map_err(|e| format!("invalid URL: {e}"));
     }
 
+    let authority = trimmed.split('/').next().unwrap_or(trimmed);
     let looks_like_host = !trimmed.contains(char::is_whitespace)
-        && (trimmed.contains('.') || trimmed.starts_with("localhost"));
+        && (authority.contains('.')
+            || authority.starts_with("localhost")
+            || authority.starts_with('['));
 
     if looks_like_host {
-        let candidate = format!("https://{trimmed}");
+        let secure_candidate = Url::parse(&format!("https://{trimmed}"));
+        let loopback = secure_candidate
+            .as_ref()
+            .ok()
+            .and_then(Url::host_str)
+            .is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost")
+                    || host.eq_ignore_ascii_case("[::1]")
+                    || host.eq_ignore_ascii_case("::1")
+                    || host
+                        .parse::<std::net::Ipv4Addr>()
+                        .is_ok_and(|address| address.is_loopback())
+            });
+        let candidate = format!("{}://{trimmed}", if loopback { "http" } else { "https" });
         if let Ok(url) = Url::parse(&candidate) {
             if url.host().is_some() {
                 return Ok(url);
@@ -209,6 +241,32 @@ pub fn fetch(provider: &SharedProvider, url: &Url) -> Result<String, String> {
         }
         Err(e) => Err(format!("{e}")),
     }
+}
+
+pub fn fetch_cancellable(
+    provider: &SharedProvider,
+    url: &Url,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+    runtime().block_on(async {
+        let request = blitz_traits::net::Request::get(url.clone());
+        let fetch = provider.fetch_async(request);
+        tokio::pin!(fetch);
+        let timeout = tokio::time::sleep(std::time::Duration::from_secs(60));
+        tokio::pin!(timeout);
+        loop {
+            if cancelled.load(Ordering::Acquire) { return Err("navigation cancelled".into()); }
+            tokio::select! {
+                result = &mut fetch => return result.map_err(|error| error.to_string()).and_then(|(_, bytes)| {
+                    if bytes.is_empty() { Err("empty response".into()) }
+                    else { Ok(String::from_utf8_lossy(&bytes).into_owned()) }
+                }),
+                _ = &mut timeout => return Err("navigation timed out after 60 seconds".into()),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+            }
+        }
+    })
 }
 
 /// Blocking HTTP form submission (`GET` or `POST` `application/x-www-form-urlencoded`).

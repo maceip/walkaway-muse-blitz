@@ -172,6 +172,13 @@ cp -f "${BUILT_BIN}" "${STAGE_APP}/Contents/MacOS/Walkaway"
 chmod 755 "${STAGE_APP}/Contents/MacOS/Walkaway"
 ln -s Walkaway "${STAGE_APP}/Contents/MacOS/hermes-blitz-browser"
 cp "${BROWSER_DIR}/THIRD_PARTY_NOTICES.txt" "${STAGE_APP}/Contents/Resources/THIRD_PARTY_NOTICES.txt"
+cp "${BROWSER_DIR}/native-tabs/LICENSE" "${STAGE_APP}/Contents/Resources/CompactTabStrip-LICENSE.txt"
+cp "${BROWSER_DIR}/native-tabs/VENDOR.json" "${STAGE_APP}/Contents/Resources/CompactTabStrip-VENDOR.json"
+
+xcrun swift-stdlib-tool --copy \
+  --scan-executable "${STAGE_APP}/Contents/MacOS/Walkaway" \
+  --destination "${STAGE_APP}/Contents/Frameworks" \
+  --platform macosx
 
 # Generate AppIcon.icns from marketing site icon PNG if available
 ICON_SRC="${REPO_ROOT}/apps/marketing-site/assets/download/icon-ios-dark.png"
@@ -406,6 +413,8 @@ HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --
 HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --supervisortest
 HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --uitest
 HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --debuggertest
+HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --nativetabtest
+HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --tabhosttest
 cleanup_mount
 trap cleanup_temp_key EXIT
 

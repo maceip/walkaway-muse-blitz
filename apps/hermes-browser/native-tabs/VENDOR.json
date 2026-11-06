@@ -1,0 +1,50 @@
+{
+  "upstream": "https://github.com/maceip/compact-tab-strip.git",
+  "revision": "f23ba1819f7b3a3c4587aebb75e7adde59dbad58",
+  "license": "MIT",
+  "source_directory": "swift/Sources/CompactTabStrip",
+  "files": [
+    {
+      "path": "Sources/CompactTabStrip/CompactTabStrip.swift",
+      "upstream_path": "swift/Sources/CompactTabStrip/CompactTabStrip.swift",
+      "upstream_sha256": "1946e842020967e3434a1ef750fc5c6d17121121827154bd2e2e666050ca4ecc",
+      "vendored_sha256": "1946e842020967e3434a1ef750fc5c6d17121121827154bd2e2e666050ca4ecc",
+      "changes": []
+    },
+    {
+      "path": "Sources/CompactTabStrip/TabHoverPreview.swift",
+      "upstream_path": "swift/Sources/CompactTabStrip/TabHoverPreview.swift",
+      "upstream_sha256": "387e8e5233784f9f877bfd150f6b8db4027b7143f030540698ad363c2bc35943",
+      "vendored_sha256": "387e8e5233784f9f877bfd150f6b8db4027b7143f030540698ad363c2bc35943",
+      "changes": []
+    },
+    {
+      "path": "Sources/CompactTabStrip/TabPresentation.swift",
+      "upstream_path": "swift/Sources/CompactTabStrip/TabPresentation.swift",
+      "upstream_sha256": "38817a6298ce0e9f20f05e65d84d966ce0bb50c28151c1389c4bf373eafbad5e",
+      "vendored_sha256": "38817a6298ce0e9f20f05e65d84d966ce0bb50c28151c1389c4bf373eafbad5e",
+      "changes": []
+    },
+    {
+      "path": "Sources/CompactTabStrip/TabStripGeometry.swift",
+      "upstream_path": "swift/Sources/CompactTabStrip/TabStripGeometry.swift",
+      "upstream_sha256": "8d97c240da348108b5ed2e4f29424228c2be95f6cc69488297187c6efd292a7d",
+      "vendored_sha256": "8d97c240da348108b5ed2e4f29424228c2be95f6cc69488297187c6efd292a7d",
+      "changes": []
+    },
+    {
+      "path": "Sources/CompactTabStrip/TabStripWindowDragGuard.swift",
+      "upstream_path": "swift/Sources/CompactTabStrip/TabStripWindowDragGuard.swift",
+      "upstream_sha256": "99399267aaa7595d29f81eb7ea079e12d8fdb5ac4e1726a6dff0fd7e6aab4704",
+      "vendored_sha256": "99399267aaa7595d29f81eb7ea079e12d8fdb5ac4e1726a6dff0fd7e6aab4704",
+      "changes": []
+    },
+    {
+      "path": "LICENSE",
+      "upstream_path": "LICENSE",
+      "upstream_sha256": "6aba6d816d1be09f920072e6f9a5aea34c27b773defa993ee255ad2178fa2577",
+      "vendored_sha256": "6aba6d816d1be09f920072e6f9a5aea34c27b773defa993ee255ad2178fa2577",
+      "changes": []
+    }
+  ]
+}

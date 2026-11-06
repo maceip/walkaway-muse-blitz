@@ -15,16 +15,20 @@
 //! resolve to a link (real navigation), then fall through to Hermes.
 
 mod browser;
+#[cfg(test)]
+mod browser_tests;
 mod chrome;
 mod control;
 mod debugger;
 mod debugger_ui;
 mod dom_ffi;
 mod gooey_tabs;
+mod native_tabs;
 mod observe;
 mod page_endpoint;
 mod recall;
 mod vault;
+mod window_host;
 
 use anyrender::WindowRenderer;
 use anyrender_vello::VelloWindowRenderer;
@@ -55,6 +59,7 @@ use winit::window::{Window, WindowId};
 
 const WIDTH: u32 = 1120;
 const HEIGHT: u32 = 800;
+static PROCESS_STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 /// Opaque handle owned by the C++ shim.
 #[repr(C)]
@@ -293,6 +298,8 @@ struct CanonicalTab {
     id: TabId,
     browser: Browser,
     title: String,
+    pinned: bool,
+    navigation_cancel: Option<Arc<AtomicBool>>,
 }
 
 /// One page instance hosted in a canonical tab: the document, its Hermes
@@ -360,6 +367,8 @@ impl Tab {
                 id,
                 browser,
                 title: "New tab".to_string(),
+                pinned: false,
+                navigation_cancel: None,
             },
             instance: PageInstance::new(page),
         }
@@ -375,6 +384,7 @@ impl Tab {
 }
 
 enum UserEvent {
+    NativeTabs(native_tabs::NativeTabEvent),
     Navigated {
         tab: TabId,
         generation: u64,
@@ -507,6 +517,8 @@ struct QueuedInput {
 }
 
 struct BrowserApp {
+    native_tabs: Option<native_tabs::NativeTabStrip>,
+    window_token: u64,
     window: Option<Arc<Window>>,
     renderer: VelloWindowRenderer,
     chrome_doc: HtmlDocument,
@@ -544,6 +556,8 @@ struct BrowserApp {
     xray_enabled: bool,
     exit_after: Option<Duration>,
     started: Instant,
+    first_frame_reported: bool,
+    startup_capture: Option<String>,
 }
 
 impl BrowserApp {
@@ -552,6 +566,24 @@ impl BrowserApp {
         net_dirty: Arc<AtomicBool>,
         provider: SharedProvider,
     ) -> Self {
+        Self::construct(proxy, net_dirty, provider, true)
+    }
+
+    fn for_window(
+        proxy: EventLoopProxy<UserEvent>,
+        net_dirty: Arc<AtomicBool>,
+        provider: SharedProvider,
+    ) -> Self {
+        Self::construct(proxy, net_dirty, provider, false)
+    }
+
+    fn construct(
+        proxy: EventLoopProxy<UserEvent>,
+        net_dirty: Arc<AtomicBool>,
+        provider: SharedProvider,
+        initialize_chrome: bool,
+    ) -> Self {
+        let started = PROCESS_STARTED.get().copied().unwrap_or_else(Instant::now);
         let scale = 1.0_f64;
         let size = (WIDTH, HEIGHT);
         let tabs = vec![Tab::start_page(
@@ -566,6 +598,8 @@ impl BrowserApp {
         let xray_enabled = std::env::args().any(|a| a == "--xray")
             || std::env::var("HERMES_XRAY").ok().as_deref() == Some("1");
         let mut app = Self {
+            native_tabs: None,
+            window_token: 1,
             window: None,
             renderer: VelloWindowRenderer::new(),
             chrome_doc: HtmlDocument::from_html("<!DOCTYPE html>", DocumentConfig::default()),
@@ -599,9 +633,13 @@ impl BrowserApp {
             supervise_commits_only,
             xray_enabled,
             exit_after: parse_exit_after(),
-            started: Instant::now(),
+            started,
+            first_frame_reported: false,
+            startup_capture: None,
         };
-        app.sync_chrome();
+        if initialize_chrome {
+            app.sync_chrome();
+        }
         app
     }
 
@@ -1914,7 +1952,11 @@ impl BrowserApp {
             self.active = index;
             self.tab_animation.snap(index);
             let viewport = self.page_viewport();
-            self.tabs[index].instance.page.doc_mut().set_viewport(viewport);
+            self.tabs[index]
+                .instance
+                .page
+                .doc_mut()
+                .set_viewport(viewport);
             self.tabs[index].instance.page.resolve();
         }
     }
@@ -2390,6 +2432,17 @@ impl BrowserApp {
         if rgba.len() < expected {
             return None;
         }
+        if let Some(native) = self.native_tabs.as_ref().filter(|_| !self.menu_open) {
+            let capture = native.capture_rgba().ok()?;
+            capture
+                .composite_into(&mut rgba, width, height, scale)
+                .ok()?;
+            native
+                .capture_address_rgba()
+                .ok()?
+                .composite_into(&mut rgba, width, height, scale)
+                .ok()?;
+        }
         let mut cursor = std::io::Cursor::new(Vec::new());
         {
             let mut encoder = png::Encoder::new(&mut cursor, width, height);
@@ -2404,8 +2457,56 @@ impl BrowserApp {
         Some((bytes, hash, self.frame_seq))
     }
 
-    /// Regenerate the chrome document from state.
+    fn sync_native_tabs(&mut self) {
+        if self.native_tabs.is_none() {
+            return;
+        }
+        let items: Vec<native_tabs::NativeTabItem> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let url = tab.canonical.browser.display_url();
+                native_tabs::NativeTabItem {
+                    id: tab.canonical.id.0,
+                    title: tab.canonical.title.clone(),
+                    secure: url.starts_with("https://"),
+                    url,
+                    loading: tab.canonical.browser.loading,
+                    pinned: tab.canonical.pinned,
+                    transferable: !self
+                        .control
+                        .as_ref()
+                        .is_some_and(|session| session.tab_id == tab.canonical.id),
+                }
+            })
+            .collect();
+        let selected = self.tab().canonical.id.0;
+        let address = self.tab().canonical.browser.address_display();
+        let loading = self.tab().canonical.browser.loading;
+        let secure = address.starts_with("https://");
+        let editable = !self.session_blocks_input();
+        let native = self.native_tabs.as_mut().expect("native strip checked");
+        if let Err(error) = native
+            .set_frame(0.0, 106.0, self.size.0 as f64 / self.scale, 38.0)
+            .and_then(|_| native.set_dark_mode(Some(self.theme.is_dark())))
+            .and_then(|_| native.update(&items, selected))
+            .and_then(|_| native.set_address(&address, loading, secure, editable))
+            .and_then(|_| {
+                native.set_address_frame(
+                    64.0,
+                    78.0,
+                    (self.size.0 as f64 / self.scale - 74.0).max(40.0),
+                    24.0,
+                )
+            })
+            .and_then(|_| native.set_overlays_visible(!self.menu_open))
+        {
+            eprintln!("[tabs] native update failed: {error}");
+        }
+    }
+
     fn sync_chrome(&mut self) {
+        self.sync_native_tabs();
         let telemetry = if self.control.is_some() || self.xray_enabled {
             let active_tab_id = self.tab().canonical.id;
             if self.tab().instance.last_snapshot.is_none() {
@@ -2501,11 +2602,14 @@ impl BrowserApp {
             None
         };
 
-        let titles: Vec<String> = self
-            .tabs
-            .iter()
-            .map(|t| t.canonical.title.clone())
-            .collect();
+        let titles: Vec<String> = if self.native_tabs.is_some() {
+            Vec::new()
+        } else {
+            self.tabs
+                .iter()
+                .map(|t| t.canonical.title.clone())
+                .collect()
+        };
         let infos: Vec<TabInfo<'_>> = titles
             .iter()
             .enumerate()
@@ -2519,7 +2623,7 @@ impl BrowserApp {
             self.debugger_ui
                 .render(chrome::debugger_height(self.size.1 as f64 / self.scale))
         });
-        let url = self.tab().canonical.browser.display_url();
+        let url = self.tab().canonical.browser.address_display();
         let supervision = self.supervision_info();
         let html = chrome::render(&ChromeState {
             url: &url,
@@ -2621,6 +2725,9 @@ impl BrowserApp {
             self.flush_control_out();
             self.control = None;
         }
+        if let Some(cancel) = self.tabs[index].canonical.navigation_cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
         self.tabs.remove(index);
         if self.tabs.is_empty() {
             let tab = self.create_start_tab();
@@ -2637,6 +2744,88 @@ impl BrowserApp {
         self.request_redraw();
     }
 
+    fn handle_native_tab(&mut self, event: native_tabs::NativeTabEvent) {
+        use native_tabs::NativeTabAction;
+        let id = TabId(event.tab_id);
+        let index = self.tabs.iter().position(|tab| tab.canonical.id == id);
+        match event.action {
+            NativeTabAction::Select => {
+                if let Some(index) = index {
+                    self.select_tab(index);
+                }
+            }
+            NativeTabAction::Close => {
+                if let Some(index) = index {
+                    self.close_tab(index);
+                }
+            }
+            NativeTabAction::New => self.new_tab(),
+            NativeTabAction::Move => self.move_tab(id, event.target_index),
+            NativeTabAction::Pin => self.pin_tab(id, event.pinned),
+            NativeTabAction::Reload => {
+                if let Some(index) = index {
+                    self.select_tab(index);
+                }
+                if !self.session_blocks_input() {
+                    self.reload();
+                }
+            }
+            NativeTabAction::Search => {
+                if let Some(index) = index {
+                    if self.active != index {
+                        return;
+                    }
+                    if !self.session_blocks_input() {
+                        if let Some(text) = event.text {
+                            self.navigate(&text);
+                        }
+                    }
+                }
+            }
+            NativeTabAction::Detach | NativeTabAction::Transfer => {}
+        }
+    }
+
+    fn move_tab(&mut self, id: TabId, requested: usize) {
+        let Some(index) = self.tabs.iter().position(|tab| tab.canonical.id == id) else {
+            return;
+        };
+        let active = self.tab().canonical.id;
+        let tab = self.tabs.remove(index);
+        let pins = self
+            .tabs
+            .iter()
+            .take_while(|tab| tab.canonical.pinned)
+            .count();
+        let target = if tab.canonical.pinned {
+            requested.min(pins)
+        } else {
+            requested.clamp(pins, self.tabs.len())
+        };
+        self.tabs.insert(target, tab);
+        self.active = self
+            .tabs
+            .iter()
+            .position(|tab| tab.canonical.id == active)
+            .expect("active survives reorder");
+        self.tab_animation.snap(self.active);
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn pin_tab(&mut self, id: TabId, pinned: bool) {
+        let Some(index) = self.tabs.iter().position(|tab| tab.canonical.id == id) else {
+            return;
+        };
+        self.tabs[index].canonical.pinned = pinned;
+        let target = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.canonical.pinned && tab.canonical.id != id)
+            .count();
+        self.move_tab(id, target);
+    }
+
     fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
             self.active = index;
@@ -2647,7 +2836,7 @@ impl BrowserApp {
                 .doc_mut()
                 .set_viewport(viewport);
             self.tabs[index].instance.page.resolve();
-            if self.reduced_motion {
+            if self.reduced_motion || self.native_tabs.is_some() {
                 self.tab_animation.snap(index);
             } else {
                 self.tab_animation.select(index);
@@ -2660,6 +2849,9 @@ impl BrowserApp {
     }
 
     fn navigate(&mut self, input: &str) {
+        if let Some(cancel) = self.tab_mut().canonical.navigation_cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
         let url = match self.tab_mut().canonical.browser.begin_navigation(input) {
             Ok(u) => u,
             Err(e) => {
@@ -2692,8 +2884,10 @@ impl BrowserApp {
         self.sync_chrome();
         self.request_redraw();
 
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.tab_mut().canonical.navigation_cancel = Some(cancel.clone());
         std::thread::spawn(move || {
-            let result = browser::fetch(&provider, &fetch_url);
+            let result = browser::fetch_cancellable(&provider, &fetch_url, &cancel);
             let _ = proxy.send_event(UserEvent::Navigated {
                 tab: tab_id,
                 generation,
@@ -2701,6 +2895,15 @@ impl BrowserApp {
                 result,
             });
         });
+    }
+
+    fn stop_navigation(&mut self) {
+        if let Some(cancel) = self.tab_mut().canonical.navigation_cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
+        self.tab_mut().canonical.browser.stop_loading();
+        self.sync_chrome();
+        self.request_redraw();
     }
 
     fn reload(&mut self) {
@@ -2717,12 +2920,18 @@ impl BrowserApp {
     }
 
     fn go_back(&mut self) {
+        if self.tab().canonical.browser.loading {
+            self.stop_navigation();
+        }
         if self.tab_mut().canonical.browser.go_back() {
             self.show_current_entry();
         }
     }
 
     fn go_forward(&mut self) {
+        if self.tab().canonical.browser.loading {
+            self.stop_navigation();
+        }
         if self.tab_mut().canonical.browser.go_forward() {
             self.show_current_entry();
         }
@@ -2781,9 +2990,24 @@ impl BrowserApp {
                 current = node.parent;
             }
             if let Some(action) = action {
-                self.debugger_ui.action(&action);
-                self.sync_chrome();
-                self.request_redraw();
+                if self.debugger_ui.action(&action) {
+                    if matches!(
+                        action.as_str(),
+                        "dbg-pause"
+                            | "dbg-continue"
+                            | "dbg-step_into"
+                            | "dbg-step_over"
+                            | "dbg-step_out"
+                            | "dbg-stop"
+                            | "dbg-eval"
+                    ) {
+                        self.debugger_ui.patch_snapshot(&mut self.chrome_doc);
+                        self.chrome_doc.resolve(0.0);
+                    } else {
+                        self.sync_chrome();
+                    }
+                    self.request_redraw();
+                }
             }
             return;
         }
@@ -2892,11 +3116,21 @@ impl BrowserApp {
             return;
         }
         if id_is("btn-reload") {
-            self.reload();
+            if self.tab().canonical.browser.loading {
+                self.stop_navigation();
+            } else {
+                self.reload();
+            }
             return;
         }
         if id_is("address") {
-            let url = self.tab().canonical.browser.display_url();
+            if let Some(native) = &self.native_tabs {
+                if let Err(error) = native.focus_address() {
+                    eprintln!("[address] focus failed: {error}");
+                }
+                return;
+            }
+            let url = self.tab().canonical.browser.address_display();
             let tab = self.tab_mut();
             tab.canonical.browser.focused = true;
             tab.canonical.browser.address = url;
@@ -2913,6 +3147,9 @@ impl BrowserApp {
             self.menu_open = false;
             self.sync_chrome();
             self.request_redraw();
+        }
+        if self.native_tabs.is_some() && (106.0..CHROME_HEIGHT as f32).contains(&y) {
+            return;
         }
         if y >= CHROME_HEIGHT as f32 {
             self.handle_page_click(x, y);
@@ -3029,11 +3266,47 @@ impl BrowserApp {
             return;
         }
         let cmd = self.modifiers.super_key();
-
+        if cmd
+            && self.modifiers.alt_key()
+            && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("p"))
+        {
+            let id = self.tab().canonical.id;
+            self.pin_tab(id, !self.tab().canonical.pinned);
+            return;
+        }
+        if self.modifiers.control_key() && event.logical_key == Key::Named(NamedKey::Tab) {
+            let len = self.tabs.len();
+            let index = if self.modifiers.shift_key() {
+                (self.active + len - 1) % len
+            } else {
+                (self.active + 1) % len
+            };
+            self.select_tab(index);
+            return;
+        }
         if cmd {
             match &event.logical_key {
+                Key::Character(c)
+                    if c.len() == 1
+                        && c.as_bytes()[0].is_ascii_digit()
+                        && c.as_bytes()[0] != b'0' =>
+                {
+                    let digit = (c.as_bytes()[0] - b'0') as usize;
+                    self.select_tab(if digit == 9 {
+                        self.tabs.len() - 1
+                    } else {
+                        (digit - 1).min(self.tabs.len() - 1)
+                    });
+                    return;
+                }
                 Key::Character(c) if c.eq_ignore_ascii_case("l") => {
-                    let url = self.tab().canonical.browser.display_url();
+                    if let Some(native) = &self.native_tabs {
+                        if let Err(error) = native.focus_address() {
+                            eprintln!("[address] focus failed: {error}");
+                        }
+                        return;
+                    }
+                    let url = self.tab().canonical.browser.address_display();
                     let tab = self.tab_mut();
                     tab.canonical.browser.focused = true;
                     tab.canonical.browser.address = url;
@@ -3134,6 +3407,7 @@ impl BrowserApp {
         }) {
             return;
         }
+        target.canonical.navigation_cancel = None;
         match result {
             Ok(html) => {
                 target.canonical.browser.commit(url.clone(), html.clone());
@@ -3203,6 +3477,14 @@ impl BrowserApp {
             blitz_paint::paint_scene(painter, chrome_doc, scale_f, width, height, 0, 0);
         });
         self.frame_seq = self.frame_seq.wrapping_add(1);
+        if !self.first_frame_reported {
+            self.first_frame_reported = true;
+            eprintln!(
+                "[startup] first_submitted_frame_ms={:.2} native_tabs={}",
+                self.started.elapsed().as_secs_f64() * 1000.0,
+                self.native_tabs.is_some()
+            );
+        }
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -3221,6 +3503,7 @@ impl BrowserApp {
 impl ApplicationHandler<UserEvent> for BrowserApp {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
+            UserEvent::NativeTabs(event) => self.handle_native_tab(event),
             UserEvent::Navigated {
                 tab,
                 generation,
@@ -3251,12 +3534,17 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
         let now = Instant::now();
         let dt = now.duration_since(self.animation_tick).as_secs_f64();
         let was_moving = self.tab_animation.is_animating();
-        let moving = self.tab_animation.tick(dt.min(0.05));
+        let moving = self.native_tabs.is_none() && self.tab_animation.tick(dt.min(0.05));
         self.animation_tick = now;
         let debugger_changed = self.debugger_ui.poll();
-        if was_moving || debugger_changed {
+        if was_moving && self.native_tabs.is_none() {
             self.sync_chrome();
             self.request_redraw();
+        } else if debugger_changed && self.debugger_ui.open {
+            if self.debugger_ui.patch_snapshot(&mut self.chrome_doc) {
+                self.chrome_doc.resolve(0.0);
+                self.request_redraw();
+            }
         }
         if moving || self.debugger_ui.busy() {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
@@ -3269,6 +3557,20 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
                 (self.started + limit).min(now + Duration::from_millis(16)),
             ));
+        }
+        if self.first_frame_reported {
+            if let Some(path) = self.startup_capture.take() {
+                match self.capture_png() {
+                    Some((bytes, _, _)) => {
+                        if let Err(error) = std::fs::write(&path, bytes) {
+                            eprintln!("[capture] {error}");
+                        } else {
+                            eprintln!("[capture] native chrome captured to {path}");
+                        }
+                    }
+                    None => eprintln!("[capture] native window capture failed"),
+                }
+            }
         }
         if self.net_dirty.load(Ordering::SeqCst) {
             self.net_dirty.store(false, Ordering::SeqCst);
@@ -3321,7 +3623,6 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
         let tab = self.tab_mut();
         tab.instance.page.doc_mut().set_viewport(viewport);
         tab.instance.page.resolve();
-        self.sync_chrome();
 
         eprintln!(
             "[host] surface {}x{} physical @{:.2}x => chrome {}px + page {}px CSS, theme {:?}",
@@ -3333,7 +3634,25 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
             self.theme,
         );
 
+        self.native_tabs = match native_tabs::NativeTabStrip::new(
+            window.clone(),
+            self.window_token,
+            self.proxy.clone(),
+            UserEvent::NativeTabs,
+        ) {
+            Ok(strip) => Some(strip),
+            Err(error) => {
+                eprintln!("[tabs] native Swift strip unavailable: {error}");
+                #[cfg(target_os = "macos")]
+                {
+                    event_loop.exit();
+                }
+                None
+            }
+        };
         self.window = Some(window);
+        self.sync_chrome();
+        self.request_redraw();
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
@@ -3371,11 +3690,25 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
                     (position.x / self.scale) as f32,
                     (position.y / self.scale) as f32,
                 );
-                if (self.cursor.1 < CHROME_HEIGHT as f32
-                    || self.debugger_contains(self.cursor.1)
-                    || self.menu_open)
-                    && self.chrome_doc.set_hover_to(self.cursor.0, self.cursor.1)
-                {
+                let native_row = self.native_tabs.is_some()
+                    && (106.0..CHROME_HEIGHT as f32).contains(&self.cursor.1);
+                let chrome_hover = !native_row
+                    && (self.cursor.1 < CHROME_HEIGHT as f32
+                        || self.debugger_contains(self.cursor.1)
+                        || self.menu_open);
+                let changed = if chrome_hover {
+                    self.chrome_doc.set_hover_to(self.cursor.0, self.cursor.1)
+                } else {
+                    self.chrome_doc.clear_hover()
+                };
+                if changed {
+                    self.chrome_doc.resolve(0.0);
+                    self.request_redraw();
+                }
+            }
+
+            WindowEvent::CursorLeft { .. } => {
+                if self.chrome_doc.clear_hover() {
                     self.chrome_doc.resolve(0.0);
                     self.request_redraw();
                 }
@@ -3885,7 +4218,23 @@ fn parse_exit_after() -> Option<Duration> {
 }
 
 fn main() {
+    let _ = PROCESS_STARTED.set(Instant::now());
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--nativetabtest") {
+        match native_tabs::run_native_tab_selftest() {
+            Ok(checks) => {
+                println!("NATIVE TAB TEST PASS: {checks} checks");
+                std::process::exit(0);
+            }
+            Err(error) => {
+                eprintln!("NATIVE TAB TEST FAIL: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if args.iter().any(|a| a == "--tabhosttest") {
+        std::process::exit(window_host::selftest());
+    }
     if args.iter().any(|a| a == "--debuggertest") {
         std::process::exit(debugger::selftest());
     }
@@ -3968,7 +4317,12 @@ fn main() {
         .position(|a| a == "--control-socket")
         .and_then(|p| args.get(p + 1))
         .cloned();
-    let mut app = BrowserApp::new(proxy.clone(), net_dirty, provider);
+    let mut app = BrowserApp::for_window(proxy.clone(), net_dirty, provider);
+    app.startup_capture = args
+        .iter()
+        .position(|a| a == "--capture-window")
+        .and_then(|p| args.get(p + 1))
+        .cloned();
     if args.iter().any(|a| a == "--debugger") {
         app.toggle_debugger();
     }
@@ -4025,7 +4379,8 @@ fn main() {
             }
         }
     }
-    event_loop.run_app(&mut app).expect("run");
+    let mut host = window_host::WindowHost::new(app);
+    event_loop.run_app(&mut host).expect("run");
 }
 
 /// `--uitest`: drive the real chrome click handler at coordinates obtained from
@@ -5711,7 +6066,7 @@ fn render_to_png(
     } else {
         None
     };
-    let url_text = browser.display_url();
+    let url_text = browser.address_display();
     let tabs = [TabInfo {
         title: &title,
         active: true,

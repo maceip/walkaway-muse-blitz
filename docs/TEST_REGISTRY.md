@@ -4,6 +4,58 @@ A test belongs here only when the exact command, real components, assertion,
 and last observed result are known. Passing a unit test never proves a demo
 hop works across devices.
 
+## T-NATIVE-TAB-UX — shortcut removal continuation (2026-11-06)
+
+- Owner: ZCode, existing `feat/netscape-gooey-debugger` task branch.
+- Components: ORIGINAL vendored Swift CompactTabStrip (`native-tabs/VENDOR.json`),
+  NSHostingView in the existing winit NSWindow, Rust `native_tabs.rs` callback
+  bridge and `window_host.rs` real tab/runtime transfers; persistent Blitz
+  debugger-pane snapshot updates.
+- Commands: `cargo build --release --manifest-path apps/hermes-browser/Cargo.toml`;
+  binary `--nativetabtest`, `--tabhosttest`; `cargo test --release`;
+  `--selftest`, `--uitest`, `--supervisortest`, `--debuggertest`; signed local
+  DMG with mounted native/component/host suites added to packaging script.
+- Acceptance: live macOS has exactly one native original tab strip; no Rust
+  imitation or HTML regeneration in native animation. Real select/close/new,
+  move/pin, transfer/detach callbacks preserve stable tab/document/runtime and
+  history; protected supervised tabs never transfer approval authority.
+  Native pixels are included in host captures; original tracking/hosting
+  objects detach before window destruction. Debugger snapshots retain actual
+  source/details scroll nodes and focus instead of reparsing shell HTML.
+- Final observed **PASS 2026-11-06**: release build and all **34 Cargo tests**;
+  original five Swift files byte-identical to pinned revision (build verifies
+  SHA256); native component **56 real AppKit assertions**; real host-transfer
+  **9 checks**; debugger **28 real backend assertions**. Includes original
+  close-width freeze/release, move/pin/detach/transfer routing, native keyboard
+  and visibility, actual capture/teardown, address-display/Stop cancellation.
+  Native host integration capture `/tmp/walkaway-modern-native-final.png`
+  succeeded with actual AppKit tab/address pixels plus Vello page/chrome.
+- Final signed packaging command: `./scripts/build-macos-dmg.sh --release
+  --no-notarize --identity 'Developer ID Application: Zunftmax UG
+  (haftungsbeschrankt) (D74F5NNMRQ)'`. Mounted-DMG `--selftest`,
+  `--supervisortest`, `--uitest`, `--debuggertest`, `--nativetabtest`,
+  `--tabhosttest` PASS. Swift stdlib scan and license/provenance bundling included.
+  Artifact is Developer ID/Hardened Runtime signed but explicitly NOT notarized.
+  Existing optional ICNS generation still fails nonfatally.
+- Timing scope: component update CPU and native RunLoop timer intervals only,
+  not display/pointer latency. Final mounted run: selection CPU p95 **0.5005ms**
+  (100 updates), no-op p95 **0.0001ms** (1000 updates), 120Hz timer interval
+  p95 **9.082ms**, max **9.296ms** (35 intervals). No end-to-end smoothness
+  parity claim. Physical gesture automation was blocked by the standalone
+  process's unreadable accessibility window; no substitute automation used.
+- Address continuation: original NSWindow retained NSTextField/field editor,
+  real editing/selection/clipboard/IME, draft preservation, Enter/Escape,
+  supervision gating, native load spinner and visibility under dropdown menus.
+  Modern Location geometry fixed x64/y78/W-74/h24; no visible muse:// on start.
+  Autocomplete is a future native text-change/anchor integration, no fake list.
+- Startup changes: eliminate provisional/full duplicate chrome builds before
+  final native/viewport initialization; report main-entry-to-first-submitted
+  frame separately from actual presentation/cold filesystem cache. No unsupported
+  Metal pipeline cache or claimed unmeasured speedup. Five fresh-process runs
+  (`--exit-after 1`, unpurged caches) reported **390.49,476.80,336.95,273.01,
+  277.03ms**; median **336.95ms**. Final native capture run **291.83ms**.
+  No cold-boot/reboot or before/after speedup claim is made.
+
 ## Browser chrome / debugger verification — 2026-11-06
 
 - Owner: ZCode, `feat/netscape-gooey-debugger`.
