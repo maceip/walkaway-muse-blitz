@@ -188,6 +188,159 @@ struct Page {
 /// black on its own dark background.
 const DARK_DEFAULT_TEXT: &str = "html, body { color: #F2F2F7; }";
 
+fn parse_two_string_args(s: &str, call_prefix: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    while let Some(rel) = s[cursor..].find(call_prefix) {
+        let start = cursor + rel + call_prefix.len();
+        let rest = &s[start..];
+        let Some(end1) = rest.find('"') else {
+            break;
+        };
+        let arg1 = &rest[..end1];
+        let after1 = &rest[end1 + 1..];
+        let Some(quote2_rel) = after1.find('"') else {
+            cursor = start + end1 + 1;
+            continue;
+        };
+        if quote2_rel > 8 {
+            cursor = start + end1 + 1;
+            continue;
+        }
+        let rest2 = &after1[quote2_rel + 1..];
+        let Some(end2) = rest2.find('"') else {
+            break;
+        };
+        let arg2 = &rest2[..end2];
+        out.push((arg1.to_string(), arg2.to_string()));
+        cursor = start + end1 + 1 + quote2_rel + 1 + end2 + 1;
+    }
+    out
+}
+
+fn extract_hidden_div(html: &mut String, div_id: &str) -> Option<String> {
+    let patterns = [
+        format!("<div hidden id=\"{div_id}\">"),
+        format!("<div hidden=\"\" id=\"{div_id}\">"),
+        format!("<div id=\"{div_id}\" hidden>"),
+        format!("<div id=\"{div_id}\" hidden=\"\">"),
+    ];
+    let (open_start, open_len) = patterns
+        .iter()
+        .find_map(|pat| html.find(pat.as_str()).map(|idx| (idx, pat.len())))?;
+    let content_start = open_start + open_len;
+    let bytes = html.as_bytes();
+    let mut pos = content_start;
+    let mut depth = 1usize;
+    while pos < bytes.len() {
+        let Some(lt_rel) = html[pos..].find('<') else {
+            break;
+        };
+        let tag_start = pos + lt_rel;
+        let rem = &html[tag_start..];
+        let rem_bytes = rem.as_bytes();
+        if rem_bytes.len() >= 6 && rem_bytes[..5].eq_ignore_ascii_case(b"</div") {
+            let after = rem_bytes[5];
+            if after == b'>' || after.is_ascii_whitespace() {
+                if let Some(gt_rel) = rem.find('>') {
+                    depth -= 1;
+                    if depth == 0 {
+                        let inner = html[content_start..tag_start].to_string();
+                        let close_end = tag_start + gt_rel + 1;
+                        html.replace_range(open_start..close_end, "");
+                        return Some(inner);
+                    }
+                    pos = tag_start + gt_rel + 1;
+                    continue;
+                }
+            }
+        } else if rem_bytes.len() >= 5 && rem_bytes[..4].eq_ignore_ascii_case(b"<div") {
+            let after = rem_bytes[4];
+            if after == b'>' || after.is_ascii_whitespace() {
+                if let Some(gt_rel) = rem.find('>') {
+                    if !rem[..gt_rel].ends_with('/') {
+                        depth += 1;
+                    }
+                    pos = tag_start + gt_rel + 1;
+                    continue;
+                }
+            }
+        }
+        pos = tag_start + 1;
+    }
+    None
+}
+
+fn replace_suspense_boundary(html: &mut String, b_id: &str, inner: &str) -> bool {
+    let marker = format!("<template id=\"{b_id}\"></template>");
+    let Some(start) = html.find(&marker) else {
+        return false;
+    };
+    let mut pos = start + marker.len();
+    let mut depth = 0usize;
+    while let Some(c_rel) = html[pos..].find("<!--") {
+        let c_start = pos + c_rel;
+        let rem = &html[c_start..];
+        let Some(c_end_rel) = rem.find("-->") else {
+            break;
+        };
+        let data = &rem[4..c_end_rel];
+        if data == "/$" || data == "/&" {
+            if depth == 0 {
+                html.replace_range(start..c_start, inner);
+                return true;
+            }
+            depth -= 1;
+        } else if matches!(data, "$" | "$?" | "$~" | "$!" | "&") {
+            depth += 1;
+        }
+        pos = c_start + c_end_rel + 3;
+    }
+    false
+}
+
+/// Resolves React 18+ Streaming SSR `<Suspense>` boundaries (`$RC("B:x","S:x")`)
+/// and streaming slot replacements (`$RS("S:x","P:x")`) in-place so streamed
+/// server-rendered HTML sections are visible without executing client JS.
+fn hydrate_streaming_ssr(html: &str) -> std::borrow::Cow<'_, str> {
+    if !html.contains("$RC(\"") && !html.contains("$RS(\"") {
+        return std::borrow::Cow::Borrowed(html);
+    }
+    let rs_calls = parse_two_string_args(html, "$RS(\"");
+    let rc_calls = parse_two_string_args(html, "$RC(\"");
+    if rs_calls.is_empty() && rc_calls.is_empty() {
+        return std::borrow::Cow::Borrowed(html);
+    }
+    let mut out = html.to_string();
+    let mut pending_slots: Vec<(String, String)> = Vec::with_capacity(rs_calls.len());
+    for (s_id, p_id) in &rs_calls {
+        if let Some(inner) = extract_hidden_div(&mut out, s_id) {
+            let tpl = format!("<template id=\"{p_id}\"></template>");
+            if out.contains(&tpl) {
+                out = out.replacen(&tpl, &inner, 1);
+            } else {
+                pending_slots.push((tpl, inner));
+            }
+        }
+    }
+    for (b_id, s_id) in &rc_calls {
+        if let Some(mut inner) = extract_hidden_div(&mut out, s_id) {
+            for (tpl, slot_inner) in &pending_slots {
+                if inner.contains(tpl) {
+                    inner = inner.replacen(tpl, slot_inner, 1);
+                }
+            }
+            replace_suspense_boundary(&mut out, b_id, &inner);
+        }
+    }
+    for (tpl, slot_inner) in &pending_slots {
+        if out.contains(tpl) {
+            out = out.replacen(tpl, slot_inner, 1);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 impl Page {
     fn load(
         html: &str,
@@ -229,6 +382,7 @@ impl Page {
         // Parsing may kick off stylesheet/image fetches; they are spawned onto
         // the Tokio runtime, so the runtime context must be entered here.
         let _guard = browser::enter_runtime();
+        let hydrated = hydrate_streaming_ssr(html);
         let mut ua = vec![
             blitz_dom::UserAgentStylesheet::default_sheet(),
             blitz_dom::UserAgentStylesheet::parse(
@@ -239,7 +393,7 @@ impl Page {
             ua.push(blitz_dom::UserAgentStylesheet::parse(css));
         }
         let mut doc = HtmlDocument::from_html(
-            html,
+            &hydrated,
             DocumentConfig {
                 viewport: Some(viewport),
                 base_url: base.as_ref().map(|u| u.to_string()),
@@ -2394,7 +2548,7 @@ impl BrowserApp {
 
     /// Regenerate the chrome document from state.
     fn sync_chrome(&mut self) {
-        let telemetry = if self.control.is_some() || self.xray_enabled {
+        let telemetry = if self.xray_enabled {
             let active_tab_id = self.tab().canonical.id;
             if self.tab().instance.last_snapshot.is_none() {
                 let _ = self.observe_tab(active_tab_id);
