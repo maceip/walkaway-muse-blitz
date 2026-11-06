@@ -33,10 +33,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::keychain;
-use crate::webauthn::authenticator::{
-    Authenticator, PasskeyStore, StoredPasskey, EQUIPPED_AAGUID,
-};
-use crate::webauthn::b64::b64url_encode;
+use crate::webauthn::authenticator::{Authenticator, PasskeyStore, StoredPasskey};
 use crate::webauthn::origin::validate_origin_and_effective_rp_id;
 use crate::webauthn::types::{
     AssertionCredential, AuthenticatorSelectionCriteria, ExtensionInputs,
@@ -117,6 +114,10 @@ pub struct StoredCredential {
 
 impl StoredCredential {
     /// The stable identifier used by the iOS implementation.
+    ///
+    /// It embeds the account name in clear text, so it must never be handed
+    /// to the agent; the broker exposes redacted hints instead.
+    #[allow(dead_code)]
     pub fn id(&self) -> String {
         format!(
             "{}|{}|{}",
@@ -233,6 +234,7 @@ impl KeychainPasswordStore {
 
     /// Creates a store with an explicit service name, for tests and for
     /// isolated instances.
+    #[allow(dead_code)]
     pub fn with_service(service: &str) -> Self {
         Self {
             service: service.to_string(),
@@ -373,6 +375,15 @@ pub struct CredentialApproval {
     pub chosen: Option<CredentialMatch>,
     /// Whether the choice is remembered for this site.
     pub remember: bool,
+    /// The origin the fill applies to.
+    #[serde(default)]
+    pub origin: String,
+    /// The fields the fill is allowed to write.
+    ///
+    /// A fill never writes a field the caller did not ask for, so a request
+    /// for the account name alone cannot spill the password into the page.
+    #[serde(default)]
+    pub fields: Vec<CredentialFieldKind>,
 }
 
 /// The receipt returned after an approved fill.
@@ -785,6 +796,17 @@ impl LocalPasskeyBroker {
         Ok(existed)
     }
 
+    /// Returns a stored passkey record.
+    pub fn stored_passkey(
+        &self,
+        credential_id: &[u8],
+    ) -> Result<Option<StoredPasskey>, BrokerError> {
+        Ok(self
+            .store
+            .by_credential_id(credential_id)
+            .map_err(BrokerError::Storage)?)
+    }
+
     /// Returns the public key of a stored passkey.
     ///
     /// A relying party needs this to register the credential. The private key
@@ -1064,6 +1086,7 @@ impl LocalCredentialBroker {
     }
 
     /// Creates a broker over explicit Keychain services, for tests.
+    #[allow(dead_code)]
     pub fn with_stores(passwords: KeychainPasswordStore, passkeys: KeychainPasskeyStore) -> Self {
         Self {
             passwords,
@@ -1200,27 +1223,48 @@ impl CredentialBroker for LocalCredentialBroker {
                 ))
             })?;
 
+        // Only the fields the caller asked for are written.
+        let requested = if approval.fields.is_empty() {
+            vec![
+                CredentialFieldKind::Username,
+                CredentialFieldKind::CurrentPassword,
+            ]
+        } else {
+            approval.fields.clone()
+        };
+
         let mut filled_fields = Vec::new();
-        engine.set_field(CredentialFieldKind::Username, &candidate.username)?;
-        filled_fields.push(CredentialFieldKind::Username);
-        engine.set_field(CredentialFieldKind::CurrentPassword, &secret)?;
-        filled_fields.push(CredentialFieldKind::CurrentPassword);
+        for field in &requested {
+            match field {
+                CredentialFieldKind::Username => {
+                    engine.set_field(CredentialFieldKind::Username, &candidate.username)?;
+                    filled_fields.push(CredentialFieldKind::Username);
+                }
+                CredentialFieldKind::CurrentPassword => {
+                    engine.set_field(CredentialFieldKind::CurrentPassword, &secret)?;
+                    filled_fields.push(CredentialFieldKind::CurrentPassword);
+                }
+                other => {
+                    return Err(BrokerError::Invalid(format!(
+                        "the credential broker cannot fill a {} field",
+                        other.as_str()
+                    )));
+                }
+            }
+        }
 
         Ok(CredentialFillReceipt {
-            origin: chosen.site.clone(),
+            // The receipt names the origin the fill actually applied to.
+            origin: if approval.origin.is_empty() {
+                chosen.site.clone()
+            } else {
+                approval.origin.clone()
+            },
             filled_fields,
             account_hint: Some(chosen.username_hint.clone()),
         })
     }
 }
-
-/// Builds the base64url credential ID of a passkey record.
-pub fn credential_id_b64url(record: &StoredPasskey) -> String {
-    b64url_encode(&record.credential_id)
-}
-
-/// The AAGUID the Equipped Browser authenticator reports.
-pub const BROWSER_AAGUID: [u8; 16] = EQUIPPED_AAGUID;
 
 #[cfg(test)]
 mod tests {
@@ -1289,6 +1333,59 @@ mod tests {
         assert_eq!(prompt.matches[0].username_hint, "a**");
         assert_eq!(prompt.matches[0].site, "example.com");
         assert!(!format!("{prompt:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn a_fill_writes_only_the_fields_that_were_requested() {
+        struct RecordingSink {
+            written: Vec<(CredentialFieldKind, String)>,
+        }
+        impl CredentialSink for RecordingSink {
+            fn set_field(
+                &mut self,
+                field: CredentialFieldKind,
+                value: &str,
+            ) -> Result<(), BrokerError> {
+                self.written.push((field, value.to_string()));
+                Ok(())
+            }
+        }
+
+        let store = test_password_service("fields");
+        store.save("example.com", "ada", "hunter2").unwrap();
+        let mut broker = LocalCredentialBroker::with_stores(
+            store,
+            test_passkey_service("fields"),
+        );
+
+        // A request for the account name alone must not spill the password.
+        let mut sink = RecordingSink {
+            written: Vec::new(),
+        };
+        let receipt = broker
+            .apply_approved_fill(
+                CredentialApproval {
+                    ceremony_id: "c1".to_string(),
+                    chosen: Some(CredentialMatch {
+                        username_hint: redact_username("ada"),
+                        site: "example.com".to_string(),
+                        is_passkey: false,
+                    }),
+                    remember: false,
+                    origin: "https://example.com".to_string(),
+                    fields: vec![CredentialFieldKind::Username],
+                },
+                &mut sink,
+            )
+            .unwrap();
+        assert_eq!(sink.written.len(), 1);
+        assert_eq!(sink.written[0].0, CredentialFieldKind::Username);
+        assert_eq!(sink.written[0].1, "ada");
+        assert_eq!(
+            receipt.filled_fields,
+            vec![CredentialFieldKind::Username]
+        );
+        assert_eq!(receipt.origin, "https://example.com");
     }
 
     #[test]

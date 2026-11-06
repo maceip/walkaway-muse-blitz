@@ -786,6 +786,105 @@ struct PendingProposal {
     /// The passkey ceremony this proposal will run, when the proposal is a
     /// passkey registration or assertion.
     ceremony_id: Option<String>,
+    /// The credential fill this proposal will perform, when the proposal is a
+    /// credential fill.
+    credential_fill: Option<CredentialFillPlan>,
+}
+
+/// A credential fill the human has been asked to approve.
+#[derive(Clone)]
+struct CredentialFillPlan {
+    origin: String,
+    chosen: credentials::CredentialMatch,
+    fields: Vec<credentials::CredentialFieldKind>,
+}
+
+/// Collects the writes a credential fill will make to a page.
+///
+/// The sink only ever receives a value the broker has already decided to
+/// release. Nothing here decides *which* credential to use — that happened
+/// before the human approved the fill. The writes are collected rather than
+/// applied immediately so that the broker holds the secret for as short a
+/// time as possible.
+struct PageCredentialSink<'a> {
+    elements: &'a [observe::ElementSnapshot],
+    pending: Vec<(NodeId, String, String)>,
+    filled: Vec<credentials::CredentialFieldKind>,
+}
+
+impl<'a> PageCredentialSink<'a> {
+    /// Finds the input element that receives a given kind of credential.
+    fn find_field(&self, field: credentials::CredentialFieldKind) -> Option<observe::ElementSnapshot> {
+        let candidates: Vec<&observe::ElementSnapshot> =
+            self.elements.iter().filter(|e| e.enabled).collect();
+        match field {
+            credentials::CredentialFieldKind::Username => candidates
+                .iter()
+                .find(|e| {
+                    let hint = format!(
+                        "{} {} {}",
+                        e.id,
+                        e.name.clone().unwrap_or_default(),
+                        e.label
+                    )
+                    .to_lowercase();
+                    let type_ok = matches!(
+                        e.input_type.as_deref(),
+                        Some("email") | Some("text") | Some("")
+                    ) || e.input_type.is_none();
+                    type_ok
+                        && (hint.contains("user")
+                            || hint.contains("email")
+                            || hint.contains("login")
+                            || hint.contains("account"))
+                })
+                .map(|e| (*e).clone()),
+            credentials::CredentialFieldKind::CurrentPassword => candidates
+                .iter()
+                .find(|e| {
+                    e.input_type.as_deref() == Some("password")
+                        && !Self::is_new_password(e)
+                })
+                .map(|e| (*e).clone()),
+            credentials::CredentialFieldKind::NewPassword => candidates
+                .iter()
+                .find(|e| e.input_type.as_deref() == Some("password") && Self::is_new_password(e))
+                .map(|e| (*e).clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether a password input is for a new password rather than the
+    /// current one.
+    fn is_new_password(element: &observe::ElementSnapshot) -> bool {
+        let hint = format!(
+            "{} {} {}",
+            element.id,
+            element.name.clone().unwrap_or_default(),
+            element.label
+        )
+        .to_lowercase();
+        hint.contains("new") || hint.contains("confirm") || hint.contains("repeat")
+    }
+}
+
+impl credentials::CredentialSink for PageCredentialSink<'_> {
+    fn set_field(
+        &mut self,
+        field: credentials::CredentialFieldKind,
+        value: &str,
+    ) -> Result<(), credentials::BrokerError> {
+        let Some(element) = self.find_field(field) else {
+            return Err(credentials::BrokerError::Invalid(format!(
+                "the page has no {} field",
+                field.as_str()
+            )));
+        };
+        self.pending
+            .push((element.node_id, element.tag.clone(), value.to_string()));
+        self.filled.push(field);
+        Ok(())
+    }
 }
 
 struct ControlSession {
@@ -1520,6 +1619,53 @@ impl BrowserApp {
                     }
                 }
             }
+            "credential.delete" => {
+                // Deleting a saved secret is a trusted shell action.
+                if role != Role::Host {
+                    self.refused(conn_id, &frame, "wrong_role");
+                    return;
+                }
+                let (Some(host), Some(username)) = (
+                    frame.get("host").and_then(Value::as_str),
+                    frame.get("username").and_then(Value::as_str),
+                ) else {
+                    self.refused(conn_id, &frame, "internal");
+                    return;
+                };
+                let result = self.credential_broker.delete_password(host, username);
+                let body = json!({
+                    "v": 1, "type": "credential.deleted",
+                    "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                    "host": host,
+                    "username": credentials::redact_username(username),
+                    "ok": result.is_ok(),
+                });
+                self.emit(OutTarget::Conn(conn_id), body);
+            }
+            "passkey.delete" => {
+                // Removing a passkey is a trusted shell action.
+                if role != Role::Host {
+                    self.refused(conn_id, &frame, "wrong_role");
+                    return;
+                }
+                let Some(credential_id) = frame.get("credential_id").and_then(Value::as_str) else {
+                    self.refused(conn_id, &frame, "internal");
+                    return;
+                };
+                let bytes = webauthn::b64::b64url_decode(credential_id)
+                    .or_else(|| control::b64_decode(credential_id));
+                let removed = match bytes {
+                    Some(bytes) => self.passkey_broker.delete_passkey(&bytes).unwrap_or(false),
+                    None => false,
+                };
+                let body = json!({
+                    "v": 1, "type": "passkey.deleted",
+                    "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                    "credential_id": credentials::redact_username(credential_id),
+                    "ok": removed,
+                });
+                self.emit(OutTarget::Conn(conn_id), body);
+            }
             "passkey.status" => {
                 let ceremony_id = frame
                     .get("ceremony_id")
@@ -1546,9 +1692,13 @@ impl BrowserApp {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
+                let id = credentials::PasskeyCeremonyId(ceremony_id.clone());
+                // The ceremony id does not say which kind it is, so try the
+                // assertion first and fall back to the registration.
                 let cancelled = self
                     .passkey_broker
-                    .cancel_assertion(credentials::PasskeyCeremonyId(ceremony_id.clone()));
+                    .cancel_assertion(id.clone())
+                    .or_else(|_| self.passkey_broker.cancel_registration(id));
                 let body = json!({
                     "v": 1, "type": "passkey.cancelled",
                     "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
@@ -1912,6 +2062,7 @@ impl BrowserApp {
         // ceremony itself does not run until that human approves.
         let mut ceremony_id: Option<String> = None;
         let mut passkey_prompt: Option<String> = None;
+        let mut credential_fill_plan: Option<CredentialFillPlan> = None;
         // A stable node reference resolves against the known-element
         // registry first: unknown references were never issued by this page
         // instance; known references absent from the snapshot are stale.
@@ -2088,6 +2239,85 @@ impl BrowserApp {
                     sensitive_target = true;
                 }
             }
+            "credential.fill" => {
+                // The broker decides what can be offered; the agent never
+                // names a secret and never picks an account itself.
+                let origin = operation
+                    .get("origin")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let fields = operation
+                    .get("fields")
+                    .and_then(Value::as_array)
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|v| v.as_str())
+                            .filter_map(|name| match name {
+                                "username" => Some(credentials::CredentialFieldKind::Username),
+                                "current_password" => {
+                                    Some(credentials::CredentialFieldKind::CurrentPassword)
+                                }
+                                "new_password" => Some(credentials::CredentialFieldKind::NewPassword),
+                                "one_time_code" => Some(credentials::CredentialFieldKind::OneTimeCode),
+                                "payment_card" => Some(credentials::CredentialFieldKind::PaymentCard),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_else(|| {
+                        vec![
+                            credentials::CredentialFieldKind::Username,
+                            credentials::CredentialFieldKind::CurrentPassword,
+                        ]
+                    });
+                let request = credentials::CredentialFillRequest {
+                    task_id: proposal_id.to_string(),
+                    origin: origin.clone(),
+                    fields: fields.clone(),
+                    document_generation: generation,
+                };
+                match self.credential_broker.describe_fill(request) {
+                    Ok(prompt) => {
+                        let chosen = match prompt.matches.len() {
+                            0 => {
+                                eprintln!("[credential] no stored credential for {}", prompt.registrable_domain);
+                                self.refused(conn_id, frame, "no_matching_credential");
+                                return;
+                            }
+                            1 => prompt.matches[0].clone(),
+                            _ => {
+                                // The shell cannot yet present a picker, so an
+                                // ambiguous site is refused rather than filled
+                                // with an arbitrary account.
+                                eprintln!(
+                                    "[credential] {} matching credentials for {}; refusing an ambiguous fill",
+                                    prompt.matches.len(),
+                                    prompt.registrable_domain
+                                );
+                                self.refused(conn_id, frame, "credential_ambiguous");
+                                return;
+                            }
+                        };
+                        passkey_prompt = Some(format!(
+                            "Fill the saved credential for {} on {}?",
+                            chosen.username_hint, prompt.registrable_domain
+                        ));
+                        credential_fill_plan = Some(CredentialFillPlan {
+                            origin: prompt.origin.clone(),
+                            chosen,
+                            fields,
+                        });
+                        sensitive_target = true;
+                    }
+                    Err(error) => {
+                        eprintln!("[credential] fill refused: {error}");
+                        self.refused(conn_id, frame, "credential_refused");
+                        return;
+                    }
+                }
+            }
             "passkey.assert" | "passkey.register" => {
                 let started = if op_kind == "passkey.assert" {
                     credentials::PasskeyRequest::from_operation(&operation)
@@ -2173,6 +2403,7 @@ impl BrowserApp {
             classification: classification.clone(),
             requires_glasses,
             ceremony_id,
+            credential_fill: credential_fill_plan,
         };
         if let Some(session) = self.control.as_mut() {
             session.seen_proposals.insert(pending.proposal_id.clone());
@@ -2386,12 +2617,32 @@ impl BrowserApp {
             return Err("stale_fingerprint");
         }
 
-        let (operation, ceremony_id) = self
+        let (operation, ceremony_id, credential_fill) = self
             .control
             .as_ref()
             .and_then(|s| s.pending.as_ref())
-            .map(|p| (p.operation.clone(), p.ceremony_id.clone()))
-            .unwrap_or((Value::Null, None));
+            .map(|p| {
+                (
+                    p.operation.clone(),
+                    p.ceremony_id.clone(),
+                    p.credential_fill.clone(),
+                )
+            })
+            .unwrap_or((Value::Null, None, None));
+
+        // A credential fill runs here, on the host, behind the approval gate
+        // the human just gave. The secret is read from the Keychain at this
+        // moment and written straight into the page.
+        if let Some(plan) = credential_fill {
+            return self.run_credential_fill(
+                &plan,
+                &fresh,
+                proposal_id,
+                decided_by,
+                surface,
+                &pending_fp,
+            );
+        }
 
         // A passkey ceremony runs here, on the host, behind the approval gate
         // the human just gave. It is never simulated in page script.
@@ -2482,6 +2733,102 @@ impl BrowserApp {
                 "after_fingerprint": after_fp, "generation": after_gen,
                 "input_event_id": self.last_input_event_id,
                 "input_provenance": InputProvenance::ApprovedAgent.as_str(),
+            }),
+        );
+        self.state_event(OutTarget::Both);
+        self.sync_chrome();
+        self.request_redraw();
+        Ok(())
+    }
+
+    /// Runs an approved credential fill and writes the secret into the page.
+    ///
+    /// The secret is read from the macOS Keychain here and handed straight to
+    /// the DOM. It never reaches the agent, the audit trail, or a log.
+    fn run_credential_fill(
+        &mut self,
+        plan: &CredentialFillPlan,
+        snapshot: &observe::PageSnapshot,
+        proposal_id: &str,
+        decided_by: &str,
+        surface: &str,
+        fingerprint: &str,
+    ) -> Result<(), &'static str> {
+        let approval = credentials::CredentialApproval {
+            ceremony_id: proposal_id.to_string(),
+            chosen: Some(plan.chosen.clone()),
+            remember: false,
+            origin: plan.origin.clone(),
+            fields: plan.fields.clone(),
+        };
+
+        // The broker releases the secret; the sink records where it goes.
+        let elements = snapshot.elements.clone();
+        let mut sink = PageCredentialSink {
+            elements: &elements,
+            pending: Vec::new(),
+            filled: Vec::new(),
+        };
+        let receipt = self
+            .credential_broker
+            .apply_approved_fill(approval, &mut sink)
+            .map_err(|error| {
+                eprintln!("[credential] fill failed: {error}");
+                "credential_fill_failed"
+            })?;
+        let filled = sink.filled.clone();
+        let pending = sink.pending.clone();
+        drop(sink);
+
+        // Now the secret goes into the page.
+        let tab = self.tab_mut();
+        for (node_id, tag, value) in pending {
+            apply_dom_field_action(
+                tab.instance.page.doc_mut(),
+                node_id,
+                &tag,
+                "type",
+                Some(&value),
+                None,
+                None,
+            );
+        }
+        tab.instance.page.resolve();
+        tab.bump_generation();
+
+        if let Some(session) = self.control.as_mut() {
+            session.pending = None;
+            session.state = ControlState::Agent;
+            session.snapshot_valid = false;
+        }
+        // The audit records what happened, never the secret.
+        self.audit(
+            "executed",
+            "credential.fill",
+            None,
+            Some(fingerprint),
+            None,
+            Some(decided_by),
+            Some(surface),
+            Some(proposal_id),
+        );
+        self.emit(
+            OutTarget::Agent,
+            json!({
+                "v": 1, "type": "credential.filled",
+                "proposal_id": proposal_id,
+                "origin": receipt.origin,
+                "account_hint": receipt.account_hint,
+                "filled_fields": filled,
+            }),
+        );
+        self.session_event(
+            OutTarget::Both,
+            "executed",
+            json!({
+                "proposal_id": proposal_id, "operation": "credential.fill",
+                "operation_detail": {"origin": receipt.origin},
+                "before_fingerprint": fingerprint,
             }),
         );
         self.state_event(OutTarget::Both);

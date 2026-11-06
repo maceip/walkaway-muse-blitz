@@ -15,13 +15,6 @@ pub fn bytes(count: usize) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-/// Returns a random 32-byte value.
-pub fn bytes_32() -> Result<[u8; 32], String> {
-    let mut buf = [0u8; 32];
-    fill(&mut buf)?;
-    Ok(buf)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

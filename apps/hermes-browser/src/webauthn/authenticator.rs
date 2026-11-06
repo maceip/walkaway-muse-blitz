@@ -18,7 +18,9 @@ use crate::webauthn::authdata::{
 use crate::webauthn::b64::b64url_encode;
 use crate::webauthn::cbor::Cbor;
 use crate::webauthn::clientdata::{client_data_json, CeremonyType};
-use crate::webauthn::cose::{cose_ec2_p256, generate_p256_keypair, public_key_xy_from_pem};
+use crate::webauthn::cose::{
+    cose_key_from_pem, generate_p256_keypair, validate_p256_public_pem,
+};
 use crate::webauthn::largeblob;
 use crate::webauthn::origin::validate_origin_and_effective_rp_id;
 use crate::webauthn::prf;
@@ -47,6 +49,9 @@ fn uvm_output() -> Vec<Vec<i64>> {
 
 /// The minimum PIN length reported by the `minPinLength` extension.
 const MIN_PIN_LENGTH: i64 = 6;
+
+/// The largest challenge a relying party may send.
+const MAX_CHALLENGE_LEN: usize = 1024;
 
 /// A stored passkey, mirroring the iOS `StoredPasskeyRecord`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -150,6 +155,7 @@ impl Default for Authenticator {
 
 impl Authenticator {
     /// Creates an authenticator with the Equipped Browser AAGUID.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -167,6 +173,7 @@ impl Authenticator {
         top_origin: Option<&str>,
         now_iso: &str,
     ) -> Result<(RegistrationCredential, StoredPasskey), WebAuthnError> {
+        validate_challenge(&options.challenge)?;
         let validated = validate_origin_and_effective_rp_id(
             origin,
             Some(options.rp.id.as_str()),
@@ -210,8 +217,10 @@ impl Authenticator {
         let (private_key_pem, public_key_pem) =
             generate_p256_keypair().map_err(WebAuthnError::unknown)?;
 
-        let (x, y) = public_key_xy_from_pem(&public_key_pem).map_err(WebAuthnError::unknown)?;
-        let cose_key = cose_ec2_p256(&x, &y).encode();
+        // The key is checked before it is stored, so a malformed key can
+        // never reach the relying party.
+        validate_p256_public_pem(&public_key_pem).map_err(WebAuthnError::unknown)?;
+        let cose_key = cose_key_from_pem(&public_key_pem).map_err(WebAuthnError::unknown)?;
 
         // The client data is hashed into the attestation, so build it first.
         let client_data = client_data_json(
@@ -366,6 +375,7 @@ impl Authenticator {
         cross_origin: bool,
         top_origin: Option<&str>,
     ) -> Result<(AssertionCredential, StoredPasskey), WebAuthnError> {
+        validate_challenge(&options.challenge)?;
         let validated = validate_origin_and_effective_rp_id(
             origin,
             options.rp_id.as_deref(),
@@ -568,6 +578,24 @@ fn sign_es256(private_key_pem: &str, payload: &[u8]) -> Result<Vec<u8>, WebAuthn
         .map_err(|e| WebAuthnError::unknown(format!("sign: {e}")))
 }
 
+/// Checks the relying party's challenge.
+///
+/// The iOS implementation carried the full nine-case WebAuthn error set; the
+/// desktop port raises the same `Type` and `Constraint` kinds here.
+fn validate_challenge(challenge: &[u8]) -> Result<(), WebAuthnError> {
+    if challenge.is_empty() {
+        return Err(WebAuthnError::Type(
+            "The challenge must not be empty".to_string(),
+        ));
+    }
+    if challenge.len() > MAX_CHALLENGE_LEN {
+        return Err(WebAuthnError::Constraint(format!(
+            "The challenge must not exceed {MAX_CHALLENGE_LEN} bytes"
+        )));
+    }
+    Ok(())
+}
+
 /// Whether a registration creates a discoverable (resident) credential.
 ///
 /// Mirrors the iOS rule: `residentKey` other than "discouraged" makes the
@@ -606,6 +634,7 @@ pub struct MemoryPasskeyStore {
 
 impl MemoryPasskeyStore {
     /// Creates an empty store.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }

@@ -107,6 +107,7 @@ pub fn validate_p256_public_pem(pem: &str) -> Result<(), String> {
 }
 
 /// Builds an uncompressed EC point for the given affine coordinates.
+#[allow(dead_code)]
 pub fn point_from_xy(x: &[u8; 32], y: &[u8; 32]) -> Result<EcPoint, String> {
     let group =
         EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).map_err(|e| format!("ec group: {e}"))?;

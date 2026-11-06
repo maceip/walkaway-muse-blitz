@@ -22,6 +22,7 @@ pub enum Cbor {
     /// Major type 3.
     Text(String),
     /// Major type 4.
+    #[allow(dead_code)]
     Array(Vec<Cbor>),
     /// Major type 5.
     Map(Vec<(Cbor, Cbor)>),
@@ -31,6 +32,7 @@ pub enum Cbor {
 
 impl Cbor {
     /// Convenience constructor for a negative integer.
+    #[allow(dead_code)]
     pub fn neg(value: i64) -> Cbor {
         Cbor::Neg(value)
     }
@@ -41,6 +43,7 @@ impl Cbor {
     }
 
     /// Convenience constructor for a byte string.
+    #[allow(dead_code)]
     pub fn bytes(value: impl Into<Vec<u8>>) -> Cbor {
         Cbor::Bytes(value.into())
     }

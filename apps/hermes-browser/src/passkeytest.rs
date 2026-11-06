@@ -239,6 +239,13 @@ pub fn passkeytest() -> i32 {
     let store = crate::credentials::KeychainPasskeyStore::with_service(&service, "passkey_records_v1");
     let mut broker = LocalPasskeyBroker::with_store(store);
 
+    // The Keychain must be reachable. A run that cannot store a credential
+    // must fail rather than quietly skip the storage checks.
+    if !crate::keychain::is_available() {
+        println!("not ok the macOS Keychain is not reachable from this process");
+        return 1;
+    }
+
     let (port, mut fixture) = match start_fixture() {
         Ok(parts) => parts,
         Err(error) => {
@@ -247,6 +254,15 @@ pub fn passkeytest() -> i32 {
         }
     };
     println!("-- fixture listening on 127.0.0.1:{port}");
+    println!(
+        "-- authenticator AAGUID: {}",
+        broker
+            .aaguid()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join("")
+    );
 
     let result = (|| -> Result<(), String> {
         // --- registration -------------------------------------------------
@@ -322,9 +338,28 @@ pub fn passkeytest() -> i32 {
             records.len() == 1,
             || format!("expected one stored passkey, found {}", records.len()),
         );
+        // Report the backend that actually took the write, not the one that
+        // was assumed before it.
+        println!(
+            "-- keychain backend: {}",
+            crate::keychain::backend()
+                .map(|b| b.as_str())
+                .unwrap_or("undetermined")
+        );
         let credential_id = registration.id.clone();
         let credential_id_bytes = b64url_decode(&credential_id)
             .ok_or_else(|| "the credential ID is not base64url".to_string())?;
+        let stored_record = broker
+            .stored_passkey(&credential_id_bytes)
+            .map_err(|e| format!("stored_passkey: {e}"))?
+            .ok_or_else(|| "the stored passkey is missing".to_string())?;
+        check(
+            &mut checks,
+            &mut failures,
+            "the stored credential id matches the iOS base64url form",
+            stored_record.credential_id_b64url() == credential_id,
+            || "the stored credential id does not round-trip".to_string(),
+        );
         let stored = broker
             .public_key_pem(&credential_id_bytes)
             .map_err(|e| format!("public_key_pem: {e}"))?
@@ -501,6 +536,9 @@ pub fn passkeytest() -> i32 {
 
     let _ = fixture.kill();
     let _ = fixture.wait();
+    // Leave no passkey behind in the Keychain.
+    let _ = crate::credentials::KeychainPasskeyStore::with_service(&service, "passkey_records_v1")
+        .clear();
 
     if let Err(error) = result {
         println!("not ok passkey suite: {error}");

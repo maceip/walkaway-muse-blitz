@@ -67,7 +67,7 @@ arrive.
 | Dark page plumbing | `--render out.png --url example.com --dark` | Page flips to its own `#222` via `color-scheme`, text stays readable |
 | Docked width | `--render out.png --dark --menu --size 560x760` | Chrome fits the ~560px desktop panel without overflow |
 | Static Hermes embed | `_sh_init` → unit → JSI call | Verified |
-| Passkey end-to-end | `--passkeytest` | PASS — 11 assertions: real registration and assertion ceremonies, macOS Keychain storage, the demo fixture's independent `openssl` verifier accepts the assertion and rejects replay / unknown credential / mismatched challenge |
+| Passkey end-to-end | `--passkeytest` | PASS — 12 assertions: real registration and assertion ceremonies, macOS Keychain storage, the demo fixture's independent `openssl` verifier accepts the assertion and rejects replay / unknown credential / mismatched challenge |
 | Credential + passkey unit suite | `cargo test --release` | PASS — 69 assertions, including 8 against the real login keychain |
 
 The click path was verified by rendering before/after through the real paint

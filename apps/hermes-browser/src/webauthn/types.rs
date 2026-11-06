@@ -25,8 +25,10 @@ pub enum WebAuthnError {
     /// A constraint was violated.
     Constraint(String),
     /// The operation was aborted.
+    #[allow(dead_code)]
     Abort(String),
     /// Encoding or decoding failed.
+    #[allow(dead_code)]
     Encoding(String),
     /// An unclassified failure.
     Unknown(String),
@@ -473,20 +475,6 @@ pub fn cred_protect_level(policy: &str) -> Option<i64> {
     }
 }
 
-/// Maps a `residentKey` preference to a boolean.
-pub fn resident_key_required(selection: Option<&AuthenticatorSelectionCriteria>) -> bool {
-    let Some(selection) = selection else {
-        return false;
-    };
-    match selection.resident_key.as_deref() {
-        Some("required") => true,
-        Some("preferred") | Some("discouraged") | None => {
-            selection.require_resident_key.unwrap_or(false)
-        }
-        Some(_) => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,18 +504,6 @@ mod tests {
         );
         assert_eq!(cred_protect_level("userVerificationRequired"), Some(3));
         assert_eq!(cred_protect_level("nonsense"), None);
-    }
-
-    #[test]
-    fn resident_key_required_reads_both_the_modern_and_legacy_flags() {
-        let mut selection = AuthenticatorSelectionCriteria::default();
-        assert!(!resident_key_required(None));
-        assert!(!resident_key_required(Some(&selection)));
-        selection.resident_key = Some("required".into());
-        assert!(resident_key_required(Some(&selection)));
-        selection.resident_key = Some("preferred".into());
-        selection.require_resident_key = Some(true);
-        assert!(resident_key_required(Some(&selection)));
     }
 
     #[test]

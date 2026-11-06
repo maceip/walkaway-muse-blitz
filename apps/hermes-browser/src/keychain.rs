@@ -106,12 +106,13 @@ fn record_backend(backend: Backend) {
 
 /// Reports which keychain backend is in force.
 ///
-/// Before the first write the data protection keychain is assumed, since that
-/// is the one this module tries first.
-pub fn backend() -> Backend {
+/// Returns `None` until the first write has determined it, so that a caller
+/// never reports an assumption as an observation.
+pub fn backend() -> Option<Backend> {
     match BACKEND.load(Ordering::Relaxed) {
-        2 => Backend::LegacyLogin,
-        _ => Backend::DataProtection,
+        1 => Some(Backend::DataProtection),
+        2 => Some(Backend::LegacyLogin),
+        _ => None,
     }
 }
 
@@ -280,6 +281,7 @@ pub fn delete_generic_item(service: &str, account: &str) -> bool {
 }
 
 /// Updates the data of an existing generic password item.
+#[allow(dead_code)]
 pub fn update_generic_item(
     service: &str,
     account: &str,
@@ -440,7 +442,7 @@ mod tests {
             .find(|i| i.account == "frank")
             .expect("item must be enumerable");
         match backend() {
-            Backend::DataProtection => {
+            Some(Backend::DataProtection) => {
                 // "aku" is kSecAttrAccessibleWhenUnlockedThisDeviceOnly.
                 assert_eq!(
                     item.accessible.as_deref(),
@@ -448,11 +450,12 @@ mod tests {
                     "data protection item must carry kSecAttrAccessibleWhenUnlockedThisDeviceOnly"
                 );
             }
-            Backend::LegacyLogin => {
+            Some(Backend::LegacyLogin) => {
                 // The file-based login keychain does not carry the attribute;
                 // the item is protected by the keychain ACL instead.
                 assert_eq!(item.accessible, None);
             }
+            None => panic!("the write must have determined a keychain backend"),
         }
         delete_generic_item(&service_for("frank"), "frank");
     }
@@ -468,7 +471,10 @@ mod tests {
     #[test]
     fn reports_the_active_backend() {
         set_generic_item(&service_for("backend"), "backend", Some("x"), b"v").unwrap();
-        eprintln!("[keychain] active backend: {}", backend().as_str());
+        eprintln!(
+            "[keychain] active backend: {}",
+            backend().map(|b| b.as_str()).unwrap_or("undetermined")
+        );
         delete_generic_item(&service_for("backend"), "backend");
     }
 }
