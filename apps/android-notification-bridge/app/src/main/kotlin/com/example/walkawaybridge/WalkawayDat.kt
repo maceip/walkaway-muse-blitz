@@ -237,33 +237,23 @@ class WalkawayDat(private val appContext: Context) {
       onReady = { readyDisplay ->
         scope.launch {
           runCatching {
+            // Single flat flexBox on purpose (2026-11-06 black-screen
+            // regression): nested flexBox/CARD layout renders black on
+            // current glasses firmware and holds the display.
             readyDisplay.sendContent {
               flexBox(gap = 10, padding = 16) {
-                text("Walkaway", style = TextStyle.META, color = TextColor.SECONDARY)
-                flexBox(padding = 14, background = FlexBoxBackground.CARD) {
-                  text(title.take(80), style = TextStyle.BODY)
-                  text(body.take(160), style = TextStyle.BODY)
-                }
-                flexBox(
-                  direction = Direction.ROW,
-                  gap = 12,
-                  padding = 0,
-                  alignment = Alignment.CENTER,
-                  crossAlignment = Alignment.CENTER,
-                  wrap = true,
-                  background = FlexBoxBackground.NONE
-                ) {
-                  button("Approve", style = ButtonStyle.PRIMARY, onClick = {
-                    awaitingAction = false
-                    onAction("approve")
-                    scope.launch { dismissAndPowerOff() }
-                  })
-                  button("Reject", style = ButtonStyle.SECONDARY, onClick = {
-                    awaitingAction = false
-                    onAction("reject")
-                    scope.launch { dismissAndPowerOff() }
-                  })
-                }
+                text(title.take(80), style = TextStyle.BODY)
+                text(body.take(160), style = TextStyle.BODY)
+                button("Approve", style = ButtonStyle.PRIMARY, onClick = {
+                  awaitingAction = false
+                  onAction("approve")
+                  scope.launch { dismissAndPowerOff() }
+                })
+                button("Reject", style = ButtonStyle.SECONDARY, onClick = {
+                  awaitingAction = false
+                  onAction("reject")
+                  scope.launch { dismissAndPowerOff() }
+                })
               }
             }
           }.onSuccess {
@@ -272,6 +262,9 @@ class WalkawayDat(private val appContext: Context) {
             onResult(Result.success(Unit))
           }.onFailure {
             setEvent("DAT card failed: ${it.message}")
+            // Never leave a failed display attached — a held display blocks
+            // the glasses' own screen timeout (black until released).
+            scope.launch { releaseSessionFully() }
             onResult(Result.failure(it))
           }
         }
@@ -291,13 +284,10 @@ class WalkawayDat(private val appContext: Context) {
     scope.launch {
       val currentSession = synchronized(sessionLock) { session }
       val currentDisplay = synchronized(sessionLock) { display }
-      if (currentDisplay != null &&
-        shouldReuseDatSession(currentSession?.state?.value?.name, currentDisplay.state.value.name)
-      ) {
-        Log.i(TAG, "Reusing live DAT session/display (both STARTED)")
-        onReady(currentDisplay)
-        return@launch
-      }
+      // Always open a fresh session per card (2026-11-06): the WS3
+      // both-STARTED reuse kept a bad display alive after the firmware
+      // update and black-screened the glasses. Fresh session is the
+      // physically verified Nov 4 path.
       if (currentSession != null || currentDisplay != null) {
         Log.i(TAG, "Releasing stale DAT session before opening fresh glasses card")
         releaseSessionFully()

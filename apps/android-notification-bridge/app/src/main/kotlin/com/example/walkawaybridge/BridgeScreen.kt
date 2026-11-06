@@ -154,6 +154,9 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
           Button(onClick = { BridgePoller.decideOnPhone(message, "approve") }) { Text("Approve on Phone") }
           OutlinedButton(onClick = { BridgePoller.decideOnPhone(message, "reject") }) { Text("Reject on Phone") }
         }
+      } else if (snap.decidedMessageId == message.id) {
+        // Decided cards must not show decision prompts again (first tap wins).
+        Text("Decided: ${snap.decidedAction} via ${snap.decidedSurface ?: "unknown"}")
       } else {
         Text("Decide on glasses or phone — first tap wins.")
       }
