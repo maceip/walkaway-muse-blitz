@@ -40,6 +40,26 @@ never blur which browser executed an action.
 - Runbook: `docs/DEMO_RUN.md`. No demo stack needs to stay running;
   fixture 8795 `/campaign-receipt` serves the receipt page.
 
+## Browser app icon — 2026-11-06
+
+- Owner: ZCode, task branch `feat/browser-app-icon` in existing isolated browser
+  worktree. User supplied six PNG exports and explicitly requested commit/push.
+- Claimed scope: browser-owned icon resources, deterministic macOS ICNS builder,
+  packaging icon integration/verification and docs. Blue Default is the primary
+  Finder/Dock app icon; other supplied exports are preserved as source variants.
+- Existing optional marketing-icon fallback is not canonical for the browser.
+  Remove silent ICNS failure; a missing/invalid browser app icon fails packaging.
+- Preflight: clean task checkout at `e81f656`, source images inspected (Default
+  PNG 1024x1024), no active browser/package/cargo/notarization process observed.
+- Observed: all six copied PNGs hash-match supplied exports. Browser icon
+  builder round-trip PASS; old silently ignored ICNS failure removed. Signed
+  local DMG build PASS, mounted icon bytes/Info.plist reference PASS, strict
+  deep signature PASS; mounted selftest/supervisor/UI/debugger28/native72/host
+  suites PASS. Exact commands recorded in TEST_REGISTRY T-BROWSER-ICON.
+- Next action: commit/push only task-owned files and assess latest-main snapshot.
+- Known blocker: none; artifact signed/not notarized, no installed app overwrite
+  or release publication. Appearance variants preserved but not auto-switched.
+
 ## Address-in-tab correction — 2026-11-06
 
 - Owner: ZCode on existing `feat/netscape-gooey-debugger` task branch/worktree.

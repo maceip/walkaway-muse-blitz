@@ -4,6 +4,26 @@ A test belongs here only when the exact command, real components, assertion,
 and last observed result are known. Passing a unit test never proves a demo
 hop works across devices.
 
+## T-BROWSER-ICON — supplied app artwork (2026-11-06)
+
+- Owner: ZCode, `feat/browser-app-icon`.
+- Sources: six owner-supplied 1024px PNG exports copied unchanged into
+  `apps/hermes-browser/resources/icons/`. Primary `default.png` is the blue
+  Default export. Other appearance assets are preserved, not auto-switched.
+- Command: `bash apps/hermes-browser/scripts/build-app-icon.sh
+  /tmp/Walkaway-AppIcon.icns`; `bash -n` on builder and root DMG script.
+- Real components: macOS `sips`, `iconutil`, full 16px–1024px iconset, generated
+  ICNS decoded back to PNG. Assertion: valid ICNS and byte-identical 1024px
+  round-trip of the supplied default. Invalid/missing input is a hard failure.
+- Observed **PASS**: all six assets byte-identical to supplied exports;
+  generation/round-trip and shell syntax pass. Signed local DMG rerun passes
+  required icon generation with no former ICNS failure, mounted resource-byte
+  comparison and `CFBundleIconFile=AppIcon`. Strict deep app signature verifies;
+  mounted selftest/supervisor/UI/debugger28/native72/tabhost suites PASS.
+  Command: `./scripts/build-macos-dmg.sh --release --no-notarize --identity
+  'Developer ID Application: Zunftmax UG (haftungsbeschrankt) (D74F5NNMRQ)'`.
+  Local artifact is signed but not notarized; no installed app overwrite.
+
 ## T-ADDRESS-IN-TAB — canonical Safari-style mode (2026-11-06)
 
 - Owner: ZCode, existing `feat/netscape-gooey-debugger` task branch.

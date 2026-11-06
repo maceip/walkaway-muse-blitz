@@ -180,18 +180,7 @@ xcrun swift-stdlib-tool --copy \
   --destination "${STAGE_APP}/Contents/Frameworks" \
   --platform macosx
 
-# Generate AppIcon.icns from marketing site icon PNG if available
-ICON_SRC="${REPO_ROOT}/apps/marketing-site/assets/download/icon-ios-dark.png"
-if [[ -f "${ICON_SRC}" ]] && command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
-  ICONSET_DIR="$(mktemp -d /tmp/walkaway-icon.XXXXXX.iconset)"
-  for sz in 16 32 128 256 512; do
-    sips -z "${sz}" "${sz}" "${ICON_SRC}" --out "${ICONSET_DIR}/icon_${sz}x${sz}.png" >/dev/null 2>&1
-    sz2=$((sz * 2))
-    sips -z "${sz2}" "${sz2}" "${ICON_SRC}" --out "${ICONSET_DIR}/icon_${sz}x${sz}@2x.png" >/dev/null 2>&1
-  done
-  iconutil -c icns "${ICONSET_DIR}" -o "${STAGE_APP}/Contents/Resources/AppIcon.icns" || true
-  rm -rf "${ICONSET_DIR}"
-fi
+bash "${BROWSER_DIR}/scripts/build-app-icon.sh" "${STAGE_APP}/Contents/Resources/AppIcon.icns"
 
 cat > "${STAGE_APP}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -408,6 +397,9 @@ echo "==> Mounting ${VERSIONED_DMG_OUT} headlessly to verify packaged Walkaway.a
 hdiutil attach "${VERSIONED_DMG_OUT}" -mountpoint "${VERIFY_MOUNT}" -nobrowse -readonly -quiet
 test -d "${VERIFY_MOUNT}/Walkaway.app"
 test -L "${VERIFY_MOUNT}/Applications"
+test -s "${VERIFY_MOUNT}/Walkaway.app/Contents/Resources/AppIcon.icns"
+cmp "${STAGE_APP}/Contents/Resources/AppIcon.icns" "${VERIFY_MOUNT}/Walkaway.app/Contents/Resources/AppIcon.icns"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "${VERIFY_MOUNT}/Walkaway.app/Contents/Info.plist")" == "AppIcon" ]]
 codesign --verify --deep --strict --verbose=2 "${VERIFY_MOUNT}/Walkaway.app"
 HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --selftest
 HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --supervisortest
