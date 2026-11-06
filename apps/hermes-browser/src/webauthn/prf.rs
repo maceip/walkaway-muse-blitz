@@ -13,17 +13,10 @@ use openssl::pkey::PKey;
 use openssl::sign::Signer;
 use sha2::{Digest, Sha256};
 
+use crate::webauthn::types::PrfValues;
+
 /// The PRF salt prefix defined by WebAuthn Level 3.
 const PRF_PREFIX: &[u8] = b"WebAuthn PRF";
-
-/// The evaluated PRF outputs for a single assertion.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrfValues {
-    /// Output for the first salt.
-    pub first: Vec<u8>,
-    /// Output for the second salt, when the relying party asked for one.
-    pub second: Option<Vec<u8>>,
-}
 
 /// Evaluates the PRF for the given credential secret and salts.
 pub fn evaluate(

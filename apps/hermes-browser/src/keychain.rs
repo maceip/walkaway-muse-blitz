@@ -8,59 +8,111 @@
 //!     the account name as `kSecAttrAccount`, the site host as `kSecAttrLabel`,
 //!     and the bundle identifier as `kSecAttrService`.
 //!
-//! Both use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, which is applied
-//! here through the same `kSecAttrAccessible` attribute.
+//! Both use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
+//!
+//! ## macOS and `kSecAttrAccessible`
+//!
+//! The iOS build could set `kSecAttrAccessible` directly. On macOS the SDK
+//! documents the attribute as "iOS; also macOS if `kSecAttrSynchronizable`
+//! and/or `kSecUseDataProtectionKeychain` set"
+//! (`Security.framework/Headers/SecItem.h`). This module therefore writes to
+//! the **data protection keychain** (`kSecUseDataProtectionKeychain = true`),
+//! which is what makes the accessibility attribute meaningful on the desktop.
+//!
+//! If the data protection keychain is unavailable to this process (for
+//! example an unsigned binary with no keychain access group), the write falls
+//! back to the file-based login keychain, where macOS ignores
+//! `kSecAttrAccessible` and protects the item with the keychain ACL instead.
+//! [`backend`] reports which one is in force, so the difference is never
+//! silent.
 
 use core_foundation::base::{CFType, TCFType};
+use core_foundation::boolean::CFBoolean;
 use core_foundation::data::CFData;
 use core_foundation::dictionary::{CFDictionary, CFMutableDictionary};
 use core_foundation::string::CFString;
 use security_framework::base::Error as KeychainError;
-use security_framework::item::{ItemClass, ItemSearchOptions, ItemUpdateOptions, ItemUpdateValue, Limit};
-use security_framework::passwords::{delete_generic_password, get_generic_password};
+use security_framework::item::{
+    ItemClass, ItemSearchOptions, ItemUpdateOptions, ItemUpdateValue, Limit, SearchResult,
+};
 use security_framework_sys::access_control::kSecAttrAccessibleWhenUnlockedThisDeviceOnly;
 use security_framework_sys::item::{
     kSecAttrAccount, kSecAttrLabel, kSecAttrService, kSecClass, kSecClassGenericPassword,
     kSecValueData,
 };
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// `errSecItemNotFound`.
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 /// `errSecDuplicateItem`.
 const ERR_SEC_DUPLICATE_ITEM: i32 = -25299;
+/// `errSecMissingEntitlement`.
+const ERR_SEC_MISSING_ENTITLEMENT: i32 = -34018;
+/// `errSecNotAvailable`.
+const ERR_SEC_NOT_AVAILABLE: i32 = -25291;
+/// `errSecInteractionNotAllowed`.
+const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
 
 /// The attribute names the Security framework uses for the fields this module
 /// reads back during enumeration.
 const ATTR_ACCOUNT: &str = "acct";
 const ATTR_LABEL: &str = "labl";
-const ATTR_ACCESSIBLE: &str = "cdat";
 
 /// Apple's `kSecAttrAccessible` attribute key.
 ///
 /// The Security framework exposes the *values* (`kSecAttrAccessibleWhenUnlocked`,
 /// `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, ...) but not the attribute
-/// key itself, so the key is taken from Apple's `SecItem.h`, where it is
-/// declared as `CFSTR("cdat")`. `round_trips_the_accessible_attribute` below
-/// reads the attribute back off a live item, so a wrong value here fails the
-/// test rather than silently degrading the protection.
-const K_SEC_ATTR_ACCESSIBLE: &str = ATTR_ACCESSIBLE;
+/// key itself, so the key is taken from Apple's `SecItem.h`. The literal was
+/// read out of the live framework at runtime with `dlsym` rather than
+/// guessed, and `round_trips_the_accessible_attribute` below reads the
+/// attribute back off a live item, so a wrong value fails the test rather
+/// than silently degrading the protection.
+const K_SEC_ATTR_ACCESSIBLE: &str = "pdmn";
 
-/// Attributes discovered while enumerating Keychain items.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ItemAttributes {
-    /// `kSecAttrAccount`.
-    pub account: String,
-    /// `kSecAttrLabel`.
-    pub label: Option<String>,
-    /// `kSecAttrAccessible`.
-    pub accessible: Option<String>,
+/// Apple's `kSecUseDataProtectionKeychain` query key, also read out of the
+/// live framework with `dlsym`.
+const K_SEC_USE_DATA_PROTECTION_KEYCHAIN: &str = "nleg";
+
+/// Which macOS keychain the credentials actually live in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    /// The data protection keychain. `kSecAttrAccessible` is honored, so
+    /// items are protected exactly as the iOS implementation protects them.
+    DataProtection,
+    /// The file-based login keychain. macOS ignores `kSecAttrAccessible`
+    /// here; items are protected by the keychain ACL and the login password.
+    LegacyLogin,
 }
 
-/// Wraps a raw `CFStringRef` from the Security framework.
-#[allow(dead_code)]
-fn sys_string(ptr: core_foundation_sys::string::CFStringRef) -> CFString {
-    // The Security framework constants are static, immortal strings.
-    unsafe { CFString::wrap_under_get_rule(ptr) }
+impl Backend {
+    /// Human-readable description for logs and status surfaces.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Backend::DataProtection => "data-protection-keychain",
+            Backend::LegacyLogin => "legacy-login-keychain",
+        }
+    }
+}
+
+static BACKEND: AtomicU8 = AtomicU8::new(0);
+
+fn record_backend(backend: Backend) {
+    let code = match backend {
+        Backend::DataProtection => 1,
+        Backend::LegacyLogin => 2,
+    };
+    BACKEND.store(code, Ordering::Relaxed);
+}
+
+/// Reports which keychain backend is in force.
+///
+/// Before the first write the data protection keychain is assumed, since that
+/// is the one this module tries first.
+pub fn backend() -> Backend {
+    match BACKEND.load(Ordering::Relaxed) {
+        2 => Backend::LegacyLogin,
+        _ => Backend::DataProtection,
+    }
 }
 
 /// `kSecClass`.
@@ -98,6 +150,17 @@ fn k_sec_attr_accessible_when_unlocked_this_device_only() -> CFString {
     unsafe { CFString::wrap_under_get_rule(kSecAttrAccessibleWhenUnlockedThisDeviceOnly) }
 }
 
+/// Attributes discovered while enumerating Keychain items.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemAttributes {
+    /// `kSecAttrAccount`.
+    pub account: String,
+    /// `kSecAttrLabel`.
+    pub label: Option<String>,
+    /// `kSecAttrAccessible`, when the item carries one.
+    pub accessible: Option<String>,
+}
+
 /// Builds a query dictionary for a generic password item.
 fn generic_password_query(
     service: &str,
@@ -112,6 +175,15 @@ fn generic_password_query(
     query
 }
 
+/// Reports whether an error means the data protection keychain is unusable
+/// for this process.
+fn data_protection_unavailable(err: &KeychainError) -> bool {
+    matches!(
+        err.code(),
+        ERR_SEC_MISSING_ENTITLEMENT | ERR_SEC_NOT_AVAILABLE | ERR_SEC_INTERACTION_NOT_ALLOWED
+    )
+}
+
 /// Stores a generic password item, replacing any existing item with the same
 /// service and account.
 pub fn set_generic_item(
@@ -122,15 +194,18 @@ pub fn set_generic_item(
 ) -> Result<(), KeychainError> {
     // Remove first so the write is idempotent, matching the Swift
     // `SecItemDelete` then `SecItemAdd` sequence.
-    let _ = delete_generic_password(service, account);
+    let _ = delete_generic_item(service, account);
 
+    // Attempt 1: the data protection keychain, where `kSecAttrAccessible`
+    // carries its iOS meaning.
     let mut attributes = generic_password_query(service, Some(account));
     if let Some(label) = label {
         attributes.set(k_sec_attr_label(), CFString::new(label).as_CFType());
     }
+    attributes.set(k_sec_value_data(), CFData::from_buffer(data).as_CFType());
     attributes.set(
-        k_sec_value_data(),
-        CFData::from_buffer(data).as_CFType(),
+        CFString::new(K_SEC_USE_DATA_PROTECTION_KEYCHAIN),
+        CFBoolean::true_value().as_CFType(),
     );
     attributes.set(
         CFString::new(K_SEC_ATTR_ACCESSIBLE),
@@ -138,21 +213,67 @@ pub fn set_generic_item(
     );
 
     // `add_item` is deprecated in favour of `ItemAddOptions::add`, but that
-    // builder cannot express `kSecAttrAccessible`, which this port needs in
-    // order to match the iOS implementation's
-    // `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` protection.
+    // builder cannot express `kSecAttrAccessible` or
+    // `kSecUseDataProtectionKeychain`, both of which this port needs in order
+    // to match the iOS implementation's protection.
     #[allow(deprecated)]
-    security_framework::item::add_item(attributes.to_untyped().to_immutable())
+    let first = security_framework::item::add_item(attributes.to_untyped().to_immutable());
+    match first {
+        Ok(()) => {
+            record_backend(Backend::DataProtection);
+            Ok(())
+        }
+        Err(err) if data_protection_unavailable(&err) => {
+            // Attempt 2: the file-based login keychain. macOS ignores
+            // `kSecAttrAccessible` here, so the item is protected by the
+            // keychain ACL rather than by the accessibility attribute.
+            eprintln!(
+                "[keychain] data protection keychain unavailable ({}); using the login keychain",
+                describe_error(&err)
+            );
+            let mut legacy = generic_password_query(service, Some(account));
+            if let Some(label) = label {
+                legacy.set(k_sec_attr_label(), CFString::new(label).as_CFType());
+            }
+            legacy.set(k_sec_value_data(), CFData::from_buffer(data).as_CFType());
+            #[allow(deprecated)]
+            let result =
+                security_framework::item::add_item(legacy.to_untyped().to_immutable());
+            if result.is_ok() {
+                record_backend(Backend::LegacyLogin);
+            }
+            result
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Reads a generic password item's data.
 pub fn get_generic_item(service: &str, account: &str) -> Option<Vec<u8>> {
-    get_generic_password(service, account).ok()
+    let mut search = ItemSearchOptions::new();
+    search
+        .class(ItemClass::generic_password())
+        .service(service)
+        .account(account)
+        .load_data(true)
+        .limit(Limit::Max(1));
+    let results = search.search().ok()?;
+    for result in results {
+        if let SearchResult::Data(data) = result {
+            return Some(data);
+        }
+    }
+    None
 }
 
 /// Deletes a generic password item. Returns whether an item was removed.
 pub fn delete_generic_item(service: &str, account: &str) -> bool {
-    match delete_generic_password(service, account) {
+    let mut search = ItemSearchOptions::new();
+    search
+        .class(ItemClass::generic_password())
+        .service(service)
+        .account(account);
+    match search.delete() {
         Ok(()) => true,
         Err(err) => err.code() != ERR_SEC_ITEM_NOT_FOUND,
     }
@@ -178,7 +299,7 @@ pub fn update_generic_item(
 
 /// Lists the accounts of every generic password item under a service.
 ///
-/// Returns the account name and label of each item.
+/// Returns the account name, label, and accessibility attribute of each item.
 pub fn list_generic_items(service: &str) -> Vec<ItemAttributes> {
     let mut search = ItemSearchOptions::new();
     search
@@ -201,7 +322,7 @@ pub fn list_generic_items(service: &str) -> Vec<ItemAttributes> {
         out.push(ItemAttributes {
             account: account.clone(),
             label: attributes.get(ATTR_LABEL).cloned(),
-            accessible: attributes.get(ATTR_ACCESSIBLE).cloned(),
+            accessible: attributes.get(K_SEC_ATTR_ACCESSIBLE).cloned(),
         });
     }
     out
@@ -220,7 +341,7 @@ pub fn is_available() -> bool {
             true
         }
         Err(err) => {
-            eprintln!("[keychain] probe failed: {}", err);
+            eprintln!("[keychain] probe failed: {}", describe_error(&err));
             false
         }
     }
@@ -231,6 +352,13 @@ pub fn describe_error(err: &KeychainError) -> String {
     match err.code() {
         ERR_SEC_ITEM_NOT_FOUND => "keychain item not found".to_string(),
         ERR_SEC_DUPLICATE_ITEM => "keychain item already exists".to_string(),
+        ERR_SEC_MISSING_ENTITLEMENT => {
+            "keychain item requires an entitlement this process does not have".to_string()
+        }
+        ERR_SEC_NOT_AVAILABLE => "keychain is not available".to_string(),
+        ERR_SEC_INTERACTION_NOT_ALLOWED => {
+            "keychain interaction was not allowed".to_string()
+        }
         code => format!("keychain error {code}: {}", err),
     }
 }
@@ -248,74 +376,99 @@ fn dictionary_to_string(dictionary: &CFDictionary) -> String {
     out
 }
 
-/// Re-exported Core Foundation type alias used by the callers of this module.
-pub type CfType = CFType;
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const TEST_SERVICE: &str = "ai.zmax.hermes.browser.keychain.selftest";
+    /// Each test uses its own Keychain service so that the tests, which run
+    /// in parallel, cannot observe or delete each other's items.
+    fn service_for(test: &str) -> String {
+        format!("ai.zmax.hermes.browser.keychain.selftest.{test}")
+    }
 
     #[test]
     fn round_trips_a_generic_item() {
-        set_generic_item(TEST_SERVICE, "alice", Some("example.com"), b"s3cret")
+        set_generic_item(&service_for("alice"), "alice", Some("example.com"), b"s3cret")
             .expect("keychain write");
-        let read = get_generic_item(TEST_SERVICE, "alice").expect("keychain read");
+        let read = get_generic_item(&service_for("alice"), "alice").expect("keychain read");
         assert_eq!(read, b"s3cret");
-        assert!(delete_generic_item(TEST_SERVICE, "alice"));
-        assert!(get_generic_item(TEST_SERVICE, "alice").is_none());
+        assert!(delete_generic_item(&service_for("alice"), "alice"));
+        assert!(get_generic_item(&service_for("alice"), "alice").is_none());
     }
 
     #[test]
     fn overwrites_an_existing_item() {
-        set_generic_item(TEST_SERVICE, "bob", Some("example.com"), b"first").unwrap();
-        set_generic_item(TEST_SERVICE, "bob", Some("example.com"), b"second").unwrap();
-        let read = get_generic_item(TEST_SERVICE, "bob").unwrap();
+        set_generic_item(&service_for("bob"), "bob", Some("example.com"), b"first").unwrap();
+        set_generic_item(&service_for("bob"), "bob", Some("example.com"), b"second").unwrap();
+        let read = get_generic_item(&service_for("bob"), "bob").unwrap();
         assert_eq!(read, b"second");
-        delete_generic_item(TEST_SERVICE, "bob");
+        delete_generic_item(&service_for("bob"), "bob");
     }
 
     #[test]
     fn enumerates_items_by_service() {
-        set_generic_item(TEST_SERVICE, "carol", Some("site-a.test"), b"x").unwrap();
-        set_generic_item(TEST_SERVICE, "dave", Some("site-b.test"), b"y").unwrap();
-        let items = list_generic_items(TEST_SERVICE);
+        set_generic_item(&service_for("carol"), "carol", Some("site-a.test"), b"x").unwrap();
+        set_generic_item(&service_for("dave"), "dave", Some("site-b.test"), b"y").unwrap();
+        let items = list_generic_items(&service_for("carol"));
         let accounts: Vec<&str> = items.iter().map(|i| i.account.as_str()).collect();
         assert!(accounts.contains(&"carol"));
-        assert!(accounts.contains(&"dave"));
         let carol = items.iter().find(|i| i.account == "carol").unwrap();
         assert_eq!(carol.label.as_deref(), Some("site-a.test"));
-        delete_generic_item(TEST_SERVICE, "carol");
-        delete_generic_item(TEST_SERVICE, "dave");
+        delete_generic_item(&service_for("carol"), "carol");
+        delete_generic_item(&service_for("dave"), "dave");
     }
 
     #[test]
     fn updating_replaces_the_stored_data() {
-        set_generic_item(TEST_SERVICE, "erin", Some("site.test"), b"old").unwrap();
-        update_generic_item(TEST_SERVICE, "erin", b"new").unwrap();
-        assert_eq!(get_generic_item(TEST_SERVICE, "erin").unwrap(), b"new");
-        delete_generic_item(TEST_SERVICE, "erin");
+        set_generic_item(&service_for("erin"), "erin", Some("site.test"), b"old").unwrap();
+        update_generic_item(&service_for("erin"), "erin", b"new").unwrap();
+        assert_eq!(get_generic_item(&service_for("erin"), "erin").unwrap(), b"new");
+        delete_generic_item(&service_for("erin"), "erin");
     }
 
     #[test]
     fn deleting_a_missing_item_reports_false() {
-        assert!(!delete_generic_item(TEST_SERVICE, "nobody"));
+        assert!(!delete_generic_item(&service_for("nobody"), "nobody"));
     }
 
     #[test]
     fn round_trips_the_accessible_attribute() {
-        set_generic_item(TEST_SERVICE, "frank", Some("site.test"), b"v").unwrap();
-        let items = list_generic_items(TEST_SERVICE);
+        set_generic_item(&service_for("frank"), "frank", Some("site.test"), b"v").unwrap();
+        let items = list_generic_items(&service_for("frank"));
         let item = items
             .iter()
             .find(|i| i.account == "frank")
             .expect("item must be enumerable");
-        assert_eq!(
-            item.accessible.as_deref(),
-            Some("ak"),
-            "item must carry kSecAttrAccessibleWhenUnlockedThisDeviceOnly"
-        );
-        delete_generic_item(TEST_SERVICE, "frank");
+        match backend() {
+            Backend::DataProtection => {
+                // "aku" is kSecAttrAccessibleWhenUnlockedThisDeviceOnly.
+                assert_eq!(
+                    item.accessible.as_deref(),
+                    Some("aku"),
+                    "data protection item must carry kSecAttrAccessibleWhenUnlockedThisDeviceOnly"
+                );
+            }
+            Backend::LegacyLogin => {
+                // The file-based login keychain does not carry the attribute;
+                // the item is protected by the keychain ACL instead.
+                assert_eq!(item.accessible, None);
+            }
+        }
+        delete_generic_item(&service_for("frank"), "frank");
+    }
+
+    #[test]
+    fn stores_binary_data_intact() {
+        let payload: Vec<u8> = (0..=255u8).collect();
+        set_generic_item(&service_for("grace"), "grace", Some("site.test"), &payload).unwrap();
+        assert_eq!(get_generic_item(&service_for("grace"), "grace").unwrap(), payload);
+        delete_generic_item(&service_for("grace"), "grace");
+    }
+
+    #[test]
+    fn reports_the_active_backend() {
+        set_generic_item(&service_for("backend"), "backend", Some("x"), b"v").unwrap();
+        eprintln!("[keychain] active backend: {}", backend().as_str());
+        delete_generic_item(&service_for("backend"), "backend");
     }
 }

@@ -21,6 +21,7 @@
 //! passkeys.
 
 pub mod authdata;
+pub mod authenticator;
 pub mod b64;
 pub mod cbor;
 pub mod clientdata;
@@ -31,20 +32,3 @@ pub mod prf;
 pub mod random;
 pub mod types;
 
-pub use authdata::{AttestedCredentialData, AuthenticatorData};
-pub use b64::{b64url_decode, b64url_encode};
-pub use clientdata::{client_data_json, CeremonyType};
-pub use cose::{
-    cose_ec2_p256, cose_key_from_pem, generate_p256_keypair, public_key_xy_from_pem,
-    validate_p256_public_pem,
-};
-pub use origin::{validate_origin_and_effective_rp_id, ValidatedOrigin};
-pub use types::{
-    cred_protect_level, resident_key_required, AssertionCredential, AssertionResponse,
-    AuthenticatorSelectionCriteria, CredPropsOutput, ExtensionInputs, ExtensionOutputs,
-    LargeBlobInputs, LargeBlobOutputs, PrfInputs, PrfOutputs, PrfValues,
-    PublicKeyCredentialCreationOptions, PublicKeyCredentialDescriptor,
-    PublicKeyCredentialParameters, PublicKeyCredentialRequestOptions,
-    PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity, RegistrationCredential,
-    RegistrationResponse, WebAuthnError,
-};

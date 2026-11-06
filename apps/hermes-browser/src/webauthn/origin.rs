@@ -197,9 +197,27 @@ mod tests {
     }
 
     #[test]
-    fn accepts_ipv6_loopback() {
-        let validated =
-            validate_origin_and_effective_rp_id("http://[::1]:9000", None, false, false).unwrap();
-        assert_eq!(validated.effective_rp_id, "::1");
+    fn rejects_an_ipv6_host_as_a_relying_party_identifier() {
+        // The RP ID must not contain a colon, so an IPv6 literal host cannot
+        // serve as an RP ID. The iOS implementation rejects it the same way
+        // (`rpId.contains(":")`), and WebAuthn §5.4 likewise requires the RP
+        // ID to be a valid domain string.
+        let err =
+            validate_origin_and_effective_rp_id("http://[::1]:9000", None, false, false).unwrap_err();
+        assert_eq!(err.dom_exception_name(), "SecurityError");
+        assert!(err.detail().contains("Invalid RP ID format"));
+    }
+
+    #[test]
+    fn rejects_an_ipv6_host_with_an_explicit_domain_rp_id() {
+        // The origin host still has to be a subdomain of the RP ID.
+        let err = validate_origin_and_effective_rp_id(
+            "http://[::1]:9000",
+            Some("example.com"),
+            false,
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.dom_exception_name(), "SecurityError");
     }
 }

@@ -77,6 +77,12 @@ impl std::fmt::Display for WebAuthnError {
 
 impl std::error::Error for WebAuthnError {}
 
+impl From<String> for WebAuthnError {
+    fn from(message: String) -> WebAuthnError {
+        WebAuthnError::Unknown(message)
+    }
+}
+
 /// `largeBlob` extension client inputs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LargeBlobInputs {
@@ -234,6 +240,14 @@ pub struct PublicKeyCredentialDescriptor {
     /// Whether the credential is discoverable.
     #[serde(default, rename = "rk", skip_serializing_if = "Option::is_none")]
     pub rk: Option<bool>,
+    /// Credential type. Always "public-key".
+    #[serde(rename = "type", default = "default_credential_type")]
+    pub kind: String,
+}
+
+/// The default credential type for a descriptor.
+fn default_credential_type() -> String {
+    "public-key".to_string()
 }
 
 /// The relying party entity.

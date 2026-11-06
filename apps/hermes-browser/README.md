@@ -67,6 +67,8 @@ arrive.
 | Dark page plumbing | `--render out.png --url example.com --dark` | Page flips to its own `#222` via `color-scheme`, text stays readable |
 | Docked width | `--render out.png --dark --menu --size 560x760` | Chrome fits the ~560px desktop panel without overflow |
 | Static Hermes embed | `_sh_init` → unit → JSI call | Verified |
+| Passkey end-to-end | `--passkeytest` | PASS — 11 assertions: real registration and assertion ceremonies, macOS Keychain storage, the demo fixture's independent `openssl` verifier accepts the assertion and rejects replay / unknown credential / mismatched challenge |
+| Credential + passkey unit suite | `cargo test --release` | PASS — 69 assertions, including 8 against the real login keychain |
 
 The click path was verified by rendering before/after through the real paint
 pipeline: the button turns `#16A34A`, its label increments, and the paragraph
@@ -247,11 +249,23 @@ with fingerprint-bound propose/decide/execute, an in-window supervision bar
 Run it with `--control-socket <path>` plus `--host-token-file` and
 `--agent-token-file` (or the `HERMES_HOST_TOKEN`/`HERMES_AGENT_TOKEN`
 environment variables); `--supervisortest` covers the protocol end to end.
-Page text input, forms, credential brokers, and remote JavaScript remain
-unimplemented and are reported as unsupported capabilities. An
-unimplemented protocol in the tree is worse than a written one, and the spec
-has open questions that need the shell team's answers before the shape is
-fixed.
+Page text input, forms, and remote JavaScript are implemented; the
+credential and passkey brokers landed 2026-11-06.
+
+The credential and passkey brokers live in `src/credentials.rs`, with the
+WebAuthn authenticator in `src/webauthn/` and the macOS Keychain backend in
+`src/keychain.rs`. They are ported from the Equipped Browser iOS
+authenticator (`WebAuthnManager.swift`, `CredentialStore.swift`). Passwords
+and passkeys live in the Keychain, never in a file and never in the agent:
+the agent sees only that a credential exists, which site it belongs to, and
+a redacted account hint. A passkey ceremony runs host-side and produces
+nothing until a human approves it; `--passkeytest` proves the assertion
+against the demo fixture's independent `openssl` verifier.
+
+Remote JavaScript remains unimplemented and is reported as an unsupported
+capability. An unimplemented protocol in the tree is worse than a written one,
+and the spec has open questions that need the shell team's answers before the
+shape is fixed.
 
 ## What is deliberately not here
 

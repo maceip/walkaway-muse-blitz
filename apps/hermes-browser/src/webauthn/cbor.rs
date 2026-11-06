@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn cose_style_integer_keys_sort_numerically_by_encoded_bytes() {
-        // COSE_Key labels: 1 (kty), 3 (alg), -1 (crv), -3 (x), -2 (y).
-        // Encoded: 0x01, 0x03, 0x20 (-1), 0x21 (-2), 0x22 (-3).
+        // COSE_Key labels: 1 (kty), 3 (alg), -1 (crv), -2 (x), -3 (y).
+        // Encoded key bytes: 0x01, 0x03, 0x20, 0x21, 0x22.
         let map = Cbor::Map(vec![
             (Cbor::Neg(-3), Cbor::bytes(vec![0x01])),
             (Cbor::Neg(-1), Cbor::Uint(1)),
@@ -190,15 +190,18 @@ mod tests {
             (Cbor::Neg(-2), Cbor::bytes(vec![0x02])),
         ]);
         let encoded = map.encode();
-        // 0xa5 = map of 5 pairs.
-        assert_eq!(encoded[0], 0xa5);
-        // Keys must appear in ascending encoded-byte order.
-        let keys: Vec<u8> = encoded
-            .windows(2)
-            .skip(1)
-            .step_by(2)
-            .map(|w| w[0])
-            .collect();
-        assert_eq!(keys, vec![0x01, 0x03, 0x20, 0x21, 0x22]);
+        // Map of 5 pairs, then the pairs in ascending encoded-key order:
+        // 1 -> 2, 3 -> -7, -1 -> 1, -2 -> bstr, -3 -> bstr.
+        assert_eq!(
+            encoded,
+            vec![
+                0xa5, // map, 5 pairs
+                0x01, 0x02, // 1: 2
+                0x03, 0x26, // 3: -7
+                0x20, 0x01, // -1: 1
+                0x21, 0x41, 0x02, // -2: bstr(1) = 0x02
+                0x22, 0x41, 0x01, // -3: bstr(1) = 0x01
+            ]
+        );
     }
 }

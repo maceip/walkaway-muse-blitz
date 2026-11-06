@@ -17,10 +17,12 @@
 mod browser;
 mod chrome;
 mod control;
+mod credentials;
 mod dom_ffi;
 mod keychain;
 mod observe;
 mod page_endpoint;
+mod passkeytest;
 mod recall;
 mod scrapbook;
 mod vault;
@@ -40,6 +42,7 @@ use chrome::{
     SupervisionInfo, TabInfo, Theme,
 };
 use control::{ControlHub, Role};
+use credentials::{CredentialBroker, PasskeyBroker};
 use dom_ffi::BlitzHostContext;
 use page_endpoint::PageCommand;
 use serde_json::{Value, json};
@@ -780,6 +783,9 @@ struct PendingProposal {
     rationale: String,
     classification: String,
     requires_glasses: bool,
+    /// The passkey ceremony this proposal will run, when the proposal is a
+    /// passkey registration or assertion.
+    ceremony_id: Option<String>,
 }
 
 struct ControlSession {
@@ -901,6 +907,12 @@ struct BrowserApp {
     recalled_count: u64,
     supervise_commits_only: bool,
     xray_enabled: bool,
+    /// The passkey broker. WebAuthn ceremonies run host-side, behind the
+    /// human approval gate, and never in page script.
+    passkey_broker: credentials::LocalPasskeyBroker,
+    /// The password broker. Secrets live in the macOS Keychain and reach the
+    /// page only after a human approves the fill.
+    credential_broker: credentials::LocalCredentialBroker,
     exit_after: Option<Duration>,
     started: Instant,
 }
@@ -969,6 +981,8 @@ impl BrowserApp {
             recalled_count: 0,
             supervise_commits_only,
             xray_enabled,
+            passkey_broker: credentials::LocalPasskeyBroker::new(),
+            credential_broker: credentials::LocalCredentialBroker::new(),
             exit_after: parse_exit_after(),
             started: Instant::now(),
         };
@@ -1321,7 +1335,8 @@ impl BrowserApp {
             "engine": {"name": "hermes-blitz", "version": env!("CARGO_PKG_VERSION")},
             "operations": [
                 "observe", "click", "scroll", "navigate", "back", "forward", "reload",
-                "type", "select", "fill_form", "replay_recipe", "submit"
+                "type", "select", "fill_form", "replay_recipe", "submit",
+                "passkey.assert", "passkey.register"
             ],
             "remote_page_script": "unsupported",
             "trusted_aot_script": "partial",
@@ -1333,7 +1348,9 @@ impl BrowserApp {
             "vault": "supported",
             "recall": "supported",
             "cookies_persistent": "unsupported",
-            "passkeys": "unsupported",
+            "passkeys": "supported",
+            "passkey_broker": "supported",
+            "credential_broker": "supported",
             "screenshot_png": "supported",
         })
     }
@@ -1414,6 +1431,130 @@ impl BrowserApp {
             "capabilities.get" => {
                 let mut body = Self::capabilities_frame();
                 body["request_id"] = frame.get("request_id").cloned().unwrap_or(Value::Null);
+                self.emit(OutTarget::Conn(conn_id), body);
+            }
+            "credential.list" => {
+                // The agent learns that credentials exist, which site they
+                // belong to, and a redacted account hint. Never a secret.
+                let matches = self.credential_broker.list().unwrap_or_default();
+                let body = json!({
+                    "v": 1, "type": "credential.list",
+                    "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                    "credentials": matches,
+                });
+                self.emit(OutTarget::Conn(conn_id), body);
+            }
+            "credential.describe" => {
+                let origin = frame
+                    .get("origin")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let request = credentials::CredentialFillRequest {
+                    task_id: frame
+                        .get("task_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    origin,
+                    fields: Vec::new(),
+                    document_generation: frame
+                        .get("generation")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                };
+                match self.credential_broker.describe_fill(request) {
+                    Ok(prompt) => {
+                        let body = json!({
+                            "v": 1, "type": "credential.prompt",
+                            "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                            "prompt": prompt,
+                        });
+                        self.emit(OutTarget::Conn(conn_id), body);
+                    }
+                    Err(error) => {
+                        let body = json!({
+                            "v": 1, "type": "credential.prompt",
+                            "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                            "error": error.to_string(),
+                        });
+                        self.emit(OutTarget::Conn(conn_id), body);
+                    }
+                }
+            }
+            "credential.save" => {
+                // Saving a secret is a trusted shell action, never an agent
+                // action: the agent must not be able to plant a credential.
+                if role != Role::Host {
+                    self.refused(conn_id, &frame, "wrong_role");
+                    return;
+                }
+                let (Some(host), Some(username), Some(secret)) = (
+                    frame.get("host").and_then(Value::as_str),
+                    frame.get("username").and_then(Value::as_str),
+                    frame.get("secret").and_then(Value::as_str),
+                ) else {
+                    self.refused(conn_id, &frame, "internal");
+                    return;
+                };
+                match self
+                    .credential_broker
+                    .save_password(host, username, secret)
+                {
+                    Ok(()) => {
+                        let body = json!({
+                            "v": 1, "type": "credential.saved",
+                            "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                            "host": host,
+                            "username": credentials::redact_username(username),
+                        });
+                        self.emit(OutTarget::Conn(conn_id), body);
+                    }
+                    Err(error) => {
+                        let body = json!({
+                            "v": 1, "type": "credential.saved",
+                            "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                            "error": error.to_string(),
+                        });
+                        self.emit(OutTarget::Conn(conn_id), body);
+                    }
+                }
+            }
+            "passkey.status" => {
+                let ceremony_id = frame
+                    .get("ceremony_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let status = self
+                    .passkey_broker
+                    .poll_assertion(credentials::PasskeyCeremonyId(ceremony_id.clone()));
+                let body = json!({
+                    "v": 1, "type": "passkey.status",
+                    "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                    "ceremony_id": ceremony_id,
+                    "status": match status {
+                        Ok(status) => serde_json::to_value(status).unwrap_or(Value::Null),
+                        Err(error) => json!({"failed": error.to_string()}),
+                    },
+                });
+                self.emit(OutTarget::Conn(conn_id), body);
+            }
+            "passkey.cancel" => {
+                let ceremony_id = frame
+                    .get("ceremony_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let cancelled = self
+                    .passkey_broker
+                    .cancel_assertion(credentials::PasskeyCeremonyId(ceremony_id.clone()));
+                let body = json!({
+                    "v": 1, "type": "passkey.cancelled",
+                    "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                    "ceremony_id": ceremony_id,
+                    "ok": cancelled.is_ok(),
+                });
                 self.emit(OutTarget::Conn(conn_id), body);
             }
             "session.open" => self.do_session_open(conn_id, &frame),
@@ -1766,6 +1907,11 @@ impl BrowserApp {
 
         let op_kind = operation.get("kind").and_then(Value::as_str).unwrap_or("");
         let target_id = operation.get("target_id").and_then(Value::as_str);
+        // A passkey proposal starts a host-side ceremony. The broker
+        // validates the request and produces the prompt the human sees; the
+        // ceremony itself does not run until that human approves.
+        let mut ceremony_id: Option<String> = None;
+        let mut passkey_prompt: Option<String> = None;
         // A stable node reference resolves against the known-element
         // registry first: unknown references were never issued by this page
         // instance; known references absent from the snapshot are stale.
@@ -1942,6 +2088,43 @@ impl BrowserApp {
                     sensitive_target = true;
                 }
             }
+            "passkey.assert" | "passkey.register" => {
+                let started = if op_kind == "passkey.assert" {
+                    credentials::PasskeyRequest::from_operation(&operation)
+                        .and_then(|request| {
+                            self.passkey_broker
+                                .begin_assertion(request)
+                                .map(|id| (id, "passkey.assert"))
+                        })
+                } else {
+                    credentials::RegistrationRequest::from_operation(&operation)
+                        .and_then(|request| {
+                            self.passkey_broker
+                                .begin_registration(request)
+                                .map(|id| (id, "passkey.register"))
+                        })
+                };
+                match started {
+                    Ok((id, kind)) => {
+                        let prompt = match self.passkey_broker.poll_assertion(id.clone()) {
+                            Ok(credentials::PasskeyStatus::AwaitingApproval { prompt, .. }) => {
+                                prompt
+                            }
+                            _ => format!("{kind} awaiting approval"),
+                        };
+                        ceremony_id = Some(id.0);
+                        passkey_prompt = Some(prompt);
+                        // A passkey ceremony is always sensitive: it must be
+                        // approved by a human before it runs.
+                        sensitive_target = true;
+                    }
+                    Err(error) => {
+                        eprintln!("[passkey] proposal refused: {error}");
+                        self.refused(conn_id, frame, "passkey_refused");
+                        return;
+                    }
+                }
+            }
             "submit" => {
                 let Some(element) = target else {
                     self.refused(conn_id, frame, "target_missing");
@@ -1976,6 +2159,9 @@ impl BrowserApp {
             "act"
         }
         .to_string();
+        // A passkey proposal carries the broker's own prompt, which names the
+        // site and the redacted account the human is approving.
+        let rationale = passkey_prompt.unwrap_or_else(|| rationale.to_string());
         let pending = PendingProposal {
             proposal_id: proposal_id.to_string(),
             snapshot_id,
@@ -1983,9 +2169,10 @@ impl BrowserApp {
             fingerprint: fingerprint.to_string(),
             generation,
             operation: operation.clone(),
-            rationale: rationale.to_string(),
+            rationale,
             classification: classification.clone(),
             requires_glasses,
+            ceremony_id,
         };
         if let Some(session) = self.control.as_mut() {
             session.seen_proposals.insert(pending.proposal_id.clone());
@@ -2199,12 +2386,25 @@ impl BrowserApp {
             return Err("stale_fingerprint");
         }
 
-        let operation = self
+        let (operation, ceremony_id) = self
             .control
             .as_ref()
             .and_then(|s| s.pending.as_ref())
-            .map(|p| p.operation.clone())
-            .unwrap_or(Value::Null);
+            .map(|p| (p.operation.clone(), p.ceremony_id.clone()))
+            .unwrap_or((Value::Null, None));
+
+        // A passkey ceremony runs here, on the host, behind the approval gate
+        // the human just gave. It is never simulated in page script.
+        if let Some(ceremony_id) = ceremony_id {
+            return self.run_passkey_ceremony(
+                &ceremony_id,
+                proposal_id,
+                decided_by,
+                surface,
+                &pending_fp,
+            );
+        }
+
         // Execution crosses the page-endpoint boundary as a typed command;
         // the JSON operation remains only the wire/audit representation.
         let Some(command) = PageCommand::from_operation(&operation) else {
@@ -2282,6 +2482,137 @@ impl BrowserApp {
                 "after_fingerprint": after_fp, "generation": after_gen,
                 "input_event_id": self.last_input_event_id,
                 "input_provenance": InputProvenance::ApprovedAgent.as_str(),
+            }),
+        );
+        self.state_event(OutTarget::Both);
+        self.sync_chrome();
+        self.request_redraw();
+        Ok(())
+    }
+
+    /// Runs an approved passkey ceremony and hands the result to the agent.
+    ///
+    /// The assertion or registration is produced by the host-side
+    /// authenticator. The agent receives only public material — the
+    /// credential ID, the authenticator data, the client data, and the
+    /// signature. No private key and no password crosses this boundary.
+    fn run_passkey_ceremony(
+        &mut self,
+        ceremony_id: &str,
+        proposal_id: &str,
+        decided_by: &str,
+        surface: &str,
+        fingerprint: &str,
+    ) -> Result<(), &'static str> {
+        let id = credentials::PasskeyCeremonyId(ceremony_id.to_string());
+        let op_kind = self
+            .control
+            .as_ref()
+            .and_then(|s| s.pending.as_ref())
+            .and_then(|p| p.operation.get("kind").and_then(Value::as_str))
+            .unwrap_or("passkey")
+            .to_string();
+
+        let status = match self.passkey_broker.approve_ceremony(id.clone(), decided_by, surface) {
+            Ok(()) => self
+                .passkey_broker
+                .poll_assertion(id)
+                .map_err(|error| {
+                    eprintln!("[passkey] ceremony {ceremony_id} poll failed: {error}");
+                    "passkey_failed"
+                })?,
+            Err(error) => {
+                eprintln!("[passkey] ceremony {ceremony_id} failed: {error}");
+                credentials::PasskeyStatus::Failed(error.to_string())
+            }
+        };
+
+        if let Some(session) = self.control.as_mut() {
+            session.pending = None;
+        }
+        let outcome = match status {
+            credentials::PasskeyStatus::Complete(outcome) => outcome,
+            credentials::PasskeyStatus::Failed(reason) => {
+                if let Some(session) = self.control.as_mut() {
+                    session.state = ControlState::Agent;
+                }
+                self.audit(
+                    "refused_failed",
+                    &op_kind,
+                    None,
+                    Some(fingerprint),
+                    None,
+                    Some(decided_by),
+                    Some(surface),
+                    Some(proposal_id),
+                );
+                self.emit(
+                    OutTarget::Agent,
+                    json!({
+                        "v": 1, "type": "passkey.result",
+                        "proposal_id": proposal_id, "ceremony_id": ceremony_id,
+                        "ok": false, "error": reason,
+                    }),
+                );
+                self.session_event(
+                    OutTarget::Both,
+                    "proposal.invalidated",
+                    json!({"proposal_id": proposal_id, "reason": "passkey_failed"}),
+                );
+                self.state_event(OutTarget::Both);
+                self.sync_chrome();
+                self.request_redraw();
+                return Err("passkey_failed");
+            }
+            other => {
+                if let Some(session) = self.control.as_mut() {
+                    session.state = ControlState::Agent;
+                }
+                self.emit(
+                    OutTarget::Agent,
+                    json!({
+                        "v": 1, "type": "passkey.result",
+                        "proposal_id": proposal_id, "ceremony_id": ceremony_id,
+                        "ok": false, "error": format!("{other:?}"),
+                    }),
+                );
+                self.state_event(OutTarget::Both);
+                self.sync_chrome();
+                self.request_redraw();
+                return Err("passkey_failed");
+            }
+        };
+
+        if let Some(session) = self.control.as_mut() {
+            session.state = ControlState::Agent;
+            session.snapshot_valid = false;
+        }
+        self.audit(
+            "executed",
+            &op_kind,
+            None,
+            Some(fingerprint),
+            None,
+            Some(decided_by),
+            Some(surface),
+            Some(proposal_id),
+        );
+        let result = serde_json::to_value(&outcome).unwrap_or(Value::Null);
+        self.emit(
+            OutTarget::Agent,
+            json!({
+                "v": 1, "type": "passkey.result",
+                "proposal_id": proposal_id, "ceremony_id": ceremony_id,
+                "ok": true, "result": result,
+            }),
+        );
+        self.session_event(
+            OutTarget::Both,
+            "executed",
+            json!({
+                "proposal_id": proposal_id, "operation": op_kind,
+                "operation_detail": {"ceremony_id": ceremony_id},
+                "before_fingerprint": fingerprint,
             }),
         );
         self.state_event(OutTarget::Both);
@@ -4718,6 +5049,9 @@ fn main() {
     if args.iter().any(|a| a == "--hurdletest") {
         std::process::exit(hurdletest());
     }
+    if args.iter().any(|a| a == "--passkeytest") {
+        std::process::exit(passkeytest::passkeytest());
+    }
     if args.iter().any(|a| a == "--observe") {
         std::process::exit(observe_cli());
     }
@@ -5606,8 +5940,9 @@ fn supervisortest() -> i32 {
     check(
         caps.get("text_input").and_then(Value::as_str) == Some("supported")
             && caps.get("forms").and_then(Value::as_str) == Some("supported")
-            && caps.get("passkeys").and_then(Value::as_str) == Some("unsupported"),
-        "capabilities report text input and forms supported, passkeys unsupported",
+            && caps.get("passkeys").and_then(Value::as_str) == Some("supported")
+            && caps.get("passkey_broker").and_then(Value::as_str) == Some("supported"),
+        "capabilities report text input, forms, and passkeys supported",
     );
 
     // Observe, propose, and approve through the native supervision bar.

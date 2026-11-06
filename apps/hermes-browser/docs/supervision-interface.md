@@ -1031,6 +1031,20 @@ is `Unsupported`. Detection of a passkey-only wall raises
 `AttentionKind::Passkey`; the honest resolutions are external handoff, a
 future native broker, or stop. Do not simulate a passkey ceremony in page JS.
 
+**Landed 2026-11-06.** The native broker now exists. `apps/hermes-browser/src/credentials.rs`
+implements `PasskeyBroker` with a real ES256 authenticator
+(`src/webauthn/`), macOS Keychain storage (`src/keychain.rs`), and a host-side
+ceremony that produces nothing until a human approves it. `--passkeytest`
+proves a real ceremony against the demo fixture, whose independent
+`openssl dgst -sha256 -verify` accepts the assertion and rejects a replayed
+challenge, an unknown credential, and a mismatched challenge.
+
+The boundary is explicit: this is a **software authenticator**. The macOS
+platform authenticator (Secure Enclave) and hardware security keys are still
+`Unsupported`, because they need an Objective-C bridge to
+`AuthenticationServices` that this Rust host does not have. A relying party
+that requires the platform authenticator will not accept this credential.
+
 ## 13. Events
 
 Events are ordered per task and use a common envelope:
@@ -1156,7 +1170,7 @@ At the time of writing, the honest starting values are:
 | Forms | `Unsupported` | No form collection/submission path in the host |
 | Multiple tabs | `Supported` | Tab create/select/close covered by `--uitest` |
 | External open | `Unsupported` | No OS open/default-browser call yet |
-| Passkeys | `Unsupported` | No WebAuthn or native authenticator broker |
+| Passkeys | `Supported` (software authenticator only) | `apps/hermes-browser/src/webauthn/` — real ES256 authenticator, macOS Keychain storage, host-side ceremony behind the human approval gate; `--passkeytest` proves the assertion against the demo fixture's independent `openssl` verifier. The macOS **platform** authenticator (Secure Enclave, hardware security keys) is still `Unsupported` — that needs an Objective-C bridge to `AuthenticationServices` |
 
 Do not change a capability to `Supported` without an automated check.
 

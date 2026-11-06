@@ -137,28 +137,23 @@ mod tests {
         let mut ctx = BigNumContext::new().unwrap();
         assert!(point.is_on_curve(&group, &mut ctx).unwrap());
         assert!(!point.is_infinity(&group));
-        assert_eq!(group.degree(), 2);
+        assert_eq!(group.curve_name(), Some(Nid::X9_62_PRIME256V1));
     }
 
     #[test]
     fn cose_key_has_the_expected_labels_and_order() {
         let (_private_pem, public_pem) = generate_p256_keypair().unwrap();
         let encoded = cose_key_from_pem(&public_pem).unwrap();
-        // Map with 5 pairs.
-        assert_eq!(encoded[0], 0xa5);
-        // Keys in deterministic order: 1, 3, -1, -2, -3.
-        let mut keys = Vec::new();
-        let mut i = 1usize;
-        while keys.len() < 5 {
-            let key = encoded[i];
-            keys.push(key);
-            // Skip the key and its value: both are short here (1 byte each for
-            // the integers, 33 bytes for the byte strings).
-            i += match key {
-                0x20 | 0x21 | 0x22 => 1 + 33,
-                _ => 1 + 1,
-            };
-        }
-        assert_eq!(keys, vec![0x01, 0x03, 0x20, 0x21, 0x22]);
+        // Map of 5 pairs, then the pairs in canonical key order:
+        // 1 (kty) -> 2 (EC2), 3 (alg) -> -7 (ES256), -1 (crv) -> 1 (P-256),
+        // -2 (x) -> bstr, -3 (y) -> bstr.
+        assert_eq!(
+            &encoded[..10],
+            &[0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20]
+        );
+        // 32 bytes of x, then the -3 key and its byte-string header, then 32
+        // bytes of y.
+        assert_eq!(encoded.len(), 10 + 32 + 3 + 32);
+        assert_eq!(&encoded[42..45], &[0x22, 0x58, 0x20]);
     }
 }

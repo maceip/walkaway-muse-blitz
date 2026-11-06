@@ -17,8 +17,48 @@ hop works across devices.
   secret exclusion.
 - Last observed: pass; supervisor suite reported 50 checks.
 
-### T-HERMES-SOCKET-E2E
+### T-HERMES-PASSKEY-E2E
 
+- Command: `./target/release/hermes-blitz-browser --passkeytest` from
+  `apps/hermes-browser/`. The harness starts the real demo fixture
+  (`services/demo-fixtures/signup_fixture.py`) as a subprocess on an ephemeral
+  port and tears it down afterwards; it never skips.
+- Real components: the Rust WebAuthn authenticator
+  (`apps/hermes-browser/src/webauthn/`), the macOS Keychain
+  (`apps/hermes-browser/src/keychain.rs`), the passkey broker
+  (`apps/hermes-browser/src/credentials.rs`), and the demo fixture's
+  independent server-side verifier, which checks the signature with the
+  `openssl` CLI against the registered public key.
+- Asserts: the relying party issues a challenge; a registration ceremony
+  produces nothing until a human approves it; the completed registration is
+  accepted by the relying party and the passkey is stored in the Keychain; an
+  assertion ceremony produces nothing until a human approves it; the
+  relying party's verifier accepts the assertion; the verifier rejects a
+  replayed challenge, an unknown credential, and a mismatched challenge; the
+  broker's prompt redacts the account name.
+- Last observed: **PASS** 2026-11-06 10:5x PT — 11/11 checks. The suite
+  exercises a real `openssl dgst -sha256 -verify` in the fixture, so the
+  assertion is checked by an implementation independent of the one under test.
+- Note: on a locally built, unsigned binary the data protection keychain
+  refuses the write (`errSecMissingEntitlement`), and the module falls back to
+  the file-based login keychain, where macOS ignores `kSecAttrAccessible`. The
+  fallback is reported on stderr and the active backend is exposed by
+  `keychain::backend()`. A signed build with a keychain access group uses the
+  data protection keychain, where the accessibility attribute applies.
+
+### T-HERMES-KEYCHAIN-ROUNDTRIP
+
+- Command: `cargo test --release keychain` from `apps/hermes-browser/`.
+- Real components: the macOS login keychain through `security-framework`.
+- Asserts: a generic item round-trips; a write replaces an existing item;
+  items enumerate by service with their account and label; an update replaces
+  the stored data; a missing item reports "not deleted"; binary payloads
+  survive intact; the item carries
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
+- Last observed: **PASS** 2026-11-06 10:3x PT — 8/8 checks against the real
+  login keychain.
+
+### T-HERMES-SOCKET-E2E
 - Command: `python3 /tmp/socket_e2e.py` against the real Hermes GUI process.
 - Real components: Unix socket, host/agent token roles, session, observe,
   propose, host approve, execute, stop.

@@ -8,7 +8,7 @@
 //!   stored    = nonce(12) || ciphertext || tag(16)
 //! where the nonce and tag are those produced by Swift's `AES.GCM.seal(...).combined`.
 
-use std::io::{Read, Write};
+use std::io::Write;
 
 use flate2::Compression;
 use flate2::write::{ZlibDecoder, ZlibEncoder};
@@ -137,8 +137,9 @@ mod tests {
         let plaintext = b"resident credential blob payload".to_vec();
         let (stored, size) = compress_and_encrypt(&plaintext, &key).unwrap();
         assert_eq!(size, plaintext.len());
-        // nonce + ciphertext + tag
-        assert_eq!(stored.len(), NONCE_LEN + plaintext.len() + TAG_LEN);
+        // nonce + compressed ciphertext + tag
+        let compressed = compress_deflate(&plaintext).unwrap();
+        assert_eq!(stored.len(), NONCE_LEN + compressed.len() + TAG_LEN);
         let recovered = decrypt_and_decompress(&stored, size, &key).unwrap();
         assert_eq!(recovered, plaintext);
     }
