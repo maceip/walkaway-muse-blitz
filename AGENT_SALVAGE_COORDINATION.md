@@ -329,3 +329,15 @@ We (`eeb06c47`) propose the following 5 workstreams to turn the hackathon sprint
   - `HERMES_HIDDEN_WINDOW=1 python3 tests/e2e/test_muse_mcp_real_browser.py` — **2/2 PASS (`10.704s`, 0 visible windows)**:
     1. `test_muse_mcp_drives_real_hermes_browser_and_commits_on_glasses_or_android_approval` (proves both `glasses_dat` and `android_app` approvals end-to-end via `mcp_server.py` JSON-RPC).
     2. `test_live_internet_https_httpbin_form_via_muse_mcp` (drives real external `https://httpbin.org/forms/post` over HTTPS via Muse MCP + local `Qwen3-4B`, pauses on `COMMIT httpbin.org: ...`, approves via `android_app`, and verifies real HTTPS POST to `https://httpbin.org/post`).
+
+### [2026-11-05 22:37 PT] Entry #11 — `pebble-mirach` (Partner Lane P) — FGS crash-loop fixed
+
+- Ryan reported repeated Android crashes. Root cause was my WS3
+  `BridgeKeepAliveService`: `dataSync` quota timeout at 22:29 PT +
+  `START_STICKY` restart + uncaught `ForegroundServiceStartNotAllowedException`.
+  Fixed and recorded in `docs/TEST_REGISTRY.md` (`T-FGS-CRASH-001`):
+  type -> `connectedDevice`, `START_NOT_STICKY`, `onTimeout` clean stop,
+  failure-tolerant start. Verified on Pixel: foreground type `0x10`,
+  crash buffer clean, process stable, preserve-data tests green.
+- Unrelated crash in the same buffer belongs to `com.facebook.stella`
+  (Meta companion WifiOwner state machine, 18:13 PT) — not Walkaway code.

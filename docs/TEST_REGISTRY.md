@@ -466,3 +466,22 @@ hop works across devices.
   1. `test_muse_mcp_drives_real_hermes_browser_and_commits_on_glasses_or_android_approval`: Invokes `mcp_server.py` JSON-RPC `tools/call` (`walkaway_start_task` with `url` + `goal`, `walkaway_get_state`), verifies real Hermes navigates, stages form fields via local `Qwen3-4B` (`llm_calls == 1`), pauses at `waiting_for_human` with a domain-first card (`<=80` title, `<=160` body), and commits only after either a `glasses_dat` (`surface="glasses"`) or `android_app` (`surface="android_app"`) approval ack (`0` rows before approval, `1` row after approval).
   2. `test_live_internet_https_httpbin_form_via_muse_mcp`: Drives live external `https://httpbin.org/forms/post` over HTTPS through `mcp_server.py` (`walkaway_start_task`), fills customer/pizza fields via local `Qwen3-4B`, emits `COMMIT httpbin.org: ...`, approves via `source="android_app"`, and verifies the real HTTPS POST response from `https://httpbin.org/post` inside Hermes (`"custname": "Ryan MacArthur"`).
 - Last observed: **PASS** 2026-11-05 (`2/2` tests in `10.704s`, 100% headless with zero visible desktop windows).
+
+### T-FGS-CRASH-001 (BridgeKeepAliveService dataSync Crash Loop — Fix)
+
+- Observed failure 2026-11-05 22:29 PT: `ForegroundServiceDidNotStopInTimeException`
+  (Android 15 dataSync quota timeout, service never stopped itself), then
+  `START_STICKY` restart into `ForegroundServiceStartNotAllowedException:
+  Time limit already exhausted for foreground service type dataSync` at
+  `BridgeKeepAliveService.kt:40` — app crash-loop, process dead.
+- Fix: type `dataSync` -> `connectedDevice` (manifest permission + service
+  type + runtime `FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE`),
+  `START_STICKY` -> `START_NOT_STICKY`, `onTimeout()` stops cleanly,
+  `startForeground` and companion `start()` are failure-tolerant
+  (degraded polling, never crash), `onDestroy` removes foreground state.
+- Last observed: **PASS** 2026-11-05 22:36 PT. Preserve-data device tests
+  green; dumpsys shows `isForeground=true types=0x00000010` on pid 13565;
+  crash buffer clean after reinstall + relaunch + restart attempts;
+  process stable. Not exercised: full Disconnect->Connect UI cycle in
+  this round (user held phone foreground; service start/stop calls are
+  unchanged from the previously proven path + new onDestroy guard).
