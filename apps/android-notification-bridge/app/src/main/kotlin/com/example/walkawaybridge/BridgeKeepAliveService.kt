@@ -14,11 +14,13 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
 /**
- * Foreground keep-alive for the bus poller (WS3): while the bridge is
- * connected, this service holds foreground importance so Android 15's
- * cached-app freezer cannot freeze `com.example.walkawaybridge` when
- * another app comes to the front (observed 2026-11-04 19:04 PT).
- * Polling itself still runs in the Activity in this pass.
+ * Foreground keep-alive AND owner of the bus poller (alignment 6.4.1).
+ * While the bridge is connected, this service holds foreground importance
+ * so Android 15's cached-app freezer cannot freeze
+ * `com.example.walkawaybridge` when another app comes to the front
+ * (observed 2026-11-04 19:04 PT), and the polling loop runs here instead
+ * of in the Activity composition — so a bus `received` ack still arrives
+ * after the Activity is destroyed (task removed).
  *
  * Type is `connectedDevice` (companion glasses link), NOT `dataSync`:
  * Android 15 caps dataSync foreground services (observed crash loop
@@ -26,12 +28,21 @@ import androidx.core.content.ContextCompat
  * START_STICKY restart into the exhausted quota). This service is
  * START_NOT_STICKY, stops itself on timeout/callback, and must never
  * crash the app if the system refuses foreground promotion — polling
- * continues degraded in the Activity instead.
+ * then continues degraded on the process-wide [BridgePoller] scope.
  */
 class BridgeKeepAliveService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    BridgePoller.attach(this)
+    val prefs = getSharedPreferences(BUS_PREFS, MODE_PRIVATE)
+    val url = prefs.getString(PREF_SERVER, DEFAULT_BUS_SERVER) ?: DEFAULT_BUS_SERVER
+    val token = prefs.getString(PREF_TOKEN, "") ?: ""
+    // Start polling before foreground promotion so a refused FGS cannot
+    // leave the bridge silently dead; the loop lives on BridgePoller's own
+    // scope and outlives this service in that degraded case.
+    BridgePoller.startPolling(url, token)
+
     val manager = getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(
       NotificationChannel(
@@ -53,10 +64,10 @@ class BridgeKeepAliveService : Service() {
         startForeground(NOTIF_ID, notification)
       }
     } catch (e: ForegroundServiceStartNotAllowedException) {
-      Log.w(TAG, "Foreground promotion refused; stopping keep-alive, polling continues degraded", e)
+      Log.w(TAG, "Foreground promotion refused; polling continues degraded on BridgePoller", e)
       stopSelf()
     } catch (e: IllegalStateException) {
-      Log.w(TAG, "Foreground promotion failed; stopping keep-alive, polling continues degraded", e)
+      Log.w(TAG, "Foreground promotion failed; polling continues degraded on BridgePoller", e)
       stopSelf()
     }
     return START_NOT_STICKY
@@ -64,6 +75,7 @@ class BridgeKeepAliveService : Service() {
 
   override fun onTimeout(startId: Int, fgsType: Int) {
     Log.w(TAG, "Foreground service timeout (startId=$startId type=$fgsType); stopping cleanly")
+    BridgePoller.stopPolling()
     stopForeground(STOP_FOREGROUND_REMOVE)
     stopSelf()
   }
@@ -87,6 +99,7 @@ class BridgeKeepAliveService : Service() {
     }
 
     fun stop(context: Context) {
+      BridgePoller.stopPolling()
       runCatching { context.stopService(Intent(context, BridgeKeepAliveService::class.java)) }
     }
   }
