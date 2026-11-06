@@ -54,6 +54,22 @@ _original_cdp = _browser_module.cdp
 
 
 def _cdp(method, session_id=None, **params):
+    if method == "Emulation.setFocusEmulationEnabled" and session_id:
+        # Pre-seed Google's standard GDPR consent cookie (SOCS) on EU hosts so
+        # Google Flights opens directly instead of redirecting to consent.google.com.
+        try:
+            _original_cdp(
+                "Network.setCookie",
+                session_id=session_id,
+                name="SOCS",
+                value="CAISHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzIaAmVuIAEaBgiAo_CmBg",
+                domain=".google.com",
+                path="/",
+                secure=True,
+                httpOnly=False,
+            )
+        except Exception:
+            pass
     if method == "Page.captureScreenshot":
         # Snap Chromium on Linux stalls on surface capture after navigation;
         # fromSurface=False returns in ~1s there. macOS Chrome is fine either way.
@@ -147,21 +163,59 @@ def close_agent():
     AGENT, GOAL, SCENARIO = None, None, None
 
 
+def resolve_scenario(goal: str, requested: str | None) -> str:
+    g = goal.lower()
+    flight_terms = (
+        "flight", "flights", "fly ", "flying", "airline", "non-stop", "nonstop",
+        "round-trip", "one-way", "airport", "sfo", "jfk", "lax", "ord", "lhr", "bos", "sea",
+    )
+    research_terms = (
+        "article", "reading room", "milliseconds", "confidence is not correctness",
+        "choice, not a conversation", "notes from the lab", "research",
+    )
+    stay_terms = (
+        "stay", "stays", "hotel", "lisbon", "copenhagen", "casa flora",
+        "glasshouse", "serra lodge", "forma", "free cancellation",
+    )
+    if any(t in g for t in flight_terms):
+        return "flights"
+    if any(t in g for t in research_terms):
+        return "research"
+    if any(t in g for t in stay_terms):
+        return "travel"
+    return requested or "flights"
+
+
+def validate_custom_url(raw_url: str) -> str:
+    parsed = urlparse(raw_url.strip())
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("Custom URL must be an https:// URL")
+    host = parsed.hostname.lower()
+    if host in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "169.254.169.254"} or host.endswith(".internal") or host.endswith(".local"):
+        raise ValueError("Refusing private or loopback target URL")
+    return raw_url.strip()
+
+
 def command(name, body):
     global AGENT, GOAL, SCENARIO
     if name == "start":
-        scenario = body.get("scenario", "flights")
+        raw_scenario = body.get("scenario", "flights")
         goal = (body.get("goal") or "").strip()
-        if scenario not in {"flights", "travel", "research"}:
+        if raw_scenario not in {"flights", "travel", "research"}:
             raise ValueError("Unknown scenario")
         if not goal or len(goal) > 2000:
             raise ValueError("Goal must be 1-2000 characters")
+        scenario = resolve_scenario(goal, raw_scenario)
+        custom_url = (body.get("url") or "").strip()
         close_agent()
-        url = (
-            "https://www.google.com/travel/flights?hl=en"
-            if scenario == "flights"
-            else f"http://127.0.0.1:{PORT}/fixture.html?scenario={scenario}"
-        )
+        if custom_url:
+            url = validate_custom_url(custom_url)
+        else:
+            url = (
+                "https://www.google.com/travel/flights?hl=en&gl=US&curr=USD"
+                if scenario == "flights"
+                else f"http://127.0.0.1:{PORT}/fixture.html?scenario={scenario}"
+            )
         AGENT = Agent(url, goal, screenshots=True)
         GOAL, SCENARIO = goal, scenario
     elif name == "stop":
