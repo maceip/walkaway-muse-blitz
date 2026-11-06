@@ -1039,6 +1039,15 @@ proves a real ceremony against the demo fixture, whose independent
 `openssl dgst -sha256 -verify` accepts the assertion and rejects a replayed
 challenge, an unknown credential, and a mismatched challenge.
 
+The browser never asks macOS for the login keychain password. Keychain user
+interaction is switched off for the whole process before anything reaches the
+Keychain, so an access the operating system would have turned into a prompt
+fails with an error instead of reaching the user. The browser reads only the
+items it created itself, which the keychain ACL already trusts, so no prompt
+was ever needed. The guarantee is asserted against the live platform
+(`SecKeychainGetUserInteractionAllowed`) by a test that was confirmed to fail
+when the interaction guard is dropped.
+
 The boundary is explicit: this is a **software authenticator**. The macOS
 platform authenticator (Secure Enclave) and hardware security keys are still
 `Unsupported`, because they need an Objective-C bridge to

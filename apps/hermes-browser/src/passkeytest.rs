@@ -239,6 +239,17 @@ pub fn passkeytest() -> i32 {
     let store = crate::credentials::KeychainPasskeyStore::with_service(&service, "passkey_records_v1");
     let mut broker = LocalPasskeyBroker::with_store(store);
 
+    // Switch macOS keychain interaction off for this process. `main` already
+    // did this before any Keychain access, so the call here is idempotent;
+    // it is kept so the suite still refuses to run if the switch was ever
+    // dropped from the startup path. An access that would ask the user for
+    // the login keychain password fails with an error instead, so this suite
+    // can never put a password prompt on screen.
+    if let Err(error) = crate::keychain::ensure_no_user_interaction() {
+        println!("not ok could not disable keychain interaction: {error}");
+        return 1;
+    }
+
     // The Keychain must be reachable. A run that cannot store a credential
     // must fail rather than quietly skip the storage checks.
     if !crate::keychain::is_available() {

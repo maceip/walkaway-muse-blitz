@@ -5378,6 +5378,19 @@ fn parse_exit_after() -> Option<Duration> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // macOS keychain user interaction is switched off before anything can
+    // reach the Keychain. An access that the operating system would have
+    // turned into a password prompt fails with an error instead, so no run
+    // of this binary — test suite or normal browser — can ask the user for
+    // their login keychain password. Hermes reads only the Keychain items it
+    // created itself, so it is trusted for those and no prompt was ever
+    // needed to read them.
+    if let Err(error) = keychain::ensure_no_user_interaction() {
+        eprintln!("could not disable keychain interaction: {error}");
+        std::process::exit(1);
+    }
+
     if args.iter().any(|a| a == "--selftest") {
         std::process::exit(selftest());
     }
@@ -5398,6 +5411,9 @@ fn main() {
     }
     if args.iter().any(|a| a == "--passkeytest") {
         std::process::exit(passkeytest::passkeytest());
+    }
+    if args.iter().any(|a| a == "--keychain-cleanup") {
+        std::process::exit(keychain_cleanup());
     }
     if args.iter().any(|a| a == "--observe") {
         std::process::exit(observe_cli());
@@ -6103,6 +6119,54 @@ fn observe_cli() -> i32 {
             1
         }
     }
+}
+
+/// `--keychain-cleanup`: removes the Keychain items that earlier test runs
+/// left behind.
+///
+/// macOS keychain interaction is switched off first, so an item this binary
+/// is not trusted to touch fails with an error instead of prompting the user
+/// for the login keychain password. The cleanup reports exactly what it
+/// removed and what it could not.
+fn keychain_cleanup() -> i32 {
+    if let Err(error) = keychain::ensure_no_user_interaction() {
+        eprintln!("could not disable keychain interaction: {error}");
+        return 1;
+    }
+    // Report the guarantee this run is relying on, read back from the
+    // platform rather than assumed.
+    match keychain::user_interaction_allowed() {
+        Ok(false) => println!("keychain user interaction: disabled (no password prompt possible)"),
+        Ok(true) => {
+            eprintln!("keychain user interaction is still enabled; refusing to touch the keychain");
+            return 1;
+        }
+        Err(error) => {
+            eprintln!("could not read the keychain interaction state: {error}");
+            return 1;
+        }
+    }
+    let prefix = "ai.zmax.hermes.browser.";
+    let items = keychain::list_all_generic_items();
+    let mut removed = 0usize;
+    let mut refused = 0usize;
+    for (service, attributes) in items {
+        if !service.starts_with(prefix) {
+            continue;
+        }
+        if keychain::delete_generic_item(&service, &attributes.account) {
+            removed += 1;
+            println!("removed {service} ({})", attributes.account);
+        } else {
+            refused += 1;
+            println!(
+                "left in place: {service} ({}) — this binary is not trusted to delete it",
+                attributes.account
+            );
+        }
+    }
+    println!("keychain cleanup: {removed} removed, {refused} left in place");
+    0
 }
 
 /// `--supervisortest`: the phase-2 control protocol end to end against a real

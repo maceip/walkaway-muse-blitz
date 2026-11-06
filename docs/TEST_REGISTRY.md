@@ -38,9 +38,14 @@ hop works across devices.
   broker's prompt redacts the account name; the harness refuses to run if
   the macOS Keychain is unreachable, and it removes the passkey it created
   when it finishes.
-- Last observed: **PASS** 2026-11-06 11:0x PT — 12/12 checks. The suite
+- Last observed: **PASS** 2026-11-06 10:5x PT — 12/12 checks. The suite
   exercises a real `openssl dgst -sha256 -verify` in the fixture, so the
   assertion is checked by an implementation independent of the one under test.
+- Note: the harness switches macOS keychain user interaction off before it
+  touches the Keychain, so this suite cannot put a login-keychain password
+  prompt on the user's screen. An access that the operating system would have
+  turned into a prompt fails with an error instead, and the run reports that
+  failure rather than skipping the check.
 - Note: on a locally built, unsigned binary the data protection keychain
   refuses the write (`errSecMissingEntitlement`), and the module falls back to
   the file-based login keychain, where macOS ignores `kSecAttrAccessible`. The
@@ -51,14 +56,45 @@ hop works across devices.
 ### T-HERMES-KEYCHAIN-ROUNDTRIP
 
 - Command: `cargo test --release keychain` from `apps/hermes-browser/`.
-- Real components: the macOS login keychain through `security-framework`.
+- Real components: the macOS login keychain through `security-framework`, and
+  the live `SecKeychainGetUserInteractionAllowed` platform call.
 - Asserts: a generic item round-trips; a write replaces an existing item;
   items enumerate by service with their account and label; an update replaces
   the stored data; a missing item reports "not deleted"; binary payloads
   survive intact; the item carries
-  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
-- Last observed: **PASS** 2026-11-06 10:3x PT — 8/8 checks against the real
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`; macOS keychain user
+  interaction is switched off, so an access that would have asked the user
+  for the login keychain password fails with an error instead; the run removes
+  the Keychain items that earlier test runs left behind and reports how many
+  it could not remove.
+- Last observed: **PASS** 2026-11-06 10:5x PT — 11/11 checks against the real
   login keychain.
+- Note: the no-prompt check is a real regression test, not a restatement of
+  intent. `SecKeychain::disable_user_interaction()` returns a guard whose
+  `Drop` re-enables interaction; the guard is held for the life of the
+  process. The test was confirmed to fail (`left: true`, meaning a prompt was
+  still possible) when the guard is dropped early, and to pass when it is
+  retained.
+
+### T-HERMES-KEYCHAIN-NO-PROMPT
+
+- Command: `./target/release/hermes-blitz-browser --keychain-cleanup` from
+  `apps/hermes-browser/`.
+- Real components: the macOS login keychain through `security-framework`.
+- Asserts: the process reports that keychain user interaction is disabled
+  before it touches any item, and it removes the generic-password items left
+  under the `ai.zmax.hermes.browser.` services, naming each item it removed
+  and naming each one it could not remove.
+- Last observed: **PASS** 2026-11-06 10:5x PT — reported
+  `keychain user interaction: disabled (no password prompt possible)` and
+  `keychain cleanup: 0 removed, 0 left in place` against a keychain with no
+  leftover Hermes items (`security dump-keychain` shows no `ai.zmax.hermes.*`
+  service).
+- Note: macOS keychain ACLs trust the binary that created an item. An item
+  left by a different build is therefore not deletable by this binary; the
+  cleanup reports it as "left in place" rather than claiming a removal that
+  did not happen. Removing such an item needs a one-time approval in Keychain
+  Access.
 
 ### T-HERMES-SOCKET-E2E
 - Command: `python3 /tmp/socket_e2e.py` against the real Hermes GUI process.

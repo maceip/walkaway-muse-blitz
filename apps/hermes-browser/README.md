@@ -68,7 +68,8 @@ arrive.
 | Docked width | `--render out.png --dark --menu --size 560x760` | Chrome fits the ~560px desktop panel without overflow |
 | Static Hermes embed | `_sh_init` → unit → JSI call | Verified |
 | Passkey end-to-end | `--passkeytest` | PASS — 12 assertions: real registration and assertion ceremonies, macOS Keychain storage, the demo fixture's independent `openssl` verifier accepts the assertion and rejects replay / unknown credential / mismatched challenge |
-| Credential + passkey unit suite | `cargo test --release` | PASS — 69 assertions, including 8 against the real login keychain |
+| Credential + passkey unit suite | `cargo test --release` | PASS — 71 assertions, including 11 against the real login keychain |
+| Keychain cleanup | `--keychain-cleanup` | Removes the Keychain items earlier test runs left behind and reports what it could not remove; confirms first that keychain user interaction is disabled, so it cannot ask for a password |
 
 The click path was verified by rendering before/after through the real paint
 pipeline: the button turns `#16A34A`, its label increments, and the paragraph
@@ -261,6 +262,13 @@ the agent sees only that a credential exists, which site it belongs to, and
 a redacted account hint. A passkey ceremony runs host-side and produces
 nothing until a human approves it; `--passkeytest` proves the assertion
 against the demo fixture's independent `openssl` verifier.
+
+The browser never asks macOS for the login keychain password. Keychain user
+interaction is switched off for the whole process before anything reaches the
+Keychain, so an access that the operating system would have turned into a
+prompt fails with an error instead. Hermes reads only the items it created
+itself, which it is trusted for, so no prompt was ever needed. The guarantee
+is asserted against the live platform by the test suite, not assumed.
 
 Remote JavaScript remains unimplemented and is reported as an unsupported
 capability. An unimplemented protocol in the tree is worse than a written one,

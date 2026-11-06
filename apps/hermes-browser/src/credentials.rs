@@ -1273,21 +1273,43 @@ mod tests {
         PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity,
     };
 
+    /// Keychain user interaction is switched off for the whole test process,
+    /// so a test run can never ask the user for the login keychain password.
+    fn no_prompt() {
+        crate::keychain::ensure_no_user_interaction()
+            .expect("disable keychain interaction");
+    }
+
+    /// Removes the items a test created, so a run leaves nothing behind in
+    /// the user's keychain.
+    fn cleanup_password(service: &KeychainPasswordStore) {
+        for item in service.list().unwrap_or_default() {
+            let _ = service.delete(&item.host, &item.username);
+        }
+    }
+
+    /// Each test uses a service name unique to this process, so a run never
+    /// touches an item that another binary created.
     fn test_passkey_service(name: &str) -> KeychainPasskeyStore {
         KeychainPasskeyStore::with_service(
-            &format!("ai.zmax.hermes.browser.test.passkeys.{name}"),
+            &format!(
+                "ai.zmax.hermes.browser.test.passkeys.{}.{name}",
+                std::process::id()
+            ),
             "passkey_records_v1",
         )
     }
 
     fn test_password_service(name: &str) -> KeychainPasswordStore {
         KeychainPasswordStore::with_service(&format!(
-            "ai.zmax.hermes.browser.test.credentials.{name}"
+            "ai.zmax.hermes.browser.test.credentials.{}.{name}",
+            std::process::id()
         ))
     }
 
     #[test]
     fn redacts_usernames_without_hiding_the_domain() {
+        no_prompt();
         assert_eq!(redact_username("ada@example.com"), "a**@example.com");
         assert_eq!(redact_username("a@example.com"), "a**@example.com");
         assert_eq!(redact_username("ada"), "a**");
@@ -1296,6 +1318,7 @@ mod tests {
 
     #[test]
     fn stores_and_reads_a_password_in_the_keychain() {
+        no_prompt();
         let store = test_password_service("store");
         store.save("example.com", "ada", "hunter2").unwrap();
         assert_eq!(
@@ -1314,10 +1337,11 @@ mod tests {
 
     #[test]
     fn describes_a_fill_without_leaking_the_secret() {
+        no_prompt();
         let store = test_password_service("describe");
         store.save("example.com", "ada", "hunter2").unwrap();
         let broker = LocalCredentialBroker::with_stores(
-            store,
+            store.clone(),
             test_passkey_service("describe"),
         );
         let prompt = broker
@@ -1333,10 +1357,12 @@ mod tests {
         assert_eq!(prompt.matches[0].username_hint, "a**");
         assert_eq!(prompt.matches[0].site, "example.com");
         assert!(!format!("{prompt:?}").contains("hunter2"));
+        cleanup_password(&store);
     }
 
     #[test]
     fn a_fill_writes_only_the_fields_that_were_requested() {
+        no_prompt();
         struct RecordingSink {
             written: Vec<(CredentialFieldKind, String)>,
         }
@@ -1354,7 +1380,7 @@ mod tests {
         let store = test_password_service("fields");
         store.save("example.com", "ada", "hunter2").unwrap();
         let mut broker = LocalCredentialBroker::with_stores(
-            store,
+            store.clone(),
             test_passkey_service("fields"),
         );
 
@@ -1386,10 +1412,12 @@ mod tests {
             vec![CredentialFieldKind::Username]
         );
         assert_eq!(receipt.origin, "https://example.com");
+        cleanup_password(&store);
     }
 
     #[test]
     fn an_unapproved_ceremony_produces_no_assertion() {
+        no_prompt();
         let mut broker = LocalPasskeyBroker::with_store(test_passkey_service("unapproved"));
         let id = broker
             .begin_assertion(PasskeyRequest {
@@ -1410,7 +1438,9 @@ mod tests {
 
     #[test]
     fn a_registration_then_assertion_round_trip_works_through_the_broker() {
+        no_prompt();
         let store = test_passkey_service("roundtrip");
+        let cleanup = store.clone();
         let mut broker = LocalPasskeyBroker::with_store(store);
 
         let register_id = broker
@@ -1476,11 +1506,15 @@ mod tests {
         };
         assert!(!assertion.response.signature.is_empty());
         assert!(!assertion.response.authenticator_data.is_empty());
+        let _ = cleanup.clear();
     }
 
     #[test]
     fn a_cancelled_ceremony_cannot_be_approved() {
-        let mut broker = LocalPasskeyBroker::with_store(test_passkey_service("cancelled"));
+        no_prompt();
+        let store = test_passkey_service("cancelled");
+        let cleanup = store.clone();
+        let mut broker = LocalPasskeyBroker::with_store(store);
         let id = broker
             .begin_registration(RegistrationRequest {
                 task_id: "t1".to_string(),
@@ -1512,5 +1546,6 @@ mod tests {
             broker.approve_ceremony(id, "user", "socket"),
             Err(BrokerError::InvalidState(_))
         ));
+        let _ = cleanup.clear();
     }
 }
