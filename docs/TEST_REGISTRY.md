@@ -662,3 +662,17 @@ hop works across devices.
   bus lock OK; bridge e2e OK; muse MCP e2e 2/2 OK (`13.695s`); Android
   build + unit tests green (`WindowChrome.kt` compiles — shaped chrome
   asset, not yet wired into `sendContent`).
+
+### T-MOCK-MUSE-PURCHASE-001 (Mock Muse Purchase Card Demo)
+
+- `scripts/mock_muse_purchase.py` — purchase card (title/price/detail +
+  mock 320px PNG within the 48k budget) posted to the live bus, waits for a
+  real human decision, prints the Muse `result` object. Mock payload is
+  covered by the verbatim RYAN EXPLICIT MOCK/FALLBACK AUTHORIZATION comment
+  in the file (2026-11-06 "just a fake" demo directive).
+- Last observed: **PARTIAL PASS** 2026-11-06 ~22:5x PT. Bus accepted the
+  card (`POST /messages` 201, id 70, image_b64 stored); no human decision
+  within the 8s bounded run (expected — no user present).
+  **Owed on device reconnect:** phone render of the preview crop +
+  `received`/`dat_*` acks for a mock card; **owed with Ryan:** one real
+  Approve/Deny tap to close the loop and print the Muse result.
