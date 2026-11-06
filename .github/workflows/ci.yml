@@ -249,6 +249,7 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ needs.macos-browser-dmg.outputs.tag_name }}
           APP_VERSION: ${{ needs.macos-browser-dmg.outputs.app_version }}
           PRERELEASE: ${{ needs.macos-browser-dmg.outputs.prerelease }}
