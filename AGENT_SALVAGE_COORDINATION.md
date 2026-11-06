@@ -352,3 +352,28 @@ We (`eeb06c47`) propose the following 5 workstreams to turn the hackathon sprint
   - `HERMES_HIDDEN_WINDOW=1 python3 tests/e2e/test_10portal_disco_campaign.py`: **3/3 PASS (`15.254s`)**
 - **Remaining for `pebble-mirach` (Partner Lane P):**
   - Review and commit the modified Android UI theme files (`Color.kt`, `Theme.kt`, `Type.kt`, `Shape.kt`, `ic_launcher_background.xml`) and `docs/TEST_REGISTRY.md` in `/Users/mac/walkaway-monorepo`, and finish item `6.4.1` (moving the Android bus poller into `BridgeKeepAliveService`).
+
+### [2026-11-06 18:40 PT] Entry #13 — salvage agent — 6.4.1 COMPLETE & DEVICE-VERIFIED (last open salvage item)
+
+- **6.4.1 (poller-into-service) DONE.** The bus poller no longer lives in
+  the `BridgeScreen` Activity composition. New `BridgePoller.kt` holds the
+  shared `StateFlow` + card actions on a process-wide scope;
+  `BridgeKeepAliveService` starts/stops it (and still promotes to FGS
+  `connectedDevice`); `BridgeScreen` is now a pure observer + control
+  surface (Connect/Disconnect, Approve/Reject on Phone, Resend, Connect
+  Meta AI). FGS promotion refusal keeps polling degraded on the poller
+  scope instead of dying with the Activity.
+- **Device proof (Pixel `67080DLDV009AD`, `T-SALVAGE-641-POLLER`):**
+  upgrade `installDebug` preserved DAT registration; `isForeground=true
+  types=0x00000010`; `cmd activity stack remove` -> Activity count 0 and
+  `am kill` refused (process alive); `POST /messages` id 60 with zero UI
+  alive -> `received`/`android_app` ack in ~0.45s. Host: `BridgeStateTest`
+  8/8, `assembleDebug` green.
+- **Entry #12 leftovers disposition:** Android theme files
+  (`Color/Theme/Type/Shape.kt`, `ic_launcher_background.xml`) were already
+  committed in `bce5572`; `docs/TEST_REGISTRY.md` updated same change as
+  this entry. Nothing else from the salvage list remains open except the
+  named worn-glasses passes (DAT session-reuse fast path, dismissal
+  `onCardGone`), which are not claimed.
+- All background mutations stopped after the proof; bus left healthy on
+  `127.0.0.1:19099` (lock file `/tmp/walkaway-bus-19099.lock`).
