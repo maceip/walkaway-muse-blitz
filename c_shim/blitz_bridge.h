@@ -2,17 +2,11 @@
 
 /*
  * C surface shared by the AOT-compiled TypeScript runtime (dom_runtime.ts) and
- * the native host.
+ * the native host (hermes_shim.cpp -> src/dom_ffi.rs).
  *
- * These are the symbols named in the design document (`blitz_set_style_property`,
- * `blitz_set_inner_text`, ...). The document implies the JS side holds the
- * `BlitzHostContext*` and passes it back in on every call. That does not work:
- * `c_ptr` values are transported through `SHLegacyValue`, which is NaN-boxed, so
- * a pointer arriving from JSI as a `double` would be reinterpreted from the
- * double's bit pattern and corrupted. The context pointer therefore stays on the
- * native side, bound once in hermes_shim.cpp, and these functions carry no
- * context argument. The Rust implementations are named `blitz_dom_*` and take
- * the pointer explicitly.
+ * The active tab's BlitzHostContext* stays on the native side, bound via
+ * ScopedCurrentApp in hermes_shim.cpp, so no 64-bit native pointer is ever
+ * NaN-boxed into a JS double.
  */
 
 #include <stdint.h>
@@ -22,18 +16,30 @@
 extern "C" {
 #endif
 
-/* Resolve an element by its HTML `id`. Returns 0 when absent (NodeId 0 is the
- * null id and never resolves). */
+/* Queries */
 uint64_t blitz_find_element_by_id(const char *id);
+uint64_t blitz_query_selector(const char *selector);
+size_t blitz_query_selector_all(const char *selector);
+uint64_t blitz_query_selector_item(size_t index);
 
-/* Inline-style mutation: `node.style.setProperty(name, value)`. */
+/* Tree construction & mutation */
+uint64_t blitz_create_element(const char *tag);
+void blitz_append_child(uint64_t parent, uint64_t child);
+void blitz_remove_node(uint64_t node);
+uint64_t blitz_parent_node(uint64_t node);
+
+/* Style, text, HTML & attributes */
 void blitz_set_style_property(uint64_t node, const char *name, const char *value);
-
-/* Text-content mutation: `node.innerText = value`. */
 void blitz_set_inner_text(uint64_t node, const char *text);
-
-/* Attribute mutation: `node.setAttribute(name, value)`. */
+int blitz_load_inner_text(uint64_t node);
+void blitz_set_inner_html(uint64_t node, const char *html);
+int blitz_load_inner_html(uint64_t node);
 void blitz_set_attribute(uint64_t node, const char *name, const char *value);
+int blitz_load_attribute(uint64_t node, const char *name);
+int blitz_scratch_byte(size_t index);
+
+/* Taffy resolved layout geometry: field 0=x, 1=y, 2=width, 3=height */
+double blitz_get_bounding_rect_field(uint64_t node, int field);
 
 /* Mark the document as damaged so the host re-resolves layout and repaints. */
 void blitz_mark_dirty(void);

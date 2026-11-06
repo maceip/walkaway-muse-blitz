@@ -8,13 +8,6 @@
  *   3. Expose the document pointer to the Rust side, and the document
  *      operations to the JS side, without ever letting a pointer cross JSI.
  *   4. Dispatch events into JS and drain microtasks.
- *
- * Deviations from the document's shim, all forced by the current static_h API:
- *   - `_sh_unit_init_guarded` takes three arguments (runtime, creator, out-param);
- *     the document shows two.
- *   - `_sh_init(0, nullptr)` is correct, but the runtime must be destroyed with
- *     every live jsi::Value already dropped, or teardown walks freed handles.
- *   - the context pointer is not passed into JS; see blitz_bridge.h.
  */
 
 #include <hermes/VM/static_h.h>
@@ -32,9 +25,22 @@ extern "C" SHUnit *sh_export_dom_runtime(void);
 /* Implemented in Rust (src/dom_ffi.rs). The context pointer is explicit here. */
 extern "C" {
 uint64_t blitz_dom_find_element(void *ctx, const char *id);
+uint64_t blitz_dom_query_selector(void *ctx, const char *selector);
+size_t blitz_dom_query_selector_all(void *ctx, const char *selector);
+uint64_t blitz_dom_query_selector_item(void *ctx, size_t index);
+uint64_t blitz_dom_create_element(void *ctx, const char *tag);
+void blitz_dom_append_child(void *ctx, uint64_t parent, uint64_t child);
+void blitz_dom_remove_node(void *ctx, uint64_t node);
+uint64_t blitz_dom_parent_node(void *ctx, uint64_t node);
 void blitz_dom_set_style(void *ctx, uint64_t node, const char *name, const char *value);
 void blitz_dom_set_text(void *ctx, uint64_t node, const char *text);
+int blitz_dom_load_inner_text(void *ctx, uint64_t node);
+void blitz_dom_set_inner_html(void *ctx, uint64_t node, const char *html);
+int blitz_dom_load_inner_html(void *ctx, uint64_t node);
 void blitz_dom_set_attribute(void *ctx, uint64_t node, const char *name, const char *value);
+int blitz_dom_load_attribute(void *ctx, uint64_t node, const char *name);
+int blitz_dom_scratch_byte(void *ctx, size_t index);
+double blitz_dom_get_bounding_rect_field(void *ctx, uint64_t node, int field);
 void blitz_dom_mark_dirty(void *ctx);
 }
 
@@ -67,6 +73,41 @@ extern "C" uint64_t blitz_find_element_by_id(const char *id) {
   return blitz_dom_find_element(g_app->blitz_ctx, id);
 }
 
+extern "C" uint64_t blitz_query_selector(const char *selector) {
+  if (!g_app) return 0;
+  return blitz_dom_query_selector(g_app->blitz_ctx, selector);
+}
+
+extern "C" size_t blitz_query_selector_all(const char *selector) {
+  if (!g_app) return 0;
+  return blitz_dom_query_selector_all(g_app->blitz_ctx, selector);
+}
+
+extern "C" uint64_t blitz_query_selector_item(size_t index) {
+  if (!g_app) return 0;
+  return blitz_dom_query_selector_item(g_app->blitz_ctx, index);
+}
+
+extern "C" uint64_t blitz_create_element(const char *tag) {
+  if (!g_app) return 0;
+  return blitz_dom_create_element(g_app->blitz_ctx, tag);
+}
+
+extern "C" void blitz_append_child(uint64_t parent, uint64_t child) {
+  if (!g_app) return;
+  blitz_dom_append_child(g_app->blitz_ctx, parent, child);
+}
+
+extern "C" void blitz_remove_node(uint64_t node) {
+  if (!g_app) return;
+  blitz_dom_remove_node(g_app->blitz_ctx, node);
+}
+
+extern "C" uint64_t blitz_parent_node(uint64_t node) {
+  if (!g_app) return 0;
+  return blitz_dom_parent_node(g_app->blitz_ctx, node);
+}
+
 extern "C" void blitz_set_style_property(uint64_t node, const char *name, const char *value) {
   if (!g_app) return;
   blitz_dom_set_style(g_app->blitz_ctx, node, name, value);
@@ -77,9 +118,39 @@ extern "C" void blitz_set_inner_text(uint64_t node, const char *text) {
   blitz_dom_set_text(g_app->blitz_ctx, node, text);
 }
 
+extern "C" int blitz_load_inner_text(uint64_t node) {
+  if (!g_app) return -1;
+  return blitz_dom_load_inner_text(g_app->blitz_ctx, node);
+}
+
+extern "C" void blitz_set_inner_html(uint64_t node, const char *html) {
+  if (!g_app) return;
+  blitz_dom_set_inner_html(g_app->blitz_ctx, node, html);
+}
+
+extern "C" int blitz_load_inner_html(uint64_t node) {
+  if (!g_app) return -1;
+  return blitz_dom_load_inner_html(g_app->blitz_ctx, node);
+}
+
 extern "C" void blitz_set_attribute(uint64_t node, const char *name, const char *value) {
   if (!g_app) return;
   blitz_dom_set_attribute(g_app->blitz_ctx, node, name, value);
+}
+
+extern "C" int blitz_load_attribute(uint64_t node, const char *name) {
+  if (!g_app) return -1;
+  return blitz_dom_load_attribute(g_app->blitz_ctx, node, name);
+}
+
+extern "C" int blitz_scratch_byte(size_t index) {
+  if (!g_app) return 0;
+  return blitz_dom_scratch_byte(g_app->blitz_ctx, index);
+}
+
+extern "C" double blitz_get_bounding_rect_field(uint64_t node, int field) {
+  if (!g_app) return 0.0;
+  return blitz_dom_get_bounding_rect_field(g_app->blitz_ctx, node, field);
 }
 
 extern "C" void blitz_mark_dirty(void) {
@@ -92,8 +163,6 @@ extern "C" void blitz_mark_dirty(void) {
 /* ------------------------------------------------------------------------- */
 
 static void report_pending_exception(SHRuntime *shr) {
-  /* The unit threw during evaluation. Surface it rather than running with a
-   * half-initialised global scope. */
   SHLegacyValue thrown = _sh_get_clear_thrown_value(shr);
   (void)thrown;
   std::fprintf(stderr, "[hermes] dom_runtime unit threw during initialisation\n");

@@ -21,6 +21,7 @@ mod dom_ffi;
 mod observe;
 mod page_endpoint;
 mod recall;
+mod scrapbook;
 mod vault;
 
 use anyrender::WindowRenderer;
@@ -31,7 +32,11 @@ use blitz_traits::node_id::NodeId;
 use blitz_traits::shell::{ColorScheme, Viewport};
 use markup5ever::local_name;
 use browser::{Browser, SharedProvider};
-use chrome::{CHROME_HEIGHT, ChromeState, SupervisionInfo, TabInfo, Theme};
+use chrome::{
+    CHROME_HEIGHT, ChromeState, EXPLORER_DRAWER_WIDTH, EXPLORER_RAIL_WIDTH, ExplorerTab,
+    HeldLinkInfo, NavEntryInfo, PH_HEADER_HEIGHT, PageHolderInfo, ScrapbookItemInfo,
+    SupervisionInfo, TabInfo, Theme,
+};
 use control::{ControlHub, Role};
 use dom_ffi::BlitzHostContext;
 use page_endpoint::PageCommand;
@@ -216,7 +221,9 @@ impl Page {
         let mut ctx = Box::new(BlitzHostContext::new(doc));
         let hermes =
             unsafe { hermes_app_init((&mut *ctx as *mut BlitzHostContext).cast::<c_void>()) };
-        Self { ctx, hermes }
+        let mut page = Self { ctx, hermes };
+        page.execute_document_scripts(&base, &provider);
+        page
     }
 
     fn build(
@@ -246,12 +253,142 @@ impl Page {
                 net_provider: provider
                     .as_ref()
                     .map(|p| p.clone() as Arc<dyn blitz_traits::net::NetProvider>),
+                html_parser_provider: Some(Arc::new(blitz_html::HtmlProvider)),
                 ua_stylesheets: ua,
                 ..Default::default()
             },
         );
         doc.resolve(0.0);
         doc
+    }
+
+    /// Walk the Blitz DOM in document order, extract inline `<script>` and
+    /// external `<script src="...">` tags, evaluate them inside this page's
+    /// isolated `HermesAppRuntime` (which drains microtasks), and re-resolve
+    /// layout if the DOM was mutated.
+    fn execute_document_scripts(
+        &mut self,
+        base: &Option<Url>,
+        provider: &Option<SharedProvider>,
+    ) {
+        if self.hermes.is_null() {
+            return;
+        }
+        let mut script_nodes = Vec::new();
+        let mut stack = vec![self.ctx.doc.root_node().id];
+        while let Some(nid) = stack.pop() {
+            let Some(node) = self.ctx.doc.get_node(nid) else {
+                continue;
+            };
+            for &child in node.children.iter().rev() {
+                stack.push(child);
+            }
+            if let Some(el) = node.element_data() {
+                let tag: &str = el.name.local.as_ref();
+                if tag.eq_ignore_ascii_case("script") {
+                    script_nodes.push(nid);
+                }
+            }
+        }
+        if script_nodes.is_empty() {
+            return;
+        }
+
+        let total_external = script_nodes
+            .iter()
+            .filter(|&&nid| {
+                self.ctx
+                    .doc
+                    .get_node(nid)
+                    .and_then(|n| n.attr(LocalName::from("src")))
+                    .is_some_and(|s| !s.trim().is_empty())
+            })
+            .count();
+
+        let is_local_base = base
+            .as_ref()
+            .and_then(|u| u.host_str())
+            .is_some_and(|h| h == "127.0.0.1" || h == "localhost");
+
+        for nid in script_nodes {
+            let (script_type, src_attr, inline_code) = {
+                let Some(node) = self.ctx.doc.get_node(nid) else {
+                    continue;
+                };
+                let stype = node
+                    .attr(LocalName::from("type"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase();
+                let src = node
+                    .attr(LocalName::from("src"))
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let text = if src.is_none() {
+                    node.text_content()
+                } else {
+                    String::new()
+                };
+                (stype, src, text)
+            };
+
+            if !script_type.is_empty()
+                && !matches!(
+                    script_type.as_str(),
+                    "text/javascript"
+                        | "application/javascript"
+                        | "text/ecmascript"
+                        | "application/ecmascript"
+                        | "module"
+                )
+            {
+                continue;
+            }
+
+            if let Some(src_raw) = src_attr {
+                if !is_local_base && total_external > 6 {
+                    // Skip bulk external third-party ad/tracker bundles on large portal pages.
+                    continue;
+                }
+                let (Some(base_url), Some(prov)) = (base.as_ref(), provider.as_ref()) else {
+                    continue;
+                };
+                let Ok(script_url) = base_url.join(&src_raw) else {
+                    continue;
+                };
+                if let Ok(code) = browser::fetch(prov, &script_url) {
+                    if !code.trim().is_empty() && code.len() <= 512_000 {
+                        if let (Ok(c_code), Ok(c_url)) = (
+                            std::ffi::CString::new(code),
+                            std::ffi::CString::new(script_url.to_string()),
+                        ) {
+                            unsafe {
+                                hermes_app_eval_script(
+                                    self.hermes,
+                                    c_code.as_ptr(),
+                                    c_url.as_ptr(),
+                                );
+                            }
+                        }
+                    }
+                }
+            } else if !inline_code.trim().is_empty() && inline_code.len() <= 256_000 {
+                if let Ok(c_code) = std::ffi::CString::new(inline_code) {
+                    unsafe {
+                        hermes_app_eval_script(
+                            self.hermes,
+                            c_code.as_ptr(),
+                            c"<inline-script>".as_ptr(),
+                        );
+                    }
+                }
+            }
+        }
+
+        if self.ctx.dirty {
+            self.resolve();
+            self.ctx.dirty = false;
+        }
     }
 
     fn doc(&self) -> &HtmlDocument {
@@ -516,6 +653,19 @@ struct QueuedInput {
     action: InputAction,
 }
 
+struct HeldLink {
+    label: String,
+    url: String,
+}
+
+struct PageHolderState {
+    doc: HtmlDocument,
+    url: Url,
+    title: String,
+    links_mode: bool,
+    links: Vec<HeldLink>,
+}
+
 struct BrowserApp {
     window: Option<Arc<Window>>,
     renderer: VelloWindowRenderer,
@@ -524,6 +674,12 @@ struct BrowserApp {
     next_tab_id: u64,
     active: usize,
     menu_open: bool,
+    toolbar_collapsed: bool,
+    explorer_tab: Option<ExplorerTab>,
+    page_holder: Option<PageHolderState>,
+    scrapbook_entries: Vec<scrapbook::ScrapbookEntry>,
+    selected_scrapbook: Option<usize>,
+    favorites: Vec<(String, String)>,
     provider: SharedProvider,
     proxy: EventLoopProxy<UserEvent>,
     net_dirty: Arc<AtomicBool>,
@@ -571,6 +727,16 @@ impl BrowserApp {
                 == Some("1");
         let xray_enabled = std::env::args().any(|a| a == "--xray")
             || std::env::var("HERMES_XRAY").ok().as_deref() == Some("1");
+        let scrapbook_entries = scrapbook::load_entries();
+        let selected_scrapbook = if scrapbook_entries.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        let favorites = vec![
+            ("Start Page".to_string(), START_URL.to_string()),
+            ("AOL Portal".to_string(), "https://aol.com/".to_string()),
+        ];
         let mut app = Self {
             window: None,
             renderer: VelloWindowRenderer::new(),
@@ -579,6 +745,12 @@ impl BrowserApp {
             next_tab_id: 2,
             active: 0,
             menu_open: false,
+            toolbar_collapsed: false,
+            explorer_tab: None,
+            page_holder: None,
+            scrapbook_entries,
+            selected_scrapbook,
+            favorites,
             provider,
             proxy,
             net_dirty,
@@ -607,6 +779,57 @@ impl BrowserApp {
         app
     }
 
+    fn top_chrome_height(&self) -> f64 {
+        if self.toolbar_collapsed {
+            0.0
+        } else {
+            CHROME_HEIGHT
+        }
+    }
+
+    fn left_chrome_width(&self) -> f64 {
+        EXPLORER_RAIL_WIDTH
+            + if self.explorer_tab.is_some() {
+                EXPLORER_DRAWER_WIDTH
+            } else {
+                0.0
+            }
+    }
+
+    fn content_viewport(&self) -> Viewport {
+        let left_px = ((self.left_chrome_width() * self.scale) as u32).min(self.size.0);
+        let top_px = ((self.top_chrome_height() * self.scale) as u32).min(self.size.1);
+        Viewport::new(
+            self.size.0.saturating_sub(left_px).max(64),
+            self.size.1.saturating_sub(top_px).max(64),
+            self.scale as f32,
+            self.theme.color_scheme(),
+        )
+    }
+
+    fn page_holder_viewport(&self) -> Viewport {
+        let w = ((EXPLORER_DRAWER_WIDTH * self.scale) as u32).max(64);
+        let top_px =
+            (((self.top_chrome_height() + PH_HEADER_HEIGHT) * self.scale) as u32).min(self.size.1);
+        let h = self.size.1.saturating_sub(top_px).max(64);
+        Viewport::new(w, h, self.scale as f32, self.theme.color_scheme())
+    }
+
+    fn reflow_active_tab(&mut self) {
+        let vp = self.content_viewport();
+        let tab = self.tab_mut();
+        tab.instance.page.doc_mut().set_viewport(vp);
+        tab.instance.page.resolve();
+        if self.page_holder.is_some() {
+            let ph_vp = self.page_holder_viewport();
+            if let Some(ph) = self.page_holder.as_mut() {
+                let _guard = browser::enter_runtime();
+                ph.doc.set_viewport(ph_vp);
+                ph.doc.resolve(0.0);
+            }
+        }
+    }
+
     fn tab(&self) -> &Tab {
         &self.tabs[self.active]
     }
@@ -618,7 +841,7 @@ impl BrowserApp {
     fn create_start_tab(&mut self) -> Tab {
         let id = TabId(self.next_tab_id);
         self.next_tab_id = self.next_tab_id.wrapping_add(1);
-        Tab::start_page(id, page_viewport(self.size, self.scale, self.theme))
+        Tab::start_page(id, self.content_viewport())
     }
 
     fn observe_active(&mut self) -> observe::PageSnapshot {
@@ -627,7 +850,7 @@ impl BrowserApp {
     }
 
     fn observe_tab(&mut self, tab_id: TabId) -> Option<observe::PageSnapshot> {
-        let viewport = page_viewport(self.size, self.scale, self.theme);
+        let viewport = self.content_viewport();
         let (width, height) = viewport.window_size;
         let scale = viewport.scale_f64() as f32;
         let tab = self
@@ -2366,11 +2589,26 @@ impl BrowserApp {
         let scale = self.scale;
         let mut renderer = VelloImageRenderer::new(width, height);
         let mut rgba: Vec<u8> = Vec::new();
-        let chrome_h = ((CHROME_HEIGHT * scale) as u32).min(height);
+        let top_h_px = ((self.top_chrome_height() * scale) as u32).min(height);
+        let left_w_px = ((self.left_chrome_width() * scale) as u32).min(width);
+        let content_w_px = width.saturating_sub(left_w_px).max(1);
+        let content_h_px = height.saturating_sub(top_h_px).max(1);
+        let ph_x_px = ((EXPLORER_RAIL_WIDTH * scale) as u32).min(width);
+        let ph_y_px = (((self.top_chrome_height() + PH_HEADER_HEIGHT) * scale) as u32).min(height);
+        let ph_w_px =
+            ((EXPLORER_DRAWER_WIDTH * scale) as u32).min(width.saturating_sub(ph_x_px)).max(1);
+        let ph_h_px = height.saturating_sub(ph_y_px).max(1);
+        let paint_ph = self.explorer_tab == Some(ExplorerTab::PageHolder)
+            && self
+                .page_holder
+                .as_ref()
+                .is_some_and(|ph| !ph.links_mode);
+
         let Self {
             tabs,
             active,
             chrome_doc,
+            page_holder,
             ..
         } = self;
         let tab = &mut tabs[*active];
@@ -2380,11 +2618,24 @@ impl BrowserApp {
                     painter,
                     tab.instance.page.doc_mut(),
                     scale,
-                    width,
-                    height,
-                    0,
-                    chrome_h,
+                    content_w_px,
+                    content_h_px,
+                    left_w_px,
+                    top_h_px,
                 );
+                if paint_ph {
+                    if let Some(ph) = page_holder.as_mut() {
+                        blitz_paint::paint_scene(
+                            painter,
+                            &mut ph.doc,
+                            scale,
+                            ph_w_px,
+                            ph_h_px,
+                            ph_x_px,
+                            ph_y_px,
+                        );
+                    }
+                }
                 blitz_paint::paint_scene(painter, chrome_doc, scale, width, height, 0, 0);
             },
             &mut rgba,
@@ -2518,6 +2769,88 @@ impl BrowserApp {
             })
             .collect();
 
+        let ph_links: Vec<HeldLinkInfo<'_>> = self
+            .page_holder
+            .as_ref()
+            .map(|ph| {
+                ph.links
+                    .iter()
+                    .map(|l| HeldLinkInfo {
+                        label: l.label.as_str(),
+                        url: l.url.as_str(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let ph_url_str = self
+            .page_holder
+            .as_ref()
+            .map(|ph| ph.url.to_string())
+            .unwrap_or_default();
+        let ph_title_str = self
+            .page_holder
+            .as_ref()
+            .map(|ph| ph.title.clone())
+            .unwrap_or_default();
+        let page_holder_info = PageHolderInfo {
+            has_doc: self.page_holder.is_some(),
+            title: &ph_title_str,
+            url: &ph_url_str,
+            links_mode: self
+                .page_holder
+                .as_ref()
+                .map(|ph| ph.links_mode)
+                .unwrap_or(false),
+            links: &ph_links,
+        };
+
+        let scrapbook_items: Vec<ScrapbookItemInfo<'_>> = self
+            .scrapbook_entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| ScrapbookItemInfo {
+                id: e.id.as_str(),
+                title: e.title.as_str(),
+                url: e.url.as_str(),
+                timestamp: e.timestamp.as_str(),
+                is_folder: e.is_folder,
+                selected: self.selected_scrapbook == Some(i),
+            })
+            .collect();
+
+        let fav_items: Vec<NavEntryInfo<'_>> = self
+            .favorites
+            .iter()
+            .map(|(t, u)| NavEntryInfo {
+                title: t.as_str(),
+                url: u.as_str(),
+            })
+            .collect();
+
+        let hist_pairs: Vec<(String, String)> = self
+            .tab()
+            .canonical
+            .browser
+            .history
+            .iter()
+            .map(|entry| {
+                let u = entry.url.to_string();
+                let label = entry
+                    .url
+                    .host_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| u.clone());
+                (label, u)
+            })
+            .collect();
+        let hist_items: Vec<NavEntryInfo<'_>> = hist_pairs
+            .iter()
+            .map(|(t, u)| NavEntryInfo {
+                title: t.as_str(),
+                url: u.as_str(),
+            })
+            .collect();
+
         let url = self.tab().canonical.browser.display_url();
         let supervision = self.supervision_info();
         let html = chrome::render(&ChromeState {
@@ -2533,6 +2866,12 @@ impl BrowserApp {
             theme: self.theme,
             supervision,
             telemetry,
+            toolbar_collapsed: self.toolbar_collapsed,
+            explorer_tab: self.explorer_tab,
+            page_holder: page_holder_info,
+            scrapbook_items: &scrapbook_items,
+            favorites: &fav_items,
+            history_entries: &hist_items,
         });
 
         let mut doc = HtmlDocument::from_html(
@@ -2609,6 +2948,7 @@ impl BrowserApp {
         if index < self.tabs.len() {
             self.active = index;
             self.menu_open = false;
+            self.reflow_active_tab();
             self.sync_chrome();
             self.request_redraw();
         }
@@ -2626,7 +2966,7 @@ impl BrowserApp {
         };
 
         if url.scheme() == "muse" {
-            let viewport = page_viewport(self.size, self.scale, self.theme);
+            let viewport = self.content_viewport();
             let theme = self.theme;
             let tab = self.tab_mut();
             tab.canonical.browser.commit(url, START_PAGE.to_string());
@@ -2671,6 +3011,15 @@ impl BrowserApp {
         self.navigate(&url.to_string());
     }
 
+    fn stop_navigation(&mut self) {
+        let tab = self.tab_mut();
+        tab.canonical.browser.generation = tab.canonical.browser.generation.wrapping_add(1);
+        tab.canonical.browser.loading = false;
+        tab.canonical.browser.sync_address();
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
     fn go_back(&mut self) {
         if self.tab_mut().canonical.browser.go_back() {
             self.show_current_entry();
@@ -2698,13 +3047,197 @@ impl BrowserApp {
         } else {
             (Some(url.clone()), Some(self.provider.clone()))
         };
-        let viewport = page_viewport(self.size, self.scale, self.theme);
+        let viewport = self.content_viewport();
         let theme = self.theme;
         let tab = self.tab_mut();
         tab.replace_page(Page::load(&html, base, provider, viewport, theme));
         tab.canonical.browser.loading = false;
         tab.canonical.browser.error = None;
         tab.canonical.title = title_for(&url, tab.instance.page.doc());
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn toggle_toolbar_collapsed(&mut self) {
+        self.toolbar_collapsed = !self.toolbar_collapsed;
+        self.menu_open = false;
+        self.reflow_active_tab();
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn toggle_explorer_tab(&mut self, tab: ExplorerTab) {
+        if self.explorer_tab == Some(tab) {
+            self.explorer_tab = None;
+        } else {
+            self.explorer_tab = Some(tab);
+        }
+        self.menu_open = false;
+        self.reflow_active_tab();
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    /// Snapshot the active tab's live DOM and base URL into `self.page_holder`.
+    fn capture_page_holder(&mut self) {
+        let base_url = self
+            .tab()
+            .canonical
+            .browser
+            .current()
+            .map(|e| e.url.clone())
+            .unwrap_or_else(|| Url::parse(START_URL).expect("start url"));
+        let title = self.tab().canonical.title.clone();
+        let ts = scrapbook::now_timestamp_string();
+        let html = scrapbook::capture_document_snapshot(
+            self.tab().instance.page.doc(),
+            base_url.as_str(),
+            &title,
+            &ts,
+        );
+        let links = extract_document_links(self.tab().instance.page.doc(), &base_url);
+        let ph_vp = self.page_holder_viewport();
+        let _guard = browser::enter_runtime();
+        let mut ph_doc = HtmlDocument::from_html(
+            &html,
+            DocumentConfig {
+                viewport: Some(ph_vp),
+                base_url: Some(base_url.to_string()),
+                net_provider: Some(self.provider.clone()),
+                html_parser_provider: Some(Arc::new(blitz_html::HtmlProvider)),
+                ua_stylesheets: vec![blitz_dom::UserAgentStylesheet::default_sheet()],
+                ..Default::default()
+            },
+        );
+        ph_doc.resolve(0.0);
+        let keep_links_mode = self
+            .page_holder
+            .as_ref()
+            .map(|ph| ph.links_mode)
+            .unwrap_or(false);
+        self.page_holder = Some(PageHolderState {
+            doc: ph_doc,
+            url: base_url,
+            title,
+            links_mode: keep_links_mode,
+            links,
+        });
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn toggle_page_holder_links(&mut self) {
+        if let Some(ph) = self.page_holder.as_mut() {
+            ph.links_mode = !ph.links_mode;
+        } else {
+            self.capture_page_holder();
+            if let Some(ph) = self.page_holder.as_mut() {
+                ph.links_mode = true;
+            }
+        }
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn scrapbook_add(&mut self) {
+        let url_str = self
+            .tab()
+            .canonical
+            .browser
+            .current()
+            .map(|e| e.url.to_string())
+            .unwrap_or_else(|| START_URL.to_string());
+        let title = self.tab().canonical.title.clone();
+        let timestamp = scrapbook::now_timestamp_string();
+        let html_snapshot = scrapbook::capture_document_snapshot(
+            self.tab().instance.page.doc(),
+            &url_str,
+            &title,
+            &timestamp,
+        );
+        let id = format!("sb-{}", self.scrapbook_entries.len() + 1);
+        self.scrapbook_entries.push(scrapbook::ScrapbookEntry {
+            id,
+            title,
+            url: url_str,
+            timestamp,
+            is_folder: false,
+            html_snapshot,
+        });
+        self.selected_scrapbook = Some(self.scrapbook_entries.len() - 1);
+        let _ = scrapbook::save_entries(&self.scrapbook_entries);
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn scrapbook_organize(&mut self) {
+        let folder_count = self
+            .scrapbook_entries
+            .iter()
+            .filter(|e| e.is_folder)
+            .count()
+            + 1;
+        let timestamp = scrapbook::now_timestamp_string();
+        let id = format!("sb-folder-{folder_count}");
+        self.scrapbook_entries.push(scrapbook::ScrapbookEntry {
+            id,
+            title: format!("Archive Folder {folder_count}"),
+            url: String::new(),
+            timestamp,
+            is_folder: true,
+            html_snapshot: String::new(),
+        });
+        self.selected_scrapbook = Some(self.scrapbook_entries.len() - 1);
+        let _ = scrapbook::save_entries(&self.scrapbook_entries);
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn scrapbook_delete(&mut self) {
+        if self.scrapbook_entries.is_empty() {
+            return;
+        }
+        let idx = self
+            .selected_scrapbook
+            .filter(|&i| i < self.scrapbook_entries.len())
+            .unwrap_or(self.scrapbook_entries.len() - 1);
+        self.scrapbook_entries.remove(idx);
+        if self.scrapbook_entries.is_empty() {
+            self.selected_scrapbook = None;
+        } else {
+            self.selected_scrapbook = Some(idx.min(self.scrapbook_entries.len() - 1));
+        }
+        let _ = scrapbook::save_entries(&self.scrapbook_entries);
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn scrapbook_open_entry(&mut self, index: usize) {
+        let Some(entry) = self.scrapbook_entries.get(index).cloned() else {
+            return;
+        };
+        self.selected_scrapbook = Some(index);
+        if !entry.is_folder && !entry.html_snapshot.is_empty() {
+            let url = Url::parse(&entry.url)
+                .unwrap_or_else(|_| Url::parse(START_URL).expect("start url"));
+            let viewport = self.content_viewport();
+            let theme = self.theme;
+            let tab = self.tab_mut();
+            tab.canonical
+                .browser
+                .commit(url.clone(), entry.html_snapshot.clone());
+            // Load with provider = None to prove the archived snapshot is 100% self-contained offline!
+            tab.replace_page(Page::load(
+                &entry.html_snapshot,
+                Some(url),
+                None,
+                viewport,
+                theme,
+            ));
+            tab.canonical.browser.loading = false;
+            tab.canonical.browser.error = None;
+            tab.canonical.title = entry.title;
+        }
         self.sync_chrome();
         self.request_redraw();
     }
@@ -2771,6 +3304,147 @@ impl BrowserApp {
         if self.session_blocks_input() {
             return;
         }
+
+        // IE5 Mac Collapsible Toolbar & Explorer Bar rail controls.
+        if id_is("btn-collapse-toolbar") {
+            self.toggle_toolbar_collapsed();
+            return;
+        }
+        if id_is("exp-favorites") {
+            self.toggle_explorer_tab(ExplorerTab::Favorites);
+            return;
+        }
+        if id_is("exp-history") {
+            self.toggle_explorer_tab(ExplorerTab::History);
+            return;
+        }
+        if id_is("exp-search") {
+            self.toggle_explorer_tab(ExplorerTab::Search);
+            return;
+        }
+        if id_is("exp-scrapbook") {
+            self.toggle_explorer_tab(ExplorerTab::Scrapbook);
+            return;
+        }
+        if id_is("exp-pageholder") {
+            self.toggle_explorer_tab(ExplorerTab::PageHolder);
+            return;
+        }
+
+        // Page Holder drawer controls & link retargeting.
+        if id_is("ph-add") {
+            self.capture_page_holder();
+            return;
+        }
+        if id_is("ph-links") {
+            self.toggle_page_holder_links();
+            return;
+        }
+        if let Some(ph) = self.page_holder.as_ref() {
+            if ph.links_mode {
+                let link_count = ph.links.len();
+                for i in 0..link_count {
+                    if id_is(&format!("ph-link-{i}")) {
+                        let target_url = self.page_holder.as_ref().unwrap().links[i].url.clone();
+                        self.navigate(&target_url);
+                        return;
+                    }
+                }
+            }
+        }
+        if id_is("ph-canvas") {
+            let top_h = self.top_chrome_height() as f32;
+            let local_x = x - EXPLORER_RAIL_WIDTH as f32;
+            let local_y = y - (top_h + PH_HEADER_HEIGHT as f32);
+            let nav_target = self.page_holder.as_ref().and_then(|ph| {
+                let ph_hit = ph.doc.hit(local_x, local_y)?;
+                let href = link_target(&ph.doc, ph_hit.node_id)?;
+                browser::resolve_link(&ph.url, &href)
+                    .ok()
+                    .map(|u| u.to_string())
+            });
+            if let Some(url_str) = nav_target {
+                self.navigate(&url_str);
+            }
+            return;
+        }
+
+        // Internet Scrapbook drawer controls.
+        if id_is("sb-add") {
+            self.scrapbook_add();
+            return;
+        }
+        if id_is("sb-organize") {
+            self.scrapbook_organize();
+            return;
+        }
+        if id_is("sb-delete") {
+            self.scrapbook_delete();
+            return;
+        }
+        for i in 0..self.scrapbook_entries.len() {
+            if id_is(&format!("sb-entry-{i}")) {
+                self.scrapbook_open_entry(i);
+                return;
+            }
+        }
+
+        // Favorites drawer controls.
+        if id_is("fav-add") {
+            let url = self.tab().canonical.browser.display_url();
+            let title = self.tab().canonical.title.clone();
+            if !url.is_empty() && !self.favorites.iter().any(|(_, u)| u == &url) {
+                self.favorites.push((title, url));
+                self.sync_chrome();
+                self.request_redraw();
+            }
+            return;
+        }
+        for i in 0..self.favorites.len() {
+            if id_is(&format!("fav-item-{i}")) {
+                let url = self.favorites[i].1.clone();
+                self.navigate(&url);
+                return;
+            }
+        }
+
+        // History drawer controls.
+        let hist_len = self.tab().canonical.browser.history.len();
+        for i in 0..hist_len {
+            if id_is(&format!("hist-item-{i}")) {
+                let tab = self.tab_mut();
+                tab.canonical.browser.index = i;
+                tab.canonical.browser.sync_address();
+                self.show_current_entry();
+                return;
+            }
+        }
+
+        // Search drawer controls.
+        if id_is("exp-search-focus") {
+            self.toolbar_collapsed = false;
+            let url = self.tab().canonical.browser.display_url();
+            let tab = self.tab_mut();
+            tab.canonical.browser.focused = true;
+            tab.canonical.browser.address = url;
+            self.reflow_active_tab();
+            self.sync_chrome();
+            self.request_redraw();
+            return;
+        }
+        if id_is("search-item-0") {
+            self.navigate("https://lite.duckduckgo.com/lite/");
+            return;
+        }
+        if id_is("search-item-1") {
+            self.navigate("https://en.wikipedia.org/");
+            return;
+        }
+        if id_is("search-item-2") {
+            self.navigate("https://aol.com/");
+            return;
+        }
+
         if id_is("btn-menu") {
             self.menu_open = !self.menu_open;
             self.sync_chrome();
@@ -2814,6 +3488,10 @@ impl BrowserApp {
             }
             return;
         }
+        if id_is("btn-stop") {
+            self.stop_navigation();
+            return;
+        }
         if id_is("btn-reload") {
             self.reload();
             return;
@@ -2829,15 +3507,21 @@ impl BrowserApp {
             return;
         }
 
+        if id_is("exp-rail") || id_is("exp-drawer") {
+            return;
+        }
+
         // Click landed on the chrome document but not on any control: close the
-        // menu, and if the point is below the chrome strip, treat it as a page
-        // click (the chrome body is transparent there).
+        // menu, and if the point is inside the content viewport, treat it as a
+        // page click (the chrome body is transparent there).
         if self.menu_open {
             self.menu_open = false;
             self.sync_chrome();
             self.request_redraw();
         }
-        if y >= CHROME_HEIGHT as f32 {
+        let top_h = self.top_chrome_height() as f32;
+        let left_w = self.left_chrome_width() as f32;
+        if y >= top_h && x >= left_w {
             self.handle_page_click(x, y);
         }
     }
@@ -2850,8 +3534,9 @@ impl BrowserApp {
     }
 
     fn do_page_click(&mut self, x: f32, y: f32) {
-        let local_y = y - CHROME_HEIGHT as f32;
-        let Some(hit) = self.tab().instance.page.doc().hit(x, local_y) else {
+        let local_x = (x - self.left_chrome_width() as f32).max(0.0);
+        let local_y = (y - self.top_chrome_height() as f32).max(0.0);
+        let Some(hit) = self.tab().instance.page.doc().hit(local_x, local_y) else {
             return;
         };
 
@@ -2873,7 +3558,13 @@ impl BrowserApp {
         let target = dom_ffi::bubble_target(self.tab().instance.page.doc(), hit.node_id);
         let hermes = self.tab().instance.page.hermes;
         unsafe {
-            hermes_app_dispatch_event(hermes, c"click".as_ptr(), target.as_u64(), x, local_y);
+            hermes_app_dispatch_event(
+                hermes,
+                c"click".as_ptr(),
+                target.as_u64(),
+                local_x,
+                local_y,
+            );
         }
         if self.tab().instance.page.ctx.dirty {
             let tab = self.tab_mut();
@@ -2982,6 +3673,7 @@ impl BrowserApp {
         url: Url,
         result: Result<String, String>,
     ) {
+        let viewport = self.content_viewport();
         let Some(target) = self.tabs.iter_mut().find(|tab| tab.canonical.id == tab_id) else {
             return;
         };
@@ -3010,7 +3702,7 @@ impl BrowserApp {
                     &html,
                     Some(url.clone()),
                     Some(self.provider.clone()),
-                    page_viewport(self.size, self.scale, self.theme),
+                    viewport,
                     self.theme,
                 ));
                 target.canonical.browser.error = None;
@@ -3019,13 +3711,7 @@ impl BrowserApp {
             Err(e) => {
                 target.canonical.browser.fail(e.clone());
                 let html = error_page(&e);
-                target.replace_page(Page::load(
-                    &html,
-                    None,
-                    None,
-                    page_viewport(self.size, self.scale, self.theme),
-                    self.theme,
-                ));
+                target.replace_page(Page::load(&html, None, None, viewport, self.theme));
                 target.canonical.title = "Error".to_string();
             }
         }
@@ -3049,32 +3735,60 @@ impl BrowserApp {
         if !self.renderer.is_active() {
             return;
         }
+        let (width, height) = self.size;
+        let scale_f = self.scale;
+        let top_h_px = ((self.top_chrome_height() * scale_f) as u32).min(height);
+        let left_w_px = ((self.left_chrome_width() * scale_f) as u32).min(width);
+        let content_w_px = width.saturating_sub(left_w_px).max(1);
+        let content_h_px = height.saturating_sub(top_h_px).max(1);
+        let ph_x_px = ((EXPLORER_RAIL_WIDTH * scale_f) as u32).min(width);
+        let ph_y_px =
+            (((self.top_chrome_height() + PH_HEADER_HEIGHT) * scale_f) as u32).min(height);
+        let ph_w_px =
+            ((EXPLORER_DRAWER_WIDTH * scale_f) as u32).min(width.saturating_sub(ph_x_px)).max(1);
+        let ph_h_px = height.saturating_sub(ph_y_px).max(1);
+        let paint_ph = self.explorer_tab == Some(ExplorerTab::PageHolder)
+            && self
+                .page_holder
+                .as_ref()
+                .is_some_and(|ph| !ph.links_mode);
+
         let Self {
             renderer,
             chrome_doc,
             tabs,
             active,
-            size,
-            scale,
+            page_holder,
             ..
         } = self;
-        let (width, height) = *size;
-        let scale_f = *scale;
-        let chrome_h = ((CHROME_HEIGHT * scale_f) as u32).min(height);
         let tab = &mut tabs[*active];
 
         renderer.render(|painter| {
-            // Page first, then chrome: the chrome body is transparent, so only
-            // the strip, nav row and (when open) the menu paint over the page.
+            // 1. Active tab's content_doc inside its clipped, offset viewport rectangle.
             blitz_paint::paint_scene(
                 painter,
                 tab.instance.page.doc_mut(),
                 scale_f,
-                width,
-                height,
-                0,
-                chrome_h,
+                content_w_px,
+                content_h_px,
+                left_w_px,
+                top_h_px,
             );
+            // 2. Page Holder document (when open in Rendered Page View) inside its clipped drawer layer.
+            if paint_ph {
+                if let Some(ph) = page_holder.as_mut() {
+                    blitz_paint::paint_scene(
+                        painter,
+                        &mut ph.doc,
+                        scale_f,
+                        ph_w_px,
+                        ph_h_px,
+                        ph_x_px,
+                        ph_y_px,
+                    );
+                }
+            }
+            // 3. Browser chrome document at (0, 0).
             blitz_paint::paint_scene(painter, chrome_doc, scale_f, width, height, 0, 0);
         });
         self.frame_seq = self.frame_seq.wrapping_add(1);
@@ -3083,11 +3797,7 @@ impl BrowserApp {
     fn resize(&mut self, width: u32, height: u32) {
         self.size = (width.max(1), height.max(1));
         self.renderer.set_size(self.size.0, self.size.1);
-
-        let viewport = page_viewport(self.size, self.scale, self.theme);
-        let tab = self.tab_mut();
-        tab.instance.page.doc_mut().set_viewport(viewport);
-        tab.instance.page.resolve();
+        self.reflow_active_tab();
         self.sync_chrome();
         self.request_redraw();
     }
@@ -3170,10 +3880,7 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
             .resume(handle, self.size.0, self.size.1, || {});
         assert!(self.renderer.complete_resume(), "wgpu surface init failed");
 
-        let viewport = page_viewport(self.size, self.scale, self.theme);
-        let tab = self.tab_mut();
-        tab.instance.page.doc_mut().set_viewport(viewport);
-        tab.instance.page.resolve();
+        self.reflow_active_tab();
         self.sync_chrome();
 
         eprintln!(
@@ -3210,11 +3917,7 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
                     winit::window::Theme::Dark => Theme::Dark,
                     winit::window::Theme::Light => Theme::Light,
                 };
-                // Pages follow the same preference via prefers-color-scheme.
-                let viewport = page_viewport(self.size, self.scale, self.theme);
-                let tab = self.tab_mut();
-                tab.instance.page.doc_mut().set_viewport(viewport);
-                tab.instance.page.resolve();
+                self.reflow_active_tab();
                 self.sync_chrome();
                 self.request_redraw();
             }
@@ -3224,9 +3927,9 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
                     (position.x / self.scale) as f32,
                     (position.y / self.scale) as f32,
                 );
-                if self.cursor.1 < CHROME_HEIGHT as f32
-                    && self.chrome_doc.set_hover_to(self.cursor.0, self.cursor.1)
-                {
+                let in_chrome = self.cursor.1 < self.top_chrome_height() as f32
+                    || self.cursor.0 < self.left_chrome_width() as f32;
+                if in_chrome && self.chrome_doc.set_hover_to(self.cursor.0, self.cursor.1) {
                     self.chrome_doc.resolve(0.0);
                     self.request_redraw();
                 }
@@ -3274,12 +3977,56 @@ fn chrome_viewport(size: (u32, u32), scale: f64) -> Viewport {
 
 fn page_viewport(size: (u32, u32), scale: f64, theme: Theme) -> Viewport {
     let chrome_h = ((CHROME_HEIGHT * scale) as u32).min(size.1);
+    let rail_w = ((EXPLORER_RAIL_WIDTH * scale) as u32).min(size.0);
     Viewport::new(
-        size.0,
+        size.0.saturating_sub(rail_w).max(1),
         size.1.saturating_sub(chrome_h).max(1),
         scale as f32,
         theme.color_scheme(),
     )
+}
+
+/// Walk `doc` in pre-order for all `<a href="...">` elements and resolve their
+/// target URLs against `base_url` for the IE5 Mac Page Holder Links List View.
+fn extract_document_links(doc: &blitz_dom::BaseDocument, base_url: &Url) -> Vec<HeldLink> {
+    let mut links = Vec::new();
+    let mut stack = vec![doc.root_node().id];
+    while let Some(nid) = stack.pop() {
+        let Some(node) = doc.get_node(nid) else {
+            continue;
+        };
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+        let Some(el) = node.element_data() else {
+            continue;
+        };
+        let tag: &str = el.name.local.as_ref();
+        if !tag.eq_ignore_ascii_case("a") {
+            continue;
+        }
+        let Some(href_raw) = node.attr(LocalName::from("href")) else {
+            continue;
+        };
+        let trimmed = href_raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with("javascript:") {
+            continue;
+        }
+        let Ok(resolved) = browser::resolve_link(base_url, trimmed) else {
+            continue;
+        };
+        let text = node.text_content().trim().to_string();
+        let label = if text.is_empty() {
+            resolved.to_string()
+        } else {
+            text
+        };
+        links.push(HeldLink {
+            label,
+            url: resolved.to_string(),
+        });
+    }
+    links
 }
 
 /// Nearest ancestor (or self) that is an `<a>` with an href.
@@ -3998,6 +4745,207 @@ fn uitest() -> i32 {
         failures += 1;
     }
 
+    // -----------------------------------------------------------------------
+    // Deliverable 2: IE5 Mac Collapsible Toolbar & Explorer Bar Drawer Reflow
+    // -----------------------------------------------------------------------
+    let vp_before_collapse = app.content_viewport().window_size;
+    if let Some((x, y)) = find_click(&app, "btn-collapse-toolbar") {
+        app.handle_chrome_click(x, y);
+    }
+    let vp_after_collapse = app.content_viewport().window_size;
+    if !check(
+        app.toolbar_collapsed
+            && vp_after_collapse.1 > vp_before_collapse.1
+            && app.chrome_doc.get_element_by_id("address").is_none()
+            && find_click(&app, "btn-back").is_some()
+            && find_click(&app, "btn-forward").is_some()
+            && find_click(&app, "btn-stop").is_some()
+            && find_click(&app, "btn-reload").is_some(),
+        "clicking #btn-collapse-toolbar hides top chrome, expands viewport to y=0, and renders compact nav buttons in rail",
+    ) {
+        failures += 1;
+    }
+    if let Some((x, y)) = find_click(&app, "btn-collapse-toolbar") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        !app.toolbar_collapsed && app.chrome_doc.get_element_by_id("address").is_some(),
+        "clicking #btn-collapse-toolbar again restores top toolbar",
+    ) {
+        failures += 1;
+    }
+
+    // -----------------------------------------------------------------------
+    // Deliverable 3: IE5 Mac Page Holder (Rendered Page View, Links View, Retargeting)
+    // -----------------------------------------------------------------------
+    let holder_source_html = r#"<!DOCTYPE html><html><head><title>Held Directory</title></head>
+        <body style="margin:0;padding:8px;">
+          <a id="first-held-link" href="https://example.org/retargeted-from-holder" style="display:block;width:220px;height:40px;background:#1B74E4;color:#FFF;">Target Article</a>
+          <a id="second-held-link" href="/relative-section" style="display:block;width:220px;height:30px;">Relative Section</a>
+        </body></html>"#;
+    let active_id = app.tab().canonical.id;
+    let nav_gen = app.tab().canonical.browser.generation;
+    app.handle_navigated(
+        active_id,
+        nav_gen,
+        Url::parse("https://directory.test/index.html").expect("dir url"),
+        Ok(holder_source_html.to_string()),
+    );
+    let width_closed = app.content_viewport().window_size.0;
+    if let Some((x, y)) = find_click(&app, "exp-pageholder") {
+        app.handle_chrome_click(x, y);
+    }
+    let width_open = app.content_viewport().window_size.0;
+    if !check(
+        app.explorer_tab == Some(ExplorerTab::PageHolder)
+            && width_open + (EXPLORER_DRAWER_WIDTH as u32) == width_closed,
+        "opening #exp-pageholder drawer shifts content viewport X-origin right by 260px and reflows Taffy width",
+    ) {
+        failures += 1;
+    }
+    if let Some((x, y)) = find_click(&app, "ph-add") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.page_holder.as_ref().is_some_and(|ph| {
+            !ph.links_mode
+                && ph.links.len() == 2
+                && ph.links[0].url == "https://example.org/retargeted-from-holder"
+                && ph.links[1].url == "https://directory.test/relative-section"
+        }),
+        "clicking #ph-add snapshots active tab DOM into page_holder_doc and resolves <a href> URLs",
+    ) {
+        failures += 1;
+    }
+    // Click directly on the link inside the Page Holder's Rendered Page View (#ph-canvas)
+    // and verify that it retargets the main active tab while keeping page_holder_doc pinned!
+    let ph_click_pt = (
+        (EXPLORER_RAIL_WIDTH + 40.0) as f32,
+        (CHROME_HEIGHT + PH_HEADER_HEIGHT + 20.0) as f32,
+    );
+    app.handle_chrome_click(ph_click_pt.0, ph_click_pt.1);
+    if !check(
+        app.tab().canonical.browser.address == "https://example.org/retargeted-from-holder"
+            && app.page_holder.as_ref().is_some_and(|ph| ph.url.as_str() == "https://directory.test/index.html"),
+        "clicking link in Page Holder Rendered Page View retargets main active tab while keeping Page Holder pinned",
+    ) {
+        failures += 1;
+    }
+    // Switch to Links List View (#ph-links) and click #ph-link-1.
+    if let Some((x, y)) = find_click(&app, "ph-links") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.page_holder.as_ref().is_some_and(|ph| ph.links_mode)
+            && find_click(&app, "ph-link-1").is_some(),
+        "clicking #ph-links toggles Page Holder Links List View and renders clickable #ph-link-N items",
+    ) {
+        failures += 1;
+    }
+    if let Some((x, y)) = find_click(&app, "ph-link-1") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.tab().canonical.browser.address == "https://directory.test/relative-section"
+            && app.page_holder.as_ref().is_some_and(|ph| ph.url.as_str() == "https://directory.test/index.html"),
+        "clicking #ph-link-1 in Page Holder Links List View retargets main active tab to resolved URL",
+    ) {
+        failures += 1;
+    }
+
+    // -----------------------------------------------------------------------
+    // Deliverable 4: IE5 Mac Internet Scrapbook (Offline DOM + Style + Image Archival)
+    // -----------------------------------------------------------------------
+    let sb_temp_path = std::env::temp_dir().join(format!("hermes_sb_uitest_{}.json", std::process::id()));
+    unsafe {
+        std::env::set_var("HERMES_SCRAPBOOK_PATH", &sb_temp_path);
+    }
+    app.scrapbook_entries.clear();
+    app.selected_scrapbook = None;
+    let sb_live_html = r##"<!DOCTYPE html><html><head><title>Scrapbook Live Page</title></head>
+        <body style="background-color:#102030;color:#F0F4F8;">
+          <h1 id="sb-heading">Initial Heading</h1>
+          <a id="sb-rel-link" href="/archived-doc">Archived Link</a>
+          <script>
+            var h = document.getElementById("sb-heading");
+            h.innerText = "Mutated Before Scrapbook Capture";
+            h.style.setProperty("color", "#22C55E");
+          </script>
+        </body></html>"##;
+    let active_id = app.tab().canonical.id;
+    let nav_gen = app.tab().canonical.browser.generation;
+    app.handle_navigated(
+        active_id,
+        nav_gen,
+        Url::parse("https://archive.test/page").expect("archive url"),
+        Ok(sb_live_html.to_string()),
+    );
+    if let Some((x, y)) = find_click(&app, "exp-scrapbook") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.explorer_tab == Some(ExplorerTab::Scrapbook),
+        "clicking #exp-scrapbook opens the Internet Scrapbook drawer",
+    ) {
+        failures += 1;
+    }
+    if let Some((x, y)) = find_click(&app, "sb-add") {
+        app.handle_chrome_click(x, y);
+    }
+    let persisted = scrapbook::load_entries();
+    if !check(
+        app.scrapbook_entries.len() == 1
+            && persisted.len() == 1
+            && persisted[0].title == "Scrapbook Live Page"
+            && persisted[0].url == "https://archive.test/page"
+            && persisted[0].html_snapshot.contains("Mutated Before Scrapbook Capture")
+            && persisted[0].html_snapshot.contains("https://archive.test/archived-doc"),
+        "clicking #sb-add serializes mutated DOM + resolved styles + absolute links and persists to disk",
+    ) {
+        failures += 1;
+    }
+    // Navigate active tab away, then click #sb-entry-0 to restore the offline snapshot!
+    app.navigate(START_URL);
+    if let Some((x, y)) = find_click(&app, "sb-entry-0") {
+        app.handle_chrome_click(x, y);
+    }
+    let restored_heading = app
+        .tab()
+        .instance
+        .page
+        .doc()
+        .get_element_by_id("sb-heading")
+        .and_then(|id| app.tab().instance.page.doc().get_node(id))
+        .map(|n| n.text_content())
+        .unwrap_or_default();
+    if !check(
+        app.tab().canonical.browser.display_url() == "https://archive.test/page"
+            && restored_heading == "Mutated Before Scrapbook Capture",
+        "clicking #sb-entry-0 loads the archived offline snapshot back into the main active tab",
+    ) {
+        failures += 1;
+    }
+    // Organize folder divider & delete entry.
+    if let Some((x, y)) = find_click(&app, "sb-organize") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.scrapbook_entries.len() == 2 && app.scrapbook_entries[1].is_folder,
+        "clicking #sb-organize adds a persistent folder divider to the Scrapbook",
+    ) {
+        failures += 1;
+    }
+    if let Some((x, y)) = find_click(&app, "sb-delete") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.scrapbook_entries.len() == 1 && scrapbook::load_entries().len() == 1,
+        "clicking #sb-delete removes the selected Scrapbook entry and updates disk storage",
+    ) {
+        failures += 1;
+    }
+    let _ = std::fs::remove_file(&sb_temp_path);
+
     if failures == 0 {
         println!("UITEST PASS");
         0
@@ -4010,7 +4958,7 @@ fn uitest() -> i32 {
 /// Locate a clickable point for a chrome element id via real hit-testing.
 fn find_click(app: &BrowserApp, id: &str) -> Option<(f32, f32)> {
     let target = app.chrome_doc.get_element_by_id(id)?;
-    for y in (0..(CHROME_HEIGHT as i32 + 300)).step_by(2) {
+    for y in (0..HEIGHT as i32).step_by(2) {
         for x in (0..WIDTH as i32).step_by(2) {
             if let Some(hit) = app.chrome_doc.hit(x as f32, y as f32) {
                 if dom_ffi::bubble_target(&app.chrome_doc, hit.node_id) == target {
@@ -4023,7 +4971,9 @@ fn find_click(app: &BrowserApp, id: &str) -> Option<(f32, f32)> {
 }
 
 /// `--runtimetest`: proves that each tab's AOT handler mutates only its own
-/// document, including after a later-created runtime is destroyed.
+/// document, including after a later-created runtime is destroyed, AND verifies
+/// all Deliverable 1 Static Hermes `$SHBuiltin.extern_c` DOM bindings + automatic
+/// `<script>` execution + `addEventListener` bubbling + `getBoundingClientRect`.
 fn runtimetest() -> i32 {
     fn button_text(page: &Page) -> String {
         let Some(button) = page.doc().get_element_by_id("action-btn") else {
@@ -4053,7 +5003,7 @@ fn runtimetest() -> i32 {
 
     let viewport = page_viewport((WIDTH, HEIGHT), 1.0, Theme::Light);
     let first = Page::load(START_PAGE, None, None, viewport.clone(), Theme::Light);
-    let second = Page::load(START_PAGE, None, None, viewport, Theme::Light);
+    let second = Page::load(START_PAGE, None, None, viewport.clone(), Theme::Light);
     let mut failures = 0;
     let mut check = |condition: bool, message: &str| {
         if condition {
@@ -4098,6 +5048,125 @@ fn runtimetest() -> i32 {
     check(
         button_text(&first).contains("Increment Counter (2)"),
         "destroying second runtime does not disable first runtime",
+    );
+
+    // Deliverable 1: Full DOM API surface + automatic <script> execution + bubbling + getBoundingClientRect
+    let dom_test_html = r##"<!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        #box-host { width: 240px; height: 80px; }
+        .item { width: 100px; height: 24px; }
+      </style>
+    </head>
+    <body>
+      <div id="box-host" class="container" data-init="orig">
+        <span class="item" id="item-1">One</span>
+        <span class="item" id="item-2">Two</span>
+        <span class="item" id="to-remove">RemoveMe</span>
+      </div>
+      <div id="html-target"></div>
+      <div id="bubble-parent">
+        <button id="bubble-child">ClickChild</button>
+      </div>
+      <script>
+        var host = document.querySelector("#box-host.container");
+        var items = document.querySelectorAll("#box-host .item");
+        host.setAttribute("data-count", String(items.length));
+        host.setAttribute("data-prev", host.getAttribute("data-init"));
+
+        var rem = document.getElementById("to-remove");
+        if (rem) { rem.removeNode(); }
+
+        var created = document.createElement("div");
+        created.setAttribute("id", "dynamic-node");
+        created.innerText = "Created via Static Hermes";
+        created.style.setProperty("width", "180px");
+        created.style.setProperty("height", "44px");
+        created.style.setProperty("background-color", "rgb(16, 185, 129)");
+        host.appendChild(created);
+
+        var rect = created.getBoundingClientRect();
+        created.setAttribute("data-rect", Math.round(rect.width) + "x" + Math.round(rect.height));
+
+        var htmlTarget = document.getElementById("html-target");
+        htmlTarget.innerHTML = "<p id='parsed-inner'>Inner<b>HTML</b>Works</p>";
+        host.setAttribute("data-inner-html-read", htmlTarget.innerHTML);
+
+        var parentEl = document.getElementById("bubble-parent");
+        parentEl.addEventListener("click", function(ev) {
+          parentEl.setAttribute("data-bubbled-from", ev.target.getAttribute("id"));
+        });
+      </script>
+    </body>
+    </html>"##;
+
+    let mut dom_page = Page::load(dom_test_html, None, None, viewport, Theme::Light);
+    let doc = dom_page.doc();
+    let host_id = doc.get_element_by_id("box-host").expect("#box-host");
+    let host_node = doc.get_node(host_id).expect("host node");
+    check(
+        host_node.attr(LocalName::from("data-count")) == Some("3")
+            && host_node.attr(LocalName::from("data-prev")) == Some("orig"),
+        "querySelector, querySelectorAll, getAttribute, and setAttribute execute automatically from inline <script>",
+    );
+    check(
+        doc.get_element_by_id("to-remove").is_none(),
+        "removeNode detaches #to-remove from the Blitz DOM",
+    );
+    let dyn_id = doc.get_element_by_id("dynamic-node");
+    let dyn_text = dyn_id
+        .and_then(|id| doc.get_node(id))
+        .map(|n| n.text_content())
+        .unwrap_or_default();
+    let dyn_rect = dyn_id
+        .and_then(|id| doc.get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-rect")))
+        .unwrap_or_default()
+        .to_string();
+    check(
+        dyn_text == "Created via Static Hermes" && dyn_rect == "180x44",
+        "createElement, appendChild, innerText, style.setProperty, and getBoundingClientRect resolve Taffy layout synchronously",
+    );
+    let parsed_inner = doc
+        .get_element_by_id("parsed-inner")
+        .and_then(|id| doc.get_node(id))
+        .map(|n| n.text_content())
+        .unwrap_or_default();
+    check(
+        parsed_inner == "InnerHTMLWorks",
+        "innerHTML setter parses HTML fragment via HtmlProvider and innerHTML getter serializes subtree",
+    );
+
+    // Test addEventListener bubbling from #bubble-child up to #bubble-parent via blitz_parent_node.
+    let child_id = dom_page
+        .doc()
+        .get_element_by_id("bubble-child")
+        .expect("#bubble-child");
+    unsafe {
+        hermes_app_dispatch_event(
+            dom_page.hermes,
+            c"click".as_ptr(),
+            child_id.as_u64(),
+            10.0,
+            10.0,
+        );
+    }
+    if dom_page.ctx.dirty {
+        dom_page.resolve();
+        dom_page.ctx.dirty = false;
+    }
+    let bubbled_from = dom_page
+        .doc()
+        .get_element_by_id("bubble-parent")
+        .and_then(|id| dom_page.doc().get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-bubbled-from")))
+        .unwrap_or_default()
+        .to_string();
+    check(
+        bubbled_from == "bubble-child",
+        "addEventListener bubbles click event from #bubble-child to #bubble-parent via blitz_parent_node",
     );
 
     if failures == 0 {
@@ -5263,6 +6332,18 @@ fn selftest() -> i32 {
             theme: Theme::Light,
             supervision: None,
             telemetry: None,
+            toolbar_collapsed: false,
+            explorer_tab: None,
+            page_holder: PageHolderInfo {
+                has_doc: false,
+                title: "",
+                url: "",
+                links_mode: false,
+                links: &[],
+            },
+            scrapbook_items: &[],
+            favorites: &[],
+            history_entries: &[],
         });
         let mut chrome_doc = HtmlDocument::from_html(
             &html,
@@ -5276,6 +6357,7 @@ fn selftest() -> i32 {
         let mut ids = vec![
             "btn-back".to_string(),
             "btn-forward".to_string(),
+            "btn-stop".to_string(),
             "btn-reload".to_string(),
             "btn-menu".to_string(),
             "address".to_string(),
@@ -5283,6 +6365,12 @@ fn selftest() -> i32 {
             "tab-0".to_string(),
             "tab-close-0".to_string(),
             "tab-1".to_string(),
+            "btn-collapse-toolbar".to_string(),
+            "exp-favorites".to_string(),
+            "exp-history".to_string(),
+            "exp-search".to_string(),
+            "exp-scrapbook".to_string(),
+            "exp-pageholder".to_string(),
         ];
         if menu_open {
             ids.push("menu-home".into());
@@ -5296,7 +6384,7 @@ fn selftest() -> i32 {
                 continue;
             };
             let mut found = None;
-            'scan: for y in (0..(CHROME_HEIGHT as i32 + 300)).step_by(2) {
+            'scan: for y in (0..HEIGHT as i32).step_by(2) {
                 for x in (0..WIDTH as i32).step_by(2) {
                     if let Some(hit) = chrome_doc.hit(x as f32, y as f32) {
                         if dom_ffi::bubble_target(&chrome_doc, hit.node_id) == target_id {
@@ -5475,6 +6563,18 @@ fn render_to_png(
         theme,
         supervision: None,
         telemetry: None,
+        toolbar_collapsed: false,
+        explorer_tab: None,
+        page_holder: PageHolderInfo {
+            has_doc: false,
+            title: "",
+            url: "",
+            links_mode: false,
+            links: &[],
+        },
+        scrapbook_items: &[],
+        favorites: &[],
+        history_entries: &[],
     });
     let mut chrome_doc = HtmlDocument::from_html(
         &html,
@@ -5488,9 +6588,18 @@ fn render_to_png(
     let mut renderer = VelloImageRenderer::new(width, height);
     let mut buffer: Vec<u8> = Vec::new();
     let chrome_h = (CHROME_HEIGHT * scale) as u32;
+    let rail_w = (EXPLORER_RAIL_WIDTH * scale) as u32;
     renderer.render_to_vec(
         |painter| {
-            blitz_paint::paint_scene(painter, page.doc_mut(), scale, width, height, 0, chrome_h);
+            blitz_paint::paint_scene(
+                painter,
+                page.doc_mut(),
+                scale,
+                width.saturating_sub(rail_w).max(1),
+                height.saturating_sub(chrome_h).max(1),
+                rail_w,
+                chrome_h,
+            );
             blitz_paint::paint_scene(painter, &mut chrome_doc, scale, width, height, 0, 0);
         },
         &mut buffer,
