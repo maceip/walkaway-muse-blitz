@@ -106,7 +106,9 @@ fn main() {
     );
     println!("cargo:rustc-link-lib=dylib=hermesvm");
     println!("cargo:rustc-link-lib=static=jsi");
-    // Keep the dylib locatable at runtime without DYLD_LIBRARY_PATH.
+    // Keep the dylib locatable at runtime inside Walkaway.app/Contents/Frameworks
+    // as well as during local cargo runs without DYLD_LIBRARY_PATH.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
 }
 
