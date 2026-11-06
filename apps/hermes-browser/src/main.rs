@@ -1044,6 +1044,8 @@ impl BrowserApp {
         let favorites = vec![
             ("Start Page".to_string(), START_URL.to_string()),
             ("AOL Portal".to_string(), "https://aol.com/".to_string()),
+            ("Wikipedia".to_string(), "https://en.wikipedia.org/".to_string()),
+            ("DuckDuckGo".to_string(), "https://lite.duckduckgo.com/lite/".to_string()),
         ];
         let mut app = Self {
             window: None,
@@ -4291,11 +4293,57 @@ impl BrowserApp {
             return;
         }
         for i in 0..self.favorites.len() {
-            if id_is(&format!("fav-item-{i}")) {
+            if id_is(&format!("fav-item-{i}")) || id_is(&format!("fav-bar-{i}")) {
                 let url = self.favorites[i].1.clone();
                 self.navigate(&url);
                 return;
             }
+        }
+        if id_is("btn-autofill") {
+            let snapshot = self.observe_active();
+            if let Some(recipe) =
+                recall::find_matching_recipe(&snapshot.url, snapshot.form_signature.as_deref())
+            {
+                let tab = self.tab_mut();
+                for rf in &recipe.fields {
+                    let Some(element) = snapshot
+                        .elements
+                        .iter()
+                        .filter(|e| matches!(e.tag.as_str(), "input" | "select" | "textarea"))
+                        .find(|e| {
+                            (rf.dom_id.is_some() && e.dom_id == rf.dom_id)
+                                || (rf.name.is_some() && e.name == rf.name)
+                                || (!rf.label.is_empty() && e.label == rf.label)
+                        })
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    apply_dom_field_action(
+                        tab.instance.page.doc_mut(),
+                        element.node_id,
+                        &element.tag,
+                        &rf.action,
+                        rf.value.as_deref(),
+                        rf.origin.as_deref(),
+                        rf.username.as_deref(),
+                    );
+                }
+                tab.instance.page.resolve();
+                tab.bump_generation();
+                self.recalled_count = self.recalled_count.wrapping_add(1);
+                self.sync_chrome();
+                self.request_redraw();
+            }
+            return;
+        }
+        if id_is("btn-print") {
+            self.scrapbook_add();
+            self.explorer_tab = Some(ExplorerTab::Scrapbook);
+            self.reflow_active_tab();
+            self.sync_chrome();
+            self.request_redraw();
+            return;
         }
 
         // History drawer controls.
@@ -7541,6 +7589,89 @@ fn render_to_png(
         title: &title,
         active: true,
     }];
+    let args_vec: Vec<String> = std::env::args().collect();
+    let toolbar_collapsed = args_vec.iter().any(|a| a == "--collapsed");
+    let explorer_tab = if args_vec.iter().any(|a| a == "--scrapbook") {
+        Some(ExplorerTab::Scrapbook)
+    } else if args_vec
+        .iter()
+        .any(|a| a == "--pageholder" || a == "--pageholder-links")
+    {
+        Some(ExplorerTab::PageHolder)
+    } else {
+        None
+    };
+    let links_mode = args_vec.iter().any(|a| a == "--pageholder-links");
+    let demo_links = [
+        HeldLinkInfo {
+            label: "oreilly.linux.",
+            url: "http://www.oreillynet.com/linux/",
+        },
+        HeldLinkInfo {
+            label: "Apache",
+            url: "http://www.oreillynet.com/apache/",
+        },
+        HeldLinkInfo {
+            label: "RSS",
+            url: "http://www.oreillynet.com/rss/",
+        },
+        HeldLinkInfo {
+            label: "Patents",
+            url: "http://www.oreillynet.com/patents/",
+        },
+        HeldLinkInfo {
+            label: "FreeBSD",
+            url: "http://www.oreillynet.com/freebsd/",
+        },
+        HeldLinkInfo {
+            label: "Wireless",
+            url: "http://www.oreillynet.com/wireless/",
+        },
+    ];
+    let demo_sb = [
+        ScrapbookItemInfo {
+            id: "sb_1",
+            title: "Web Review Server Statistics",
+            url: "http://webreview.com/stats",
+            timestamp: "2026-11-06",
+            is_folder: false,
+            selected: false,
+        },
+        ScrapbookItemInfo {
+            id: "sb_2",
+            title: "Internet Explorer Macintosh Edition ...",
+            url: "http://www.microsoft.com/mac/ie",
+            timestamp: "2026-11-06",
+            is_folder: false,
+            selected: false,
+        },
+        ScrapbookItemInfo {
+            id: "sb_3",
+            title: "O'Reilly Network -- Developers' Hub",
+            url: "http://www.oreillynet.com/",
+            timestamp: "2026-11-06",
+            is_folder: false,
+            selected: false,
+        },
+    ];
+    let demo_favs = [
+        NavEntryInfo {
+            title: "Web Gallery",
+            url: "https://www.apple.com/",
+        },
+        NavEntryInfo {
+            title: "Office for Macintosh",
+            url: "https://www.microsoft.com/mac",
+        },
+        NavEntryInfo {
+            title: "Products for Mac",
+            url: "https://www.oreillynet.com/",
+        },
+        NavEntryInfo {
+            title: "Microsoft Internet",
+            url: "https://www.msn.com/",
+        },
+    ];
     let html = chrome::render(&ChromeState {
         url: &url_text,
         focused: false,
@@ -7554,17 +7685,17 @@ fn render_to_png(
         theme,
         supervision: None,
         telemetry: None,
-        toolbar_collapsed: false,
-        explorer_tab: None,
+        toolbar_collapsed,
+        explorer_tab,
         page_holder: PageHolderInfo {
             has_doc: false,
-            title: "",
-            url: "",
-            links_mode: false,
-            links: &[],
+            title: &title,
+            url: &url_text,
+            links_mode,
+            links: &demo_links,
         },
-        scrapbook_items: &[],
-        favorites: &[],
+        scrapbook_items: &demo_sb,
+        favorites: &demo_favs,
         history_entries: &[],
     });
     let mut chrome_doc = HtmlDocument::from_html(
@@ -7578,8 +7709,18 @@ fn render_to_png(
 
     let mut renderer = VelloImageRenderer::new(width, height);
     let mut buffer: Vec<u8> = Vec::new();
-    let chrome_h = (CHROME_HEIGHT * scale) as u32;
-    let rail_w = (EXPLORER_RAIL_WIDTH * scale) as u32;
+    let chrome_h = if toolbar_collapsed {
+        0
+    } else {
+        (CHROME_HEIGHT * scale) as u32
+    };
+    let rail_w = ((EXPLORER_RAIL_WIDTH
+        + if explorer_tab.is_some() {
+            EXPLORER_DRAWER_WIDTH
+        } else {
+            0.0
+        })
+        * scale) as u32;
     renderer.render_to_vec(
         |painter| {
             blitz_paint::paint_scene(
