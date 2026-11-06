@@ -1,0 +1,80 @@
+Walkaway browser tab geometry — third-party notices
+
+1. compact-tab-strip / maceip/liquid-tabs
+
+Source read from /Users/mac/tab-strip-port at commit
+f23ba1819f7b3a3c4587aebb75e7adde59dbad58.
+https://github.com/maceip/liquid-tabs
+
+Files adapted into src/gooey_tabs.rs:
+  swift/Sources/CompactTabStrip/TabStripGeometry.swift (resting width policy)
+  web/src/geometry.ts (exact damped spring solution)
+
+The Rust adaptation preserves the native width tokens and spring parameters.
+It adds curved classic-tab shoulders, bounded overflow, and CSS path output
+for Blitz. It does not port drag reorder, tear-off, or glass refraction.
+
+MIT License
+
+Copyright (c) 2026 compact-tab-strip contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+2. Local liquid-effect-animation-main GooeyNav snapshot
+
+Source read from:
+  /Users/mac/liquid-effect-animation-main/src/components/ui/gooey-nav.tsx
+SHA-256:
+  e50081d89b7db841a1227aea06eb40ab3a5da224f8462ab86217721d5c737c18
+
+The local enclosing package names
+https://github.com/StarKnightt/liquid-effect-animation in its metadata. This
+snapshot has no Git metadata and the exact file was not independently
+verified upstream; provenance here is explicitly the local MIT-licensed file,
+not a claim that a particular upstream release contains it.
+
+Adapted into src/gooey_tabs.rs: the finite-input guard, 0.22 neck-break ratio,
+two quadratic concave neck curves, and selected-neighbor seam opening policy.
+The Rust adaptation scales the nominal 100-unit neck height directly to CSS
+pixels, uses the small-size 16px separation token, drives geometry from the
+native tab-strip spring above, and paints CSS paths instead of React/SVG.
+
+The following notice is reproduced from the enclosing local LICENSE:
+
+MIT License
+
+Copyright (c) 2026
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

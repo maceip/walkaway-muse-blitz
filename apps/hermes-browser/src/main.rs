@@ -2,7 +2,7 @@
 //!
 //! Surfaces sharing one window and one wgpu device:
 //!
-//!   chrome  (88px)   tab strip + nav row, rendered by Blitz
+//!   chrome           Netscape-style tools + gooey tabs, rendered by Blitz
 //!   page             the document, rendered by Blitz at a vertical offset
 //!   Hermes           AOT-compiled page logic, one runtime per document
 //!
@@ -17,7 +17,10 @@
 mod browser;
 mod chrome;
 mod control;
+mod debugger;
+mod debugger_ui;
 mod dom_ffi;
+mod gooey_tabs;
 mod observe;
 mod page_endpoint;
 mod recall;
@@ -29,11 +32,11 @@ use blitz_dom::{DocumentConfig, LocalName, Namespace, NodeData, Point, QualName}
 use blitz_html::HtmlDocument;
 use blitz_traits::node_id::NodeId;
 use blitz_traits::shell::{ColorScheme, Viewport};
-use markup5ever::local_name;
 use browser::{Browser, SharedProvider};
 use chrome::{CHROME_HEIGHT, ChromeState, SupervisionInfo, TabInfo, Theme};
 use control::{ControlHub, Role};
 use dom_ffi::BlitzHostContext;
+use markup5ever::local_name;
 use page_endpoint::PageCommand;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -511,6 +514,10 @@ struct BrowserApp {
     next_tab_id: u64,
     active: usize,
     menu_open: bool,
+    debugger_ui: debugger_ui::DebuggerUi,
+    tab_animation: gooey_tabs::TabAnimation,
+    animation_tick: Instant,
+    reduced_motion: bool,
     provider: SharedProvider,
     proxy: EventLoopProxy<UserEvent>,
     net_dirty: Arc<AtomicBool>,
@@ -566,6 +573,10 @@ impl BrowserApp {
             next_tab_id: 2,
             active: 0,
             menu_open: false,
+            debugger_ui: debugger_ui::DebuggerUi::new(),
+            tab_animation: gooey_tabs::TabAnimation::new(0),
+            animation_tick: Instant::now(),
+            reduced_motion: std::env::args().any(|a| a == "--reduced-motion"),
             provider,
             proxy,
             net_dirty,
@@ -605,7 +616,7 @@ impl BrowserApp {
     fn create_start_tab(&mut self) -> Tab {
         let id = TabId(self.next_tab_id);
         self.next_tab_id = self.next_tab_id.wrapping_add(1);
-        Tab::start_page(id, page_viewport(self.size, self.scale, self.theme))
+        Tab::start_page(id, self.page_viewport())
     }
 
     fn observe_active(&mut self) -> observe::PageSnapshot {
@@ -614,7 +625,7 @@ impl BrowserApp {
     }
 
     fn observe_tab(&mut self, tab_id: TabId) -> Option<observe::PageSnapshot> {
-        let viewport = page_viewport(self.size, self.scale, self.theme);
+        let viewport = self.page_viewport();
         let (width, height) = viewport.window_size;
         let scale = viewport.scale_f64() as f32;
         let tab = self
@@ -1109,6 +1120,7 @@ impl BrowserApp {
         let tab_id = tab.canonical.id;
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
+        self.tab_animation.snap(self.active);
         let session_id = format!("s_{}", self.next_session_id);
         self.next_session_id = self.next_session_id.wrapping_add(1);
         self.control = Some(ControlSession {
@@ -1442,7 +1454,8 @@ impl BrowserApp {
                 }
             }
             "fill_form" => {
-                let Some(PageCommand::FillForm { fields }) = PageCommand::from_operation(&operation)
+                let Some(PageCommand::FillForm { fields }) =
+                    PageCommand::from_operation(&operation)
                 else {
                     self.refused(conn_id, frame, "internal");
                     return;
@@ -1573,14 +1586,7 @@ impl BrowserApp {
             if let Some(session) = self.control.as_mut() {
                 session.pending = Some(pending);
             }
-            let _ = self.decide(
-                &pid_copy,
-                &fp_copy,
-                gen_copy,
-                true,
-                "policy",
-                "commit_gate",
-            );
+            let _ = self.decide(&pid_copy, &fp_copy, gen_copy, true, "policy", "commit_gate");
             return;
         }
         self.session_event(
@@ -1906,6 +1912,10 @@ impl BrowserApp {
     fn activate_tab(&mut self, tab_id: TabId) {
         if let Some(index) = self.tabs.iter().position(|t| t.canonical.id == tab_id) {
             self.active = index;
+            self.tab_animation.snap(index);
+            let viewport = self.page_viewport();
+            self.tabs[index].instance.page.doc_mut().set_viewport(viewport);
+            self.tabs[index].instance.page.resolve();
         }
     }
 
@@ -2166,12 +2176,14 @@ impl BrowserApp {
                     json!({"url": action_url.to_string()}),
                 );
                 let provider = self.provider.clone();
-                let viewport = page_viewport(self.size, self.scale, self.theme);
+                let viewport = self.page_viewport();
                 let theme = self.theme;
                 match browser::submit_form(&provider, &action_url, &method, &entries) {
                     Ok((final_url, html)) => {
                         let tab = self.tab_mut();
-                        tab.canonical.browser.commit(final_url.clone(), html.clone());
+                        tab.canonical
+                            .browser
+                            .commit(final_url.clone(), html.clone());
                         tab.replace_page(Page::load(
                             &html,
                             Some(final_url.clone()),
@@ -2503,6 +2515,10 @@ impl BrowserApp {
             })
             .collect();
 
+        let debugger_html = self.debugger_ui.open.then(|| {
+            self.debugger_ui
+                .render(chrome::debugger_height(self.size.1 as f64 / self.scale))
+        });
         let url = self.tab().canonical.browser.display_url();
         let supervision = self.supervision_info();
         let html = chrome::render(&ChromeState {
@@ -2513,6 +2529,9 @@ impl BrowserApp {
             loading: self.tab().canonical.browser.loading,
             tabs: &infos,
             menu_open: self.menu_open,
+            debugger_html: debugger_html.as_deref(),
+            tab_animation: (!self.reduced_motion).then_some(&self.tab_animation),
+            surface_width: self.size.0 as f64 / self.scale,
             secure: url.starts_with("https://"),
             surface_height: self.size.1 as f64 / self.scale,
             theme: self.theme,
@@ -2531,6 +2550,32 @@ impl BrowserApp {
         self.chrome_doc = doc;
     }
 
+    fn page_viewport(&self) -> Viewport {
+        let mut size = self.size;
+        if self.debugger_ui.open {
+            let pane = chrome::debugger_height(size.1 as f64 / self.scale);
+            size.1 = size.1.saturating_sub((pane * self.scale) as u32);
+        }
+        page_viewport(size, self.scale, self.theme)
+    }
+
+    fn toggle_debugger(&mut self) {
+        self.debugger_ui.toggle();
+        let viewport = self.page_viewport();
+        for tab in &mut self.tabs {
+            tab.instance.page.doc_mut().set_viewport(viewport.clone());
+            tab.instance.page.resolve();
+        }
+        self.menu_open = false;
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn debugger_contains(&self, y: f32) -> bool {
+        let height = self.size.1 as f64 / self.scale;
+        self.debugger_ui.open && y as f64 >= height - chrome::debugger_height(height)
+    }
+
     fn request_redraw(&self) {
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -2541,6 +2586,7 @@ impl BrowserApp {
         let tab = self.create_start_tab();
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
+        self.tab_animation.snap(self.active);
         self.menu_open = false;
         self.sync_chrome();
         self.request_redraw();
@@ -2585,6 +2631,7 @@ impl BrowserApp {
         } else if index < self.active {
             self.active -= 1;
         }
+        self.tab_animation.snap(self.active);
         self.menu_open = false;
         self.sync_chrome();
         self.request_redraw();
@@ -2593,6 +2640,19 @@ impl BrowserApp {
     fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
             self.active = index;
+            let viewport = self.page_viewport();
+            self.tabs[index]
+                .instance
+                .page
+                .doc_mut()
+                .set_viewport(viewport);
+            self.tabs[index].instance.page.resolve();
+            if self.reduced_motion {
+                self.tab_animation.snap(index);
+            } else {
+                self.tab_animation.select(index);
+                self.animation_tick = Instant::now();
+            }
             self.menu_open = false;
             self.sync_chrome();
             self.request_redraw();
@@ -2611,7 +2671,7 @@ impl BrowserApp {
         };
 
         if url.scheme() == "muse" {
-            let viewport = page_viewport(self.size, self.scale, self.theme);
+            let viewport = self.page_viewport();
             let theme = self.theme;
             let tab = self.tab_mut();
             tab.canonical.browser.commit(url, START_PAGE.to_string());
@@ -2683,7 +2743,7 @@ impl BrowserApp {
         } else {
             (Some(url.clone()), Some(self.provider.clone()))
         };
-        let viewport = page_viewport(self.size, self.scale, self.theme);
+        let viewport = self.page_viewport();
         let theme = self.theme;
         let tab = self.tab_mut();
         tab.replace_page(Page::load(&html, base, provider, viewport, theme));
@@ -2700,6 +2760,34 @@ impl BrowserApp {
         };
         let target = dom_ffi::bubble_target(&self.chrome_doc, hit.node_id);
         let id_is = |id: &str| self.chrome_doc.get_element_by_id(id) == Some(target);
+
+        if id_is("btn-debugger") || id_is("menu-debugger") || id_is("dbg-close") {
+            self.toggle_debugger();
+            return;
+        }
+        if self.debugger_contains(y) {
+            let mut current = Some(hit.node_id);
+            let mut action = None;
+            while let Some(node_id) = current {
+                let Some(node) = self.chrome_doc.get_node(node_id) else {
+                    break;
+                };
+                if let Some(id) = node.attr(LocalName::from("id")) {
+                    if id.starts_with("dbg-") {
+                        action = Some(id.to_string());
+                        break;
+                    }
+                }
+                current = node.parent;
+            }
+            if let Some(action) = action {
+                self.debugger_ui.action(&action);
+                self.sync_chrome();
+                self.request_redraw();
+            }
+            return;
+        }
+        self.debugger_ui.focus = None;
 
         // Supervision bar (session tab only). These are host decisions made
         // through the same code path as a socket `decision`.
@@ -2799,6 +2887,10 @@ impl BrowserApp {
             }
             return;
         }
+        if id_is("btn-home") {
+            self.navigate(START_URL);
+            return;
+        }
         if id_is("btn-reload") {
             self.reload();
             return;
@@ -2880,6 +2972,59 @@ impl BrowserApp {
     }
 
     fn handle_key(&mut self, event: &KeyEvent) {
+        if event.logical_key == Key::Named(NamedKey::F12)
+            || (self.modifiers.super_key()
+                && self.modifiers.alt_key()
+                && matches!(&event.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("j")))
+        {
+            self.toggle_debugger();
+            return;
+        }
+        if self.debugger_ui.open && self.debugger_ui.focus.is_some() {
+            let cmd = self.modifiers.super_key();
+            match &event.logical_key {
+                Key::Character(c) if cmd && c.eq_ignore_ascii_case("v") => {
+                    match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
+                        Ok(text) => self.debugger_ui.edit(&text),
+                        Err(error) => self.debugger_ui.error = Some(format!("Clipboard: {error}")),
+                    }
+                }
+                Key::Character(c) if cmd && c.eq_ignore_ascii_case("c") => {
+                    let text = if self.debugger_ui.focus == Some(debugger_ui::Focus::Source) {
+                        self.debugger_ui.source.clone()
+                    } else {
+                        self.debugger_ui.expression.clone()
+                    };
+                    if let Err(error) =
+                        arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text))
+                    {
+                        self.debugger_ui.error = Some(format!("Clipboard: {error}"));
+                    }
+                }
+                Key::Character(c) if cmd && c.eq_ignore_ascii_case("a") => {
+                    self.debugger_ui.select_all()
+                }
+                Key::Named(NamedKey::Escape) => self.debugger_ui.focus = None,
+                Key::Named(NamedKey::Backspace) => self.debugger_ui.backspace(),
+                Key::Named(NamedKey::Enter)
+                    if self.debugger_ui.focus == Some(debugger_ui::Focus::Expression) =>
+                {
+                    self.debugger_ui.action("dbg-eval");
+                }
+                Key::Named(NamedKey::Enter) => self.debugger_ui.edit("\n"),
+                Key::Named(NamedKey::Tab) => self.debugger_ui.edit("  "),
+                _ if !cmd => {
+                    if let Some(text) = &event.text {
+                        let text: String = text.chars().filter(|c| !c.is_control()).collect();
+                        self.debugger_ui.edit(&text);
+                    }
+                }
+                _ => {}
+            }
+            self.sync_chrome();
+            self.request_redraw();
+            return;
+        }
         if self.session_blocks_input() {
             return;
         }
@@ -2967,6 +3112,7 @@ impl BrowserApp {
         url: Url,
         result: Result<String, String>,
     ) {
+        let viewport = self.page_viewport();
         let Some(target) = self.tabs.iter_mut().find(|tab| tab.canonical.id == tab_id) else {
             return;
         };
@@ -2995,7 +3141,7 @@ impl BrowserApp {
                     &html,
                     Some(url.clone()),
                     Some(self.provider.clone()),
-                    page_viewport(self.size, self.scale, self.theme),
+                    viewport.clone(),
                     self.theme,
                 ));
                 target.canonical.browser.error = None;
@@ -3004,13 +3150,7 @@ impl BrowserApp {
             Err(e) => {
                 target.canonical.browser.fail(e.clone());
                 let html = error_page(&e);
-                target.replace_page(Page::load(
-                    &html,
-                    None,
-                    None,
-                    page_viewport(self.size, self.scale, self.theme),
-                    self.theme,
-                ));
+                target.replace_page(Page::load(&html, None, None, viewport.clone(), self.theme));
                 target.canonical.title = "Error".to_string();
             }
         }
@@ -3069,7 +3209,7 @@ impl BrowserApp {
         self.size = (width.max(1), height.max(1));
         self.renderer.set_size(self.size.0, self.size.1);
 
-        let viewport = page_viewport(self.size, self.scale, self.theme);
+        let viewport = self.page_viewport();
         let tab = self.tab_mut();
         tab.instance.page.doc_mut().set_viewport(viewport);
         tab.instance.page.resolve();
@@ -3108,6 +3248,28 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        let dt = now.duration_since(self.animation_tick).as_secs_f64();
+        let was_moving = self.tab_animation.is_animating();
+        let moving = self.tab_animation.tick(dt.min(0.05));
+        self.animation_tick = now;
+        let debugger_changed = self.debugger_ui.poll();
+        if was_moving || debugger_changed {
+            self.sync_chrome();
+            self.request_redraw();
+        }
+        if moving || self.debugger_ui.busy() {
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                now + Duration::from_millis(16),
+            ));
+        } else {
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+        }
+        if let Some(limit) = self.exit_after {
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                (self.started + limit).min(now + Duration::from_millis(16)),
+            ));
+        }
         if self.net_dirty.load(Ordering::SeqCst) {
             self.net_dirty.store(false, Ordering::SeqCst);
             self.tab_mut().instance.page.resolve();
@@ -3133,7 +3295,7 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
             || std::env::var("HERMES_HIDDEN_WINDOW").ok().as_deref() == Some("1")
             || (has_control_socket && !explicit_show);
         let attrs = Window::default_attributes()
-            .with_title("Muse Blitz — Supervised Agent Browser")
+            .with_title("Walkaway — Navigator")
             .with_visible(!hidden)
             .with_active(false)
             .with_inner_size(LogicalSize::new(WIDTH, HEIGHT));
@@ -3155,7 +3317,7 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
             .resume(handle, self.size.0, self.size.1, || {});
         assert!(self.renderer.complete_resume(), "wgpu surface init failed");
 
-        let viewport = page_viewport(self.size, self.scale, self.theme);
+        let viewport = self.page_viewport();
         let tab = self.tab_mut();
         tab.instance.page.doc_mut().set_viewport(viewport);
         tab.instance.page.resolve();
@@ -3196,7 +3358,7 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
                     winit::window::Theme::Light => Theme::Light,
                 };
                 // Pages follow the same preference via prefers-color-scheme.
-                let viewport = page_viewport(self.size, self.scale, self.theme);
+                let viewport = self.page_viewport();
                 let tab = self.tab_mut();
                 tab.instance.page.doc_mut().set_viewport(viewport);
                 tab.instance.page.resolve();
@@ -3209,7 +3371,9 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
                     (position.x / self.scale) as f32,
                     (position.y / self.scale) as f32,
                 );
-                if self.cursor.1 < CHROME_HEIGHT as f32
+                if (self.cursor.1 < CHROME_HEIGHT as f32
+                    || self.debugger_contains(self.cursor.1)
+                    || self.menu_open)
                     && self.chrome_doc.set_hover_to(self.cursor.0, self.cursor.1)
                 {
                     self.chrome_doc.resolve(0.0);
@@ -3233,7 +3397,16 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
                     MouseScrollDelta::LineDelta(_, y) => -(y as f64) * 48.0,
                     MouseScrollDelta::PixelDelta(p) => -(p.y / self.scale),
                 };
-                self.enqueue_input(InputProvenance::PhysicalUser, InputAction::Scroll { dy });
+                if self.debugger_contains(self.cursor.1) {
+                    if let Some(hit) = self.chrome_doc.hit(self.cursor.0, self.cursor.1) {
+                        self.chrome_doc
+                            .scroll_node_by(hit.node_id, 0.0, -dy, |_| {});
+                        self.chrome_doc.resolve(0.0);
+                        self.request_redraw();
+                    }
+                } else {
+                    self.enqueue_input(InputProvenance::PhysicalUser, InputAction::Scroll { dy });
+                }
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
@@ -3365,14 +3538,7 @@ fn measure_process_rss_mb() -> f64 {
             suspend_count: 0,
         };
         let mut count = MACH_TASK_BASIC_INFO_COUNT;
-        let kr = unsafe {
-            task_info(
-                mach_task_self_,
-                MACH_TASK_BASIC_INFO,
-                &mut info,
-                &mut count,
-            )
-        };
+        let kr = unsafe { task_info(mach_task_self_, MACH_TASK_BASIC_INFO, &mut info, &mut count) };
         if kr == 0 && info.resident_size > 0 {
             return (info.resident_size as f64) / (1024.0 * 1024.0);
         }
@@ -3487,20 +3653,11 @@ fn apply_dom_field_action(
                 if let (Some(challenge), Some(assert_id)) = (challenge_val, assertion_node) {
                     if !challenge.is_empty() {
                         if let Ok(bundle) = vault::sign_webauthn_assertion(
-                            origin,
-                            username,
-                            &rp_id_val,
-                            &challenge,
-                            true,
-                            true,
+                            origin, username, &rp_id_val, &challenge, true, true,
                         ) {
                             if let Ok(bundle_json) = serde_json::to_string(&bundle) {
                                 let mut mutator = doc.mutate();
-                                mutator.set_attribute(
-                                    assert_id,
-                                    qual_name("value"),
-                                    &bundle_json,
-                                );
+                                mutator.set_attribute(assert_id, qual_name("value"), &bundle_json);
                             }
                         }
                     }
@@ -3594,7 +3751,10 @@ fn collect_form_submission(
         .get_node(root_id)
         .and_then(|n| n.element_data())
         .map(|d| {
-            let action = d.attr(local_name!("action")).unwrap_or_default().to_string();
+            let action = d
+                .attr(local_name!("action"))
+                .unwrap_or_default()
+                .to_string();
             let method = d
                 .attr(local_name!("method"))
                 .unwrap_or("GET")
@@ -3726,6 +3886,9 @@ fn parse_exit_after() -> Option<Duration> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--debuggertest") {
+        std::process::exit(debugger::selftest());
+    }
     if args.iter().any(|a| a == "--selftest") {
         std::process::exit(selftest());
     }
@@ -3806,6 +3969,29 @@ fn main() {
         .and_then(|p| args.get(p + 1))
         .cloned();
     let mut app = BrowserApp::new(proxy.clone(), net_dirty, provider);
+    if args.iter().any(|a| a == "--debugger") {
+        app.toggle_debugger();
+    }
+    if let Some(path) = args
+        .iter()
+        .position(|a| a == "--debug-script")
+        .and_then(|p| args.get(p + 1))
+    {
+        match std::fs::read_to_string(path) {
+            Ok(source) if source.len() <= 64 * 1024 => {
+                app.debugger_ui.source_changed(source);
+                app.debugger_ui.breakpoints.clear();
+                if !app.debugger_ui.open {
+                    app.toggle_debugger();
+                }
+            }
+            Ok(_) => {
+                app.debugger_ui.error = Some("Script exceeds the 64 KiB scratchpad limit.".into())
+            }
+            Err(error) => app.debugger_ui.error = Some(format!("Cannot load script: {error}")),
+        }
+        app.sync_chrome();
+    }
     if let Some(socket_path) = control_socket {
         let read_token = |flag: &str, env: &str| -> Option<String> {
             if let Some(path) = args
@@ -3983,6 +4169,58 @@ fn uitest() -> i32 {
         failures += 1;
     }
 
+    let full_height = app.page_viewport().window_size.1;
+    if let Some((x, y)) = find_click(&app, "btn-debugger") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(app.debugger_ui.open, "debugger toolbar opens the real pane") {
+        failures += 1;
+    }
+    if !check(
+        app.page_viewport().window_size.1 < full_height,
+        "debugger reserves page viewport space",
+    ) {
+        failures += 1;
+    }
+    if !check(
+        find_click(&app, "dbg-run").is_some(),
+        "debugger Run control is hit-testable",
+    ) {
+        failures += 1;
+    }
+    if let Some((x, y)) = find_click(&app, "dbg-source") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.debugger_ui.focus == Some(debugger_ui::Focus::Source),
+        "source editor receives native input focus",
+    ) {
+        failures += 1;
+    }
+    app.debugger_ui.source = debugger_ui::EXAMPLE.into();
+    app.debugger_ui.action("dbg-run");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.debugger_ui.snapshot["state"] != "paused" {
+        app.debugger_ui.poll();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if !check(
+        app.debugger_ui.snapshot["state"] == "paused",
+        "debugger UI reaches a real Hermes breakpoint",
+    ) {
+        failures += 1;
+    }
+    app.debugger_ui.action("dbg-stop");
+    if let Some((x, y)) = find_click(&app, "dbg-close") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        !app.debugger_ui.open && app.page_viewport().window_size.1 == full_height,
+        "closing debugger restores page viewport",
+    ) {
+        failures += 1;
+    }
+
     if failures == 0 {
         println!("UITEST PASS");
         0
@@ -3995,7 +4233,7 @@ fn uitest() -> i32 {
 /// Locate a clickable point for a chrome element id via real hit-testing.
 fn find_click(app: &BrowserApp, id: &str) -> Option<(f32, f32)> {
     let target = app.chrome_doc.get_element_by_id(id)?;
-    for y in (0..(CHROME_HEIGHT as i32 + 300)).step_by(2) {
+    for y in (0..(app.size.1 as f64 / app.scale) as i32).step_by(2) {
         for x in (0..WIDTH as i32).step_by(2) {
             if let Some(hit) = app.chrome_doc.hit(x as f32, y as f32) {
                 if dom_ffi::bubble_target(&app.chrome_doc, hit.node_id) == target {
@@ -4907,9 +5145,17 @@ fn supervisortest() -> i32 {
     app.xray_enabled = true;
     app.sync_chrome();
     check(
-        app.chrome_doc.get_element_by_id("xray-telemetry-bar").is_some()
-            && app.chrome_doc.get_element_by_id("xray-vault-shield").is_some()
-            && app.chrome_doc.get_element_by_id("xray-freeze-shield").is_some(),
+        app.chrome_doc
+            .get_element_by_id("xray-telemetry-bar")
+            .is_some()
+            && app
+                .chrome_doc
+                .get_element_by_id("xray-vault-shield")
+                .is_some()
+            && app
+                .chrome_doc
+                .get_element_by_id("xray-freeze-shield")
+                .is_some(),
         "Semantic X-Ray renders telemetry HUD, blind vault shield, and freeze shield in chrome_doc",
     );
 
@@ -5243,6 +5489,9 @@ fn selftest() -> i32 {
             loading: false,
             tabs: &tabs,
             menu_open,
+            debugger_html: None,
+            tab_animation: None,
+            surface_width: WIDTH as f64,
             secure: true,
             surface_height: HEIGHT as f64,
             theme: Theme::Light,
@@ -5262,6 +5511,8 @@ fn selftest() -> i32 {
             "btn-back".to_string(),
             "btn-forward".to_string(),
             "btn-reload".to_string(),
+            "btn-home".to_string(),
+            "btn-debugger".to_string(),
             "btn-menu".to_string(),
             "address".to_string(),
             "btn-newtab".to_string(),
@@ -5270,8 +5521,19 @@ fn selftest() -> i32 {
             "tab-1".to_string(),
         ];
         if menu_open {
-            ids.push("menu-home".into());
-            ids.push("menu-close-tab".into());
+            // The top-left dropdown covers the navigation tools underneath it.
+            ids.retain(|id| !matches!(id.as_str(), "btn-back" | "btn-forward" | "btn-reload"));
+            ids.extend(
+                [
+                    "menu-home",
+                    "menu-reload",
+                    "menu-back",
+                    "menu-forward",
+                    "menu-debugger",
+                    "menu-close-tab",
+                ]
+                .map(str::to_string),
+            );
         }
 
         for id in ids {
@@ -5434,6 +5696,21 @@ fn render_to_png(
         }
     }
 
+    let mut debugger_ui = debugger_ui::DebuggerUi::new();
+    let show_debugger = std::env::args().any(|a| a == "--debugger");
+    let debugger_html = if show_debugger {
+        debugger_ui.open = true;
+        let pane_height = chrome::debugger_height(height as f64);
+        page.doc_mut().set_viewport(page_viewport(
+            (width, height.saturating_sub(pane_height as u32)),
+            scale,
+            theme,
+        ));
+        page.resolve();
+        Some(debugger_ui.render(pane_height))
+    } else {
+        None
+    };
     let url_text = browser.display_url();
     let tabs = [TabInfo {
         title: &title,
@@ -5447,6 +5724,9 @@ fn render_to_png(
         loading: false,
         tabs: &tabs,
         menu_open: menu,
+        debugger_html: debugger_html.as_deref(),
+        tab_animation: None,
+        surface_width: width as f64,
         secure: url_text.starts_with("https://"),
         surface_height: height as f64,
         theme,
@@ -5813,7 +6093,11 @@ fn hurdletest() -> i32 {
                "policy": {"decision": "human_per_action"}}),
     );
     let session_id = find_frame(&out, "session.opened")
-        .and_then(|v| v.get("session_id").and_then(Value::as_str).map(str::to_string))
+        .and_then(|v| {
+            v.get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .unwrap_or_default();
 
     let parsed_login = Url::parse(&login_url).expect("login url");
@@ -5964,10 +6248,9 @@ fn hurdletest() -> i32 {
     );
 
     let post_body = captured_post_body.lock().expect("lock").clone();
-    let decoded_pairs: HashMap<String, String> =
-        url::form_urlencoded::parse(post_body.as_bytes())
-            .into_owned()
-            .collect();
+    let decoded_pairs: HashMap<String, String> = url::form_urlencoded::parse(post_body.as_bytes())
+        .into_owned()
+        .collect();
     check(
         decoded_pairs.get("username").map(String::as_str) == Some("ada@lovelace.org")
             && decoded_pairs.get("password").map(String::as_str) == Some(acct.secret.as_str())

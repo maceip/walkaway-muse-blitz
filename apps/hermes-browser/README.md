@@ -5,10 +5,12 @@ A browser assembled from existing engines, following the composition described i
 (compiled ahead of time to C), **Blitz** (Stylo + Taffy) owns HTML/CSS and layout,
 and **Vello on wgpu** rasterises. No browser engine was written from scratch.
 
-It has a working toolbar — tabs, back, forward, reload, address bar, menu —
-modelled on the **Meta Muse browser** in both its mobile shell and its docked
-desktop panel: tab strip above, navigation row below, filled address pill,
-neutral greys, light and dark palettes. Every control is wired to real state:
+It has a working **Netscape 6 Classic-inspired** chrome: blue-grey beveled
+navigation tools, a recessed Location field, compact menu controls and animated
+gooey tabs adapted from the existing local MIT-licensed tab implementations.
+The integrated Hermes JavaScript debugger runs explicitly loaded local scripts
+in an isolated interpreter, with real breakpoints, stepping and frame evaluation.
+Every control is wired to real state:
 navigation fetches over the network, history is a real stack, tabs are real
 documents, and disabled buttons are disabled because there is genuinely nowhere
 to go.
@@ -27,10 +29,11 @@ winit ──input──> chrome hit-test ──> back / forward / reload / addre
 
 ## Browser chrome
 
-Structure and palette are sampled from Meta Muse browser screenshots, not
-invented. Light: strip `#E4E4E4`, active tab `#FAFAFA`, nav `#FAFAFA`, pill
-`#F3F3F3`, ink `#1C1C1E`. Dark: strip `#1C1C1E`, nav `#2C2C2E`, pill `#3A3A3C`,
-ink `#F2F2F7`.
+The browser keeps its existing Blitz-rendered chrome and native event routing.
+The Netscape-inspired skin does not embed another browser or change the page
+engine. Gooey neck geometry and spring animation are computed in Rust; use
+`--reduced-motion` for settled tabs without animation. Source provenance and
+license notices are in `THIRD_PARTY_NOTICES.txt`.
 
 | Control | Behaviour |
 |---|---|
@@ -44,7 +47,8 @@ ink `#F2F2F7`.
 | Reload | Re-fetches the current URL and replaces the history entry |
 | Address bar | Click or `⌘L` to focus, type, `Enter` to navigate, `Esc` to revert |
 | Padlock | Drawn from a shackle and body; shown only for `https:` |
-| Menu (`≡`) | Home, Reload, Back, Forward, Close tab — each performs the real action |
+| Browser menu | Home, Reload, Back, Forward, JavaScript debugger, Close tab — each performs the real action |
+| Debugger | Toolbar/menu, `F12` or `⌘⌥J` toggles the isolated local script debugger |
 | URL handling | Absolute URLs, bare hosts (`example.com` → `https://`), anything else becomes a DuckDuckGo search |
 | Links | Clicking an `<a href>` navigates, resolving relative URLs against the page |
 | Scrolling | Mouse wheel scrolls the document |
@@ -55,12 +59,42 @@ so the window stays responsive while a page loads. Subresources (stylesheets,
 images, fonts) load through `blitz-net` on a Tokio runtime and repaint as they
 arrive.
 
+## JavaScript debugger
+
+Open **JS Debugger** in the toolbar or menu, press `F12` or `⌘⌥J`, or launch
+with `--debugger`. `--debug-script /absolute/path/script.js` loads a UTF-8 local
+script without executing it. Click the source editor to type or paste (`⌘V`);
+`⌘A` selects the whole input for replacement and `⌘C` copies it. The initial
+example has a real line-2 breakpoint. Click gutter line numbers before Run to
+set or remove breakpoints. Run, Pause, Resume, Step over/in/out and Stop are
+connected to Hermes's debugger API. The pane shows copied stack frames, lexical
+scopes, locals, console output, errors and expression results. Select an
+expression and press Enter or Eval to evaluate it in the top paused frame.
+
+This is a **local JavaScript scratchpad debugger, not webpage DevTools**.
+Static Hermes compiles the trusted page adapter to native C; its AOT frames
+cannot provide interactive bytecode breakpoints or stepping. The scratchpad
+therefore owns a separate interpreter on a worker thread, with no Blitz DOM,
+credential vault, approval channel, filesystem or network bindings. It never
+automatically fetches or executes remote page scripts. Sources and displayed
+values are bounded, and Stop/teardown interrupt runaway execution. Closing the
+pane hides it; Stop ends the script. Debugger space is removed from the page's
+viewport, and pane input never falls through to the page.
+
+```sh
+./target/release/hermes-blitz-browser --debugger
+./target/release/hermes-blitz-browser --debug-script /path/to/example.js
+./target/release/hermes-blitz-browser --debuggertest
+```
+
 ## Status
 
 | Check | Command | Result |
 |---|---|---|
-| Headless end-to-end | `--selftest` | PASS — Hermes mutation, history, URL normalization, every chrome control hit-testable with the menu closed and open |
-| Chrome interactions | `--uitest` | PASS — 11 assertions: new tab, tab switch, close, menu open/close, Home, back gating, address focus |
+| Headless end-to-end | `--selftest` | PASS — Hermes mutation, history, URL normalization, toolbar hit-tests with menu closed and all dropdown actions with menu open |
+| Local JS debugger | `--debuggertest` | PASS — 28 real Hermes assertions for breakpoint/stack/locals, all step modes, eval, isolation, output/errors, pause, restart and interrupt/teardown |
+| Release tests | `cargo test --release` | PASS — 18 tests, including actual debugger backend and native browser suites |
+| Chrome interactions | `--uitest` | PASS — real hit-tests for tabs/navigation, stable identity, debugger opening/focus, viewport reservation, actual Hermes breakpoint and close |
 | Real window + GPU | `--exit-after 4` | Runs, submits frames, exits cleanly |
 | Offscreen render | `--render out.png [--click] [--menu] [--url <url>] [--dark] [--size WxH]` | Renders start page, menu, or a fetched page, in either theme, at any size |
 | Real navigation | `--render out.png --url rust-lang.org` | Fetches, loads 58 subresources, lays out and paints the live site |
@@ -100,7 +134,11 @@ cargo build --release
 ```
 
 `build.rs` reads `HERMES_SRC_DIR` / `HERMES_BUILD_DIR` and defaults to
-`~/.cache/hermes-static_h/{src,build}`.
+`~/.cache/hermes-static_h/src` and
+`~/.cache/hermes-static_h/build-walkaway-debugger`. The latter is a separate
+**debugger-enabled** build cache; it leaves older debugger-OFF demo builds
+untouched. Packaging uses this same dylib and validates the debugger in the
+mounted DMG.
 
 ## Run
 

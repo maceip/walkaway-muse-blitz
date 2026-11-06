@@ -4,6 +4,52 @@ A test belongs here only when the exact command, real components, assertion,
 and last observed result are known. Passing a unit test never proves a demo
 hop works across devices.
 
+## Browser chrome / debugger verification — 2026-11-06
+
+- Owner: ZCode, `feat/netscape-gooey-debugger`.
+- Build command: `cargo build --release --manifest-path apps/hermes-browser/Cargo.toml`.
+  Uses the debugger-enabled Static Hermes cache at
+  `~/.cache/hermes-static_h/build-walkaway-debugger`.
+- Real-component checks: `apps/hermes-browser/target/release/hermes-blitz-browser`
+  with `--selftest`, `--uitest`, `--runtimetest`, `--observetest`,
+  `--supervisortest`, `--debuggertest`;
+  `cargo test --release --manifest-path apps/hermes-browser/Cargo.toml` for
+  geometry, native rendering and backend assertions.
+- Assertions: native chrome hit-testing and navigation remain real; gooey
+  neck/spring geometry is finite, converges and preserves tab selection;
+  debugger toolbar reserves viewport space and opens the real Hermes pane;
+  interpreted runtime hits real line breakpoints, exposes stack/locals, steps,
+  evaluates expressions, captures output/errors and interrupts safely.
+- Scope: local scratchpad only, not AOT page debugging or Android/glasses
+  verification. No mocked debugger or substituted success state is accepted.
+- Last observed: **PASS 2026-11-06**. Debugger-enabled CMake/Ninja and browser
+  release build pass; all six release CLI suites pass; debugger reports **28
+  real backend assertions**; Cargo reports **18 passed / 0 failed** (2.47s).
+  Gooey geometry separately passed 8/8, combined chrome/geometry 13/13.
+- Rendering command: release binary `--render /tmp/walkaway-netscape.png`,
+  `--render /tmp/walkaway-debugger.png --debugger`, and
+  `--render /tmp/walkaway-dock.png --dark --menu --size 560x760`.
+  Observed: actual Blitz/Vello output paints curved shoulders, beveled tools,
+  recessed URL and debugger source/output pane. Native UI hit-tests verify
+  editor focus, real breakpoint and viewport restoration. The open dropdown
+  intentionally occludes underlying navigation tools; tests check visible
+  toolbar controls and every dropdown action rather than clicking through it.
+- Packaging command: `./scripts/build-macos-dmg.sh --release --no-notarize
+  --identity 'Developer ID Application: Zunftmax UG (haftungsbeschrankt) (D74F5NNMRQ)'`.
+  Observed: Developer ID / Hardened Runtime signatures verify; mounted-DMG
+  `--selftest`, `--supervisortest`, `--uitest`, `--debuggertest` all pass.
+  New DMG is **not notarized** (explicit local-only build). Existing optional
+  ICNS generation logged a nonfatal failure; packaging and suites succeeded.
+- Final formatting: task-owned Rust files pass `rustfmt --edition 2024
+  --config skip_children=true --check` and edited shell scripts pass `bash -n`.
+  Repository-wide `cargo fmt -- --check` still reports pre-existing formatting
+  in untouched `observe.rs`, `page_endpoint.rs`, `recall.rs`, `vault.rs`; those
+  unrelated files were not reformatted.
+- Desktop automation limitation: Computer Use could list the task-owned native
+  process but could not capture a readable accessibility tree/window. No
+  physical GUI click verification is claimed. Native event-handler hit-tests
+  and actual renderer evidence above passed; no substituted browser was used.
+
 ## Verified
 
 ### T-HERMES-SUITES

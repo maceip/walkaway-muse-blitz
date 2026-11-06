@@ -1,5 +1,5 @@
-//! Build script: drives `shermes`, then compiles the two native translation
-//! units that make up the Hermes side of the browser.
+//! Build script: drives `shermes`, then compiles the native translation units
+//! for the AOT page adapter and the separate interpreted scratchpad debugger.
 //!
 //! Pipeline:
 //!   src/js/dom_runtime.ts --(shermes -typed -emit-c)--> $OUT_DIR/dom_runtime.c
@@ -28,7 +28,23 @@ fn main() {
         .unwrap_or_else(|_| home().join(".cache/hermes-static_h/src"));
     let hermes_build = env::var("HERMES_BUILD_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| home().join(".cache/hermes-static_h/build"));
+        .unwrap_or_else(|_| home().join(".cache/hermes-static_h/build-walkaway-debugger"));
+
+    let cmake_cache = hermes_build.join("CMakeCache.txt");
+    println!("cargo:rerun-if-changed={}", cmake_cache.display());
+    let cache = std::fs::read_to_string(&cmake_cache).unwrap_or_else(|error| {
+        panic!(
+            "Cannot read Hermes configuration {}: {error}. Rebuild with HERMES_BUILD_DIR='{}' bash scripts/build-hermes.sh; the debugger requires HERMES_ENABLE_DEBUGGER=ON.",
+            cmake_cache.display(), hermes_build.display()
+        )
+    });
+    assert!(
+        cache
+            .lines()
+            .any(|line| line.trim() == "HERMES_ENABLE_DEBUGGER:BOOL=ON"),
+        "Hermes at {} was built without HERMES_ENABLE_DEBUGGER=ON. Use the isolated debugger build: HERMES_BUILD_DIR=\"$HOME/.cache/hermes-static_h/build-walkaway-debugger\" bash scripts/build-hermes.sh, then cargo build with the same HERMES_BUILD_DIR (or unset it to use that default). Do not reconfigure a shared running browser's cache.",
+        hermes_build.display()
+    );
 
     assert!(
         hermes_src.join("include/hermes/VM/static_h.h").exists(),
@@ -47,7 +63,20 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", ts_input.display());
     println!("cargo:rerun-if-changed=c_shim/hermes_shim.cpp");
+    println!("cargo:rerun-if-changed=c_shim/debugger.cpp");
     println!("cargo:rerun-if-changed=c_shim/blitz_bridge.h");
+    println!(
+        "cargo:rerun-if-changed={}",
+        hermes_src.join("API/hermes/DebuggerAPI.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        hermes_src.join("API/hermes/hermes.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        hermes_src.join("API/jsi/jsi/hermes-interfaces.h").display()
+    );
     println!("cargo:rerun-if-env-changed=HERMES_SRC_DIR");
     println!("cargo:rerun-if-env-changed=HERMES_BUILD_DIR");
 
@@ -83,11 +112,14 @@ fn main() {
         .flag_if_supported("-Wno-unused-label")
         .compile("dom_runtime_unit");
 
-    // 3. C++ shim.
+    // 3. Native shims share ONE debugger-enabled libhermesvm. The debugger's
+    // interpreted worker never instantiates or attaches to the AOT DOM unit.
     cc::Build::new()
         .cpp(true)
         .std("c++20")
+        .define("HERMES_ENABLE_DEBUGGER", None)
         .file(manifest_dir.join("c_shim/hermes_shim.cpp"))
+        .file(manifest_dir.join("c_shim/debugger.cpp"))
         .include(hermes_src.join("include"))
         .include(hermes_src.join("API"))
         .include(hermes_src.join("API/jsi"))

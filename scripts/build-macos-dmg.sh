@@ -27,7 +27,7 @@ ENTITLEMENTS="${BROWSER_DIR}/Walkaway.entitlements"
 BUILD_ROOT="${REPO_ROOT}/build"
 HERMES_ROOT="${HERMES_ROOT:-${HOME}/.cache/hermes-static_h}"
 HERMES_SRC_DIR="${HERMES_SRC_DIR:-${HERMES_ROOT}/src}"
-HERMES_BUILD_DIR="${HERMES_BUILD_DIR:-${HERMES_ROOT}/build}"
+HERMES_BUILD_DIR="${HERMES_BUILD_DIR:-${HERMES_ROOT}/build-walkaway-debugger}"
 
 BUILD_PROFILE="release"
 DO_NOTARIZE=1
@@ -139,9 +139,9 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Ensure Static Hermes is built, then build apps/hermes-browser
 # ---------------------------------------------------------------------------
-if [[ ! -x "${HERMES_BUILD_DIR}/bin/shermes" || ! -f "${HERMES_BUILD_DIR}/lib/libhermesvm.dylib" ]]; then
+if [[ ! -x "${HERMES_BUILD_DIR}/bin/shermes" || ! -f "${HERMES_BUILD_DIR}/lib/libhermesvm.dylib" ]] || ! grep -q '^HERMES_ENABLE_DEBUGGER:BOOL=ON$' "${HERMES_BUILD_DIR}/CMakeCache.txt"; then
   echo "==> Building Static Hermes toolchain into ${HERMES_ROOT}"
-  HERMES_ROOT="${HERMES_ROOT}" "${BROWSER_DIR}/scripts/build-hermes.sh"
+  HERMES_ROOT="${HERMES_ROOT}" HERMES_SRC_DIR="${HERMES_SRC_DIR}" HERMES_BUILD_DIR="${HERMES_BUILD_DIR}" "${BROWSER_DIR}/scripts/build-hermes.sh"
 fi
 
 echo "==> Building hermes-blitz-browser (${BUILD_PROFILE})"
@@ -171,6 +171,7 @@ mkdir -p \
 cp -f "${BUILT_BIN}" "${STAGE_APP}/Contents/MacOS/Walkaway"
 chmod 755 "${STAGE_APP}/Contents/MacOS/Walkaway"
 ln -s Walkaway "${STAGE_APP}/Contents/MacOS/hermes-blitz-browser"
+cp "${BROWSER_DIR}/THIRD_PARTY_NOTICES.txt" "${STAGE_APP}/Contents/Resources/THIRD_PARTY_NOTICES.txt"
 
 # Generate AppIcon.icns from marketing site icon PNG if available
 ICON_SRC="${REPO_ROOT}/apps/marketing-site/assets/download/icon-ios-dark.png"
@@ -403,6 +404,8 @@ test -L "${VERIFY_MOUNT}/Applications"
 codesign --verify --deep --strict --verbose=2 "${VERIFY_MOUNT}/Walkaway.app"
 HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --selftest
 HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --supervisortest
+HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --uitest
+HERMES_HIDDEN_WINDOW=1 "${VERIFY_MOUNT}/Walkaway.app/Contents/MacOS/Walkaway" --debuggertest
 cleanup_mount
 trap cleanup_temp_key EXIT
 

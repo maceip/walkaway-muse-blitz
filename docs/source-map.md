@@ -2,7 +2,9 @@
 
 | Component | Wrapper | Canonical working source today | Migration rule |
 |---|---|---|---|
-| Hermes browser | `apps/hermes-browser/` | `/Users/mac/hermes-blitz-browser` | Migrate only the frozen demo build |
+| Hermes release browser | `apps/hermes-browser/` | `apps/hermes-browser/` (built by `.github/workflows/ci.yml`) | User-authorized post-demo chrome/debugger continuation on `feat/netscape-gooey-debugger`; `/Users/mac/hermes-blitz-browser` remains the frozen demo reference, not a second release implementation |
+| Browser chrome and gooey tabs | `apps/hermes-browser/src/chrome.rs` | Existing chrome document; reusable tab geometry in `src/gooey_tabs.rs` | Extend the native browser chrome only; no web wrapper or parallel tab strip |
+| JavaScript debugger | `apps/hermes-browser/src/{debugger.rs,debugger_ui.rs}` + `c_shim/debugger.cpp` | Browser-integrated opt-in local script debugger using Hermes debugger APIs | Isolated interpreted debug runtime; do not expose vault credentials or auto-execute remote scripts; AOT page adapter remains separate |
 | Android bridge | `apps/android-notification-bridge/` | Generated empty Activity in this repo | Build behavior after demo selection |
 | Glasses web | DELETED 2026-11-05 (vapor stub) | `/Users/mac/walkaway-hackathon/glasses` (separate older app, not in this repo) | Native DAT is the glasses surface; resurrect only as real code on Ryan decision |
 | Meta sample references | external | `/Users/mac/meta_glasses_webmcp/examples` | Reference only; do not vendor blindly |

@@ -40,6 +40,46 @@ never blur which browser executed an action.
 - Runbook: `docs/DEMO_RUN.md`. No demo stack needs to stay running;
   fixture 8795 `/campaign-receipt` serves the receipt page.
 
+## Browser chrome / debugger task — 2026-11-06
+
+- Owner: ZCode (`feat/netscape-gooey-debugger`, isolated worktree
+  `/Users/mac/walkaway-browser-netscape`). User-requested continuation of the
+  completed Zone X browser work, not a second browser implementation.
+- Claimed scope: `apps/hermes-browser` chrome, gooey tabs, JavaScript debugger,
+  browser-specific tests and documentation. The prior Zone X demo baseline is
+  complete; this task does not edit the external frozen demo checkout.
+- Canonical release source for this task: `apps/hermes-browser` (the source
+  built by `.github/workflows/ci.yml`). Existing Android edits in the primary
+  checkout are owned by another task and remain untouched.
+- Verification: `git status --short --branch`, `git worktree list`, and
+  `ps -axo pid,ppid,etime,command` inspected before work. No active browser,
+  cargo, DMG packaging, or notarization process observed. No server started.
+- Observed result: task branch isolated at `dc57f60`; debugger-enabled Hermes
+  built successfully in `~/.cache/hermes-static_h/build-walkaway-debugger`.
+  Existing `build` cache and frozen external browser remain untouched.
+  Native Netscape 6 Classic chrome, actual gooey neck/spring tab geometry and
+  isolated Hermes source debugger are complete. Exact verification commands:
+  `cargo build --release --manifest-path apps/hermes-browser/Cargo.toml`;
+  `cargo test --release --manifest-path apps/hermes-browser/Cargo.toml`;
+  release binary `--selftest --uitest --runtimetest --observetest
+  --supervisortest --debuggertest` (each flag run separately).
+  Observed: build PASS, 18/18 Cargo tests PASS, all six CLI suites PASS,
+  28 real debugger backend assertions PASS. Real Vello light/dark/compact
+  renders verify curved tabs and readable native debugger controls.
+- Local artifact: `build/Walkaway.dmg`, Developer ID `D74F5NNMRQ` + Hardened
+  Runtime, bundled debugger-enabled Hermes/OpenSSL and MIT notices. Exact
+  packaging command and mounted-image checks are in `docs/TEST_REGISTRY.md`;
+  all mounted checks pass. Local build is explicitly not notarized; no Apple
+  submission, release publication or merge was requested/performed.
+- Next action: commit/push the task-owned patch and perform an isolated merge
+  assessment against freshly fetched remote main; owner controls merging.
+- Known verification limitations: Computer Use cannot read this canvas window's
+  accessibility tree, so no physical GUI click claim; native hit-testing and
+  actual rendering passed. Existing optional ICNS generation fails nonfatally.
+- Known constraint: Static Hermes AOT frames cannot support bytecode stepping.
+  The real debugger is explicitly an isolated local JS scratchpad, with no DOM,
+  vault, network or approval bindings and no automatic remote script execution.
+
 ## Components
 
 | Component | Owner | State | Canonical location | Last verification | Next action |

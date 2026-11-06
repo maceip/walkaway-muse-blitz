@@ -9,11 +9,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.cache/hermes-static_h}"
-if [ ! -x "$HERMES_ROOT/build/bin/shermes" ]; then
+export HERMES_SRC_DIR="${HERMES_SRC_DIR:-$HERMES_ROOT/src}"
+export HERMES_BUILD_DIR="${HERMES_BUILD_DIR:-$HERMES_ROOT/build-walkaway-debugger}"
+if [ ! -x "$HERMES_BUILD_DIR/bin/shermes" ] || ! grep -q '^HERMES_ENABLE_DEBUGGER:BOOL=ON$' "$HERMES_BUILD_DIR/CMakeCache.txt"; then
   ./scripts/build-hermes.sh
 fi
-
-export HERMES_SRC_DIR="${HERMES_SRC_DIR:-$HERMES_ROOT/src}"
-export HERMES_BUILD_DIR="${HERMES_BUILD_DIR:-$HERMES_ROOT/build}"
 
 exec cargo run --release -- "$@"
