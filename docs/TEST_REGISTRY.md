@@ -643,3 +643,22 @@ hop works across devices.
   physical glasses runbook (`LIVE DEMO RUN` row in `docs/STATUS.md`); the
   launcher path, lock, and suites above are the host-side evidence for
   "exactly one launcher".
+
+### T-CARD-PIPELINE-001 (Page-Capture Preview + Card Fields + Muse Result)
+
+- Protocol: `observe.request {include_screenshot:true}` -> `observe.result
+  {screenshot_png_b64}` -> relay downscales to max 320px wide PNG/JPEG
+  (budget `PREVIEW_MAX_B64_CHARS=48000`) -> `GET /api/state
+  {preview_b64, result}` -> Muse `public(state) {page_preview_b64, result}`;
+  bus `POST /messages` carries optional `image_url`/`price`/`detail`/
+  `image_b64` (b64 capped 48k, POST body limit 128KB) -> phone shows the
+  preview crop on the card row. Glasses card text stays the proven flat
+  DAT template (shaped-chrome work parked per Ryan 2026-11-06).
+- Commands: inline downscale budget check (synthetic 1280x720 PNG ->
+  320x180, b64 612 chars); `test_message_bus_lock.py`; `test_decision_bridge_e2e.py`;
+  `HERMES_HIDDEN_WINDOW=1 tests/e2e/test_muse_mcp_real_browser.py`; Android
+  `:app:testDebugUnitTest :app:assembleDebug`.
+- Last observed: **PASS** 2026-11-06 ~22:2x PT. Downscale helper OK;
+  bus lock OK; bridge e2e OK; muse MCP e2e 2/2 OK (`13.695s`); Android
+  build + unit tests green (`WindowChrome.kt` compiles — shaped chrome
+  asset, not yet wired into `sendContent`).

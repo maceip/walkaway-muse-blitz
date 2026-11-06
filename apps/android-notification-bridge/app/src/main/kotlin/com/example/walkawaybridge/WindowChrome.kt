@@ -38,9 +38,9 @@ object WindowChrome {
     val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val c = Canvas(bmp)
     val d = w / 250f
+    val r = 14f * d
+    val bloom = 64f * d
     val path = Path().apply {
-      val r = 14f * d
-      val bloom = 64f * d
       moveTo(r, 0f)
       lineTo(w - bloom, 0f)
       arcTo(RectF(w - 2 * bloom, 0f, w.toFloat(), 2 * bloom), 270f, 90f, true)

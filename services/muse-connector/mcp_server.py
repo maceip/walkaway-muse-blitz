@@ -85,6 +85,8 @@ def public(state):
         "card_title": decision.get("card_title") if isinstance(decision, dict) else None,
         "card_body": decision.get("card_body") if isinstance(decision, dict) else None,
         "last_decision": state.get("last_decision"),
+        "result": state.get("result"),
+        "page_preview_b64": state.get("preview_b64"),
         "approval_url": APPROVAL_URL if decision else None,
         "glasses_url": APPROVAL_URL if decision else None,
         "steps_acted": state.get("history_count", 0),
