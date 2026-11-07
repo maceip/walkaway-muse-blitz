@@ -246,11 +246,15 @@ class WalkawayDat(private val appContext: Context) {
     readyDisplay.sendContent {
       flexBox(gap = 10, padding = 16) {
         if (iconBitmap != null) {
+          Log.i(TAG, "rendering iconBitmap ${iconBitmap.width}x${iconBitmap.height} in DAT card")
           image(
             bitmap = iconBitmap,
             sizePreset = ImageSize.ICON,
-            cornerRadius = CornerRadius.NONE
+            cornerRadius = CornerRadius.NONE,
+            alignSelf = Alignment.START
           )
+        } else {
+          Log.w(TAG, "iconBitmap is NULL in renderCardContent")
         }
         text(title.take(80), style = TextStyle.BODY)
         text(body.take(160), style = TextStyle.BODY)
