@@ -984,23 +984,38 @@ pub fn render(state: &ChromeState<'_>) -> String {
 
     let supbar = match &state.supervision {
         Some(sup) => {
+            let sup_rib_bg = ribbed_rect_svg(2400, 38, p.rib_base, p.rib_hi, p.rib_lo);
+            let pill_blue_svg = r##"<div class="rib-bg"><svg width="86" height="24" viewBox="0 0 86 24"><defs><linearGradient id="aqb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0A3566"/><stop offset="28%" stop-color="#14589E"/><stop offset="68%" stop-color="#227CD4"/><stop offset="100%" stop-color="#5CE6FF"/></linearGradient><linearGradient id="aqbs" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.88"/><stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.08"/></linearGradient></defs><rect x="0.8" y="0.8" width="84.4" height="22.4" rx="11.2" fill="url(#aqb)" stroke="#052347" stroke-width="1.2"/><rect x="6" y="2.2" width="74" height="8.5" rx="4.2" fill="url(#aqbs)"/></svg></div>"##;
+            let pill_clear_sm_svg = r##"<div class="rib-bg"><svg width="74" height="24" viewBox="0 0 74 24"><defs><linearGradient id="aqc" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8EB4D6"/><stop offset="35%" stop-color="#C2DCF2"/><stop offset="75%" stop-color="#E6F3FF"/><stop offset="100%" stop-color="#FFFFFF"/></linearGradient><linearGradient id="aqcs" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.92"/><stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.15"/></linearGradient></defs><rect x="0.8" y="0.8" width="72.4" height="22.4" rx="11.2" fill="url(#aqc)" stroke="#244B70" stroke-width="1.2"/><rect x="5" y="2.2" width="64" height="8.5" rx="4.2" fill="url(#aqcs)"/></svg></div>"##;
+            let pill_clear_lg_svg = r##"<div class="rib-bg"><svg width="104" height="24" viewBox="0 0 104 24"><defs><linearGradient id="aqcl" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8EB4D6"/><stop offset="35%" stop-color="#C2DCF2"/><stop offset="75%" stop-color="#E6F3FF"/><stop offset="100%" stop-color="#FFFFFF"/></linearGradient><linearGradient id="aqcls" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.92"/><stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.15"/></linearGradient></defs><rect x="0.8" y="0.8" width="102.4" height="22.4" rx="11.2" fill="url(#aqcl)" stroke="#244B70" stroke-width="1.2"/><rect x="6" y="2.2" width="92" height="8.5" rx="4.2" fill="url(#aqcls)"/></svg></div>"##;
+            let pill_red_svg = r##"<div class="rib-bg"><svg width="68" height="24" viewBox="0 0 68 24"><defs><linearGradient id="aqr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#6B0909"/><stop offset="30%" stop-color="#A81414"/><stop offset="70%" stop-color="#DC2626"/><stop offset="100%" stop-color="#FF7A7A"/></linearGradient><linearGradient id="aqrs" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.85"/><stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.08"/></linearGradient></defs><rect x="0.8" y="0.8" width="66.4" height="22.4" rx="11.2" fill="url(#aqr)" stroke="#450505" stroke-width="1.2"/><rect x="5" y="2.2" width="58" height="8.5" rx="4.2" fill="url(#aqrs)"/></svg></div>"##;
+
             let mut buttons = String::new();
             if sup.can_decide {
-                buttons
-                    .push_str(r#"<div class="sup-btn sup-approve" id="sup-approve">Approve</div>"#);
-                buttons.push_str(r#"<div class="sup-btn" id="sup-reject">Reject</div>"#);
+                buttons.push_str(&format!(
+                    r#"<div class="sup-btn sup-approve" id="sup-approve">{pill_blue_svg}<span class="sup-btn-lbl">Approve</span></div>"#
+                ));
+                buttons.push_str(&format!(
+                    r#"<div class="sup-btn sup-reject" id="sup-reject">{pill_clear_sm_svg}<span class="sup-btn-lbl">Reject</span></div>"#
+                ));
             }
             if sup.can_take {
-                buttons.push_str(r#"<div class="sup-btn" id="sup-take">Take control</div>"#);
+                buttons.push_str(&format!(
+                    r#"<div class="sup-btn sup-take" id="sup-take">{pill_clear_lg_svg}<span class="sup-btn-lbl">Take control</span></div>"#
+                ));
             }
             if sup.can_release {
-                buttons.push_str(r#"<div class="sup-btn sup-approve" id="sup-done">Done</div>"#);
+                buttons.push_str(&format!(
+                    r#"<div class="sup-btn sup-approve" id="sup-done">{pill_blue_svg}<span class="sup-btn-lbl">Done</span></div>"#
+                ));
             }
             if sup.can_stop {
-                buttons.push_str(r#"<div class="sup-btn sup-stop" id="sup-stop">Stop</div>"#);
+                buttons.push_str(&format!(
+                    r#"<div class="sup-btn sup-stop" id="sup-stop">{pill_red_svg}<span class="sup-btn-lbl">Stop</span></div>"#
+                ));
             }
             format!(
-                r#"<div class="supbar" id="sup-bar"><div class="sup-title">{}</div><div class="sup-state">{}</div><div class="sup-detail">{}</div>{}</div>"#,
+                r#"<div class="supbar" id="sup-bar">{sup_rib_bg}<div class="sup-title">{}</div><div class="sup-state">{}</div><div class="sup-detail">{}</div>{}</div>"#,
                 escape_html(sup.title),
                 escape_html(sup.state),
                 escape_html(sup.detail),
@@ -1069,8 +1084,13 @@ pub fn render(state: &ChromeState<'_>) -> String {
                 ),
                 None => format!("Replayed: {} (0 LLM calls)", tel.recalled_count),
             };
+            let hud_bottom = if state.supervision.is_some() {
+                53.0
+            } else {
+                15.0
+            };
             items.push_str(&format!(
-                r#"<div class="xray-hud" id="xray-telemetry-bar" style="left:{content_x:.1}px;">
+                r#"<div class="xray-hud" id="xray-telemetry-bar" style="left:{content_x:.1}px;bottom:{hud_bottom:.1}px;">
                      <div class="xray-hud-brand">STATIC HERMES + BLITZ ENGINE</div>
                      <div class="xray-hud-metric" id="xray-metric-timing">Layout+Observe: {ms:.2}ms</div>
                      <div class="xray-hud-metric" id="xray-metric-rss">RAM/RSS: {rss:.1}MB</div>
@@ -1078,6 +1098,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
                      <div class="xray-hud-metric xray-hud-recall" id="xray-metric-recall">Recall: {recall}</div>
                    </div>"#,
                 content_x = content_x,
+                hud_bottom = hud_bottom,
                 ms = tel.layout_observe_ms,
                 rss = tel.rss_mb,
                 sig = escape_html(sig_text),
@@ -1107,7 +1128,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
         String::new()
     };
 
-    let _ = (p.strip, p.tab_active);
+    let _ = (p.strip, p.tab_active, p.hairline, p.accent);
 
     // The passkey interstitial. A page asked for a credential, and a human
     // has to say yes before the ceremony signs anything. The modal is the
@@ -1796,57 +1817,82 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .supbar {{
     position: absolute;
     left: {content_x:.1}px;
-    right: 0;
-    bottom: 34px;
-    height: 36px;
+    right: 15px;
+    bottom: 15px;
+    height: 38px;
     background-color: {nav};
-    border-top: 1px solid {hairline};
+    border-top: 1px solid #333333;
+    border-bottom: 1px solid #6E6E6E;
     display: flex;
     flex-direction: row;
     align-items: center;
     padding: 0 12px;
     gap: 8px;
+    overflow: hidden;
   }}
   .sup-title {{
+    position: relative;
     color: {ink};
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 700;
     white-space: nowrap;
   }}
   .sup-state {{
+    position: relative;
     height: 20px;
     padding: 0 8px;
-    border-radius: 4px;
-    background-color: {pill};
-    color: {ink};
+    border-radius: 10px;
+    background-color: #FFFFFF;
+    border: 1px solid #6E6E6E;
+    color: #0D3C61;
     font-size: 11px;
-    line-height: 20px;
+    font-weight: 700;
+    line-height: 18px;
     white-space: nowrap;
   }}
   .sup-detail {{
+    position: relative;
     flex: 1;
-    color: {muted};
+    color: #1F1F1F;
     font-size: 12px;
+    font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
   }}
   .sup-btn {{
+    position: relative;
     height: 24px;
-    padding: 0 10px;
-    background-color: {pill};
-    border: 1px solid {hairline};
-    color: {ink};
+    background-color: transparent;
+    color: #08243E;
     font-size: 11px;
-    font-weight: 500;
-    line-height: 22px;
+    font-weight: 700;
+    line-height: 24px;
+    text-align: center;
     white-space: nowrap;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+  }}
+  .sup-btn-lbl {{
+    position: relative;
+    pointer-events: none;
   }}
   .sup-approve {{
-    background-color: {accent};
+    width: 86px;
     color: #FFFFFF;
   }}
+  .sup-reject {{
+    width: 74px;
+    color: #08243E;
+  }}
+  .sup-take {{
+    width: 104px;
+    color: #08243E;
+  }}
   .sup-stop {{
-    color: #FF3B30;
+    width: 68px;
+    color: #FFFFFF;
   }}
   .xray-box {{
     position: absolute;
@@ -1882,8 +1928,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
   .xray-hud {{
     position: absolute;
-    right: 0;
-    bottom: 34px;
+    right: 15px;
+    bottom: 15px;
     height: 24px;
     background-color: #111318;
     border-top: 1px solid #2C313C;
@@ -2013,7 +2059,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
         surface_height = state.surface_height,
         passkey_prompt = passkey_prompt,
         nav = p.nav,
-        hairline = p.hairline,
         bevel_light = p.bevel_light,
         bevel_dark = p.bevel_dark,
         pill = p.pill,
