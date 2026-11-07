@@ -1078,10 +1078,38 @@ credential of the same relying party.
 The browser exposing `navigator.credentials` is not the same as simulating the
 ceremony in page JS, and only the latter is forbidden.
 
-What remains an open design decision is the **approval UX** for a
-page-initiated ceremony: how the host surfaces such a ceremony to the human
-is not yet settled. That does not affect the correctness of the ceremony
-itself, which runs through the same gate as every other broker request.
+**Landed 2026-11-06 (fourth pass).** The approval UX for a page-initiated
+ceremony is now settled and implemented. A page's `navigator.credentials`
+call **cannot** produce a credential or a signature on its own. The ceremony
+starts, stops at the approval gate, and the page's promise stays pending
+until a human answers.
+
+Two surfaces carry the prompt:
+
+- **The glasses DAT card is primary.** The ceremony is announced as a
+  `proposal.pending` event with `requires_glasses: true`, exactly the event
+  the agent-proposed path emits, so the host that turns proposals into cards
+  needs no new case. The card's decision comes back as a `decision` frame
+  and settles the ceremony. The announcement is emitted even when no
+  supervised session is open: a page may start a ceremony in any tab, and
+  the person answering may not be at the keyboard.
+- **A browser-chrome modal mirrors it.** A centred dialog over the chrome
+  naming the site, the account when the browser knows one, and an explicit
+  **Allow** and **Deny**.
+
+The modal is deliberately hard to dismiss by accident. There is no
+click-outside dismissal and no Escape dismissal; every key press is
+swallowed while the prompt is up. Only the Allow and Deny buttons answer
+it. A stray gesture must never approve a signing ceremony.
+
+An unanswered ceremony expires after 60 seconds and fails cleanly, so the
+page gets an error rather than a promise that hangs forever, and a decision
+that arrives after the deadline cannot still produce a signature.
+
+The page's own script may change the document while the prompt is up, so a
+page ceremony carries no fingerprint or generation binding. Revalidating the
+agent-proposal fingerprint would cancel legitimate passkey requests, whose
+whole purpose is to be answered by a human at a human pace.
 
 The boundary is explicit: this is a **software authenticator**. The macOS
 platform authenticator (Secure Enclave) and hardware security keys are still

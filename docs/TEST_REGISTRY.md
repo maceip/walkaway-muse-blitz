@@ -150,6 +150,39 @@ hop works across devices.
   its bytes one index at a time yields zeros; it must be wrapped in a
   `Uint8Array` view first.
 
+### T-HERMES-PASSKEY-INTERSTITIAL
+
+- Command: `./target/release/hermes-blitz-browser --passkeyinterstitialtest`
+  from `apps/hermes-browser/`.
+- Real components: the AOT-compiled Static Hermes runtime
+  (`apps/hermes-browser/src/js/dom_runtime.ts`), the C bridge
+  (`c_shim/hermes_shim.cpp` + `c_shim/blitz_bridge.h`), the Rust host bindings
+  (`apps/hermes-browser/src/dom_ffi.rs`), the passkey broker
+  (`apps/hermes-browser/src/credentials.rs`), the WebAuthn authenticator
+  (`apps/hermes-browser/src/webauthn/authenticator.rs`), the macOS Keychain
+  (`apps/hermes-browser/src/keychain.rs`), and the browser chrome
+  (`apps/hermes-browser/src/chrome.rs`). Nothing is mocked or stubbed.
+- Asserts: a page-initiated ceremony raises the interstitial and the page
+  sees no credential while the prompt is up; the interstitial names the site
+  and renders Allow and Deny; a click outside the dialog does not dismiss it
+  and does not sign anything; every key press is swallowed while it is up, so
+  Escape cannot dismiss it and a stray Enter cannot approve it; **Allow**
+  registers the credential and then signs a real assertion with a real P-256
+  signature that the page receives; **Deny** makes the page's promise reject
+  and signs and registers nothing; an unanswered ceremony expires after its
+  deadline, fails cleanly, and signs nothing; the ceremony is announced to
+  the glasses as a `proposal.pending` with `requires_glasses: true`, and a
+  `decision` frame from the glasses settles the ceremony.
+- Last observed: **PASS** 2026-11-06 23:5x PT — 26 checks, all ok.
+- Note: the check that a page cannot get a credential without a human is a
+  real regression test, not a restatement of intent. Restoring the
+  auto-approval that used to sit in `dom_ffi.rs` makes the Allow path fail
+  with "the ceremony already completed", because the page then receives an
+  already-finished ceremony instead of a signed assertion.
+- Note: the registration and the assertion are *separate* ceremonies, and
+  each needs its own answer. The test drives both, because a page must not
+  be able to slip a registration past the gate and then reuse it.
+
 ### T-HERMES-SOCKET-E2E
 - Command: `python3 /tmp/socket_e2e.py` against the real Hermes GUI process.
 - Real components: Unix socket, host/agent token roles, session, observe,

@@ -365,6 +365,11 @@
   let eventListeners: any = {};
   let customClickHandlers: any = {};
 
+  /* WebAuthn ceremonies that are waiting for a human. Keyed by the ceremony
+   * id the host names, so the host can settle the right promise when the
+   * human answers. */
+  let pendingCeremonies: any = {};
+
   /* A handle to a live DOM node. The id is a versioned slot index, so a stale
    * handle fails to resolve in Rust instead of aliasing a different node. */
   class BlitzElement {
@@ -815,6 +820,18 @@
     if (!parsed || parsed.error) {
       return PromiseCtor.reject(new Error((parsed && parsed.error) || "WebAuthn create failed"));
     }
+    /* A ceremony that needs a human stays pending. The page's promise is
+     * not settled now; the host settles it once the human has answered, and
+     * until then the page cannot see a credential. */
+    if (parsed.pending === true) {
+      let ceremonyId: string = String(parsed.ceremony_id || "");
+      if (!ceremonyId) {
+        return PromiseCtor.reject(new Error("WebAuthn create: the host did not name the ceremony"));
+      }
+      return new PromiseCtor(function (resolve: any, reject: any): void {
+        pendingCeremonies[ceremonyId] = { resolve: resolve, reject: reject };
+      });
+    }
     return PromiseCtor.resolve(buildCredentialResponse(parsed, false));
   };
   credsObj.get = function (options: any): any {
@@ -844,7 +861,40 @@
     if (!parsed || parsed.error) {
       return PromiseCtor.reject(new Error((parsed && parsed.error) || "WebAuthn get failed"));
     }
+    /* A ceremony that needs a human stays pending. The page's promise is
+     * not settled now; the host settles it once the human has answered, and
+     * until then the page cannot see an assertion. */
+    if (parsed.pending === true) {
+      let ceremonyId: string = String(parsed.ceremony_id || "");
+      if (!ceremonyId) {
+        return PromiseCtor.reject(new Error("WebAuthn get: the host did not name the ceremony"));
+      }
+      return new PromiseCtor(function (resolve: any, reject: any): void {
+        pendingCeremonies[ceremonyId] = { resolve: resolve, reject: reject };
+      });
+    }
     return PromiseCtor.resolve(buildCredentialResponse(parsed, true));
+  };
+  /* Called by the host when the human has answered a pending ceremony.
+   * `ok` is true when the ceremony was approved and produced an assertion,
+   * false when it was denied or expired. */
+  (globalThis as any).__settleWebAuthn = function (ceremonyId: string, ok: boolean, payload: string): void {
+    let entry: any = pendingCeremonies[ceremonyId];
+    if (!entry) {
+      return;
+    }
+    delete pendingCeremonies[ceremonyId];
+    if (!ok) {
+      let message: string = payload || "The passkey request was not approved";
+      entry.reject(new Error(message));
+      return;
+    }
+    let parsed: any = (globalThis as any).JSON.parse(payload);
+    if (!parsed || parsed.error) {
+      entry.reject(new Error((parsed && parsed.error) || "WebAuthn get failed"));
+      return;
+    }
+    entry.resolve(buildCredentialResponse(parsed, true));
   };
   /* `CredentialsContainer.preventSilentMediation()` is part of the spec. The
    * browser honours it by refusing to answer a conditional request without an

@@ -187,6 +187,14 @@ const START_PAGE: &str = r#"
 
 const START_URL: &str = "muse://start";
 
+/// The passkey broker, shared between the host and the pages it shows.
+///
+/// A page ceremony has to outlive the call that started it: the host has to
+/// raise the approval prompt, wait for a human, and only then approve the
+/// ceremony. Sharing one broker instance is what keeps the ceremony alive
+/// across that gap.
+type SharedPasskeyBroker = std::rc::Rc<std::cell::RefCell<credentials::LocalPasskeyBroker>>;
+
 struct Page {
     ctx: Box<BlitzHostContext>,
     hermes: *mut HermesAppRuntime,
@@ -359,6 +367,30 @@ impl Page {
         viewport: Viewport,
         theme: Theme,
     ) -> Self {
+        Self::load_with_broker(
+            html,
+            base,
+            provider,
+            viewport,
+            theme,
+            dom_ffi::default_broker(),
+        )
+    }
+
+    /// Loads a page whose WebAuthn ceremonies run in `broker`.
+    ///
+    /// The broker is shared with the host, so a ceremony a page starts is
+    /// still there when the host comes to ask the human about it. Without
+    /// that, the ceremony would be dropped when the call that started it
+    /// returned.
+    fn load_with_broker(
+        html: &str,
+        base: Option<Url>,
+        provider: Option<SharedProvider>,
+        viewport: Viewport,
+        theme: Theme,
+        broker: SharedPasskeyBroker,
+    ) -> Self {
         let mut doc = Self::build(html, &base, &provider, viewport.clone(), None);
 
         // Only override the UA default when the page itself opted into dark;
@@ -381,7 +413,7 @@ impl Page {
         // Deriving it from the relying party's own `rpId` would make the
         // origin check vacuous.
         let origin = base.as_ref().map(|url| url.origin().ascii_serialization()).unwrap_or_default();
-        let mut ctx = Box::new(BlitzHostContext::with_origin(doc, &origin));
+        let mut ctx = Box::new(BlitzHostContext::with_origin_and_broker(doc, &origin, broker));
         let hermes =
             unsafe { hermes_app_init((&mut *ctx as *mut BlitzHostContext).cast::<c_void>()) };
         let mut page = Self { ctx, hermes };
@@ -1013,7 +1045,10 @@ struct BrowserApp {
     xray_enabled: bool,
     /// The passkey broker. WebAuthn ceremonies run host-side, behind the
     /// human approval gate, and never in page script.
-    passkey_broker: credentials::LocalPasskeyBroker,
+    passkey_broker: SharedPasskeyBroker,
+    /// The page-initiated passkey ceremony that is waiting for a human, if
+    /// any. The interstitial in the chrome mirrors the glasses DAT card.
+    passkey_prompt: Option<dom_ffi::PageCeremony>,
     /// The password broker. Secrets live in the macOS Keychain and reach the
     /// page only after a human approves the fill.
     credential_broker: credentials::LocalCredentialBroker,
@@ -1090,7 +1125,10 @@ impl BrowserApp {
             recalled_count: 0,
             supervise_commits_only,
             xray_enabled,
-            passkey_broker: credentials::LocalPasskeyBroker::new(),
+            passkey_broker: std::rc::Rc::new(std::cell::RefCell::new(
+                credentials::LocalPasskeyBroker::new(),
+            )),
+            passkey_prompt: None,
             credential_broker: credentials::LocalCredentialBroker::new(),
             exit_after: parse_exit_after(),
             started: Instant::now(),
@@ -1512,7 +1550,19 @@ impl BrowserApp {
             return;
         }
         // Session binding for everything except open/ping/capabilities.
-        if !matches!(kind.as_str(), "ping" | "capabilities.get" | "session.open") {
+        //
+        // A decision about a page-initiated passkey ceremony is exempt: a
+        // page may start a ceremony in any tab, including one with no
+        // supervised session open, and the glasses still have to be able to
+        // answer it.
+        let is_page_passkey_decision = kind == "decision"
+            && frame
+                .get("proposal_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id.starts_with("page-passkey-"));
+        if !matches!(kind.as_str(), "ping" | "capabilities.get" | "session.open")
+            && !is_page_passkey_decision
+        {
             match self.control.as_ref() {
                 None => {
                     self.refused(conn_id, &frame, "wrong_state");
@@ -1667,7 +1717,7 @@ impl BrowserApp {
                 let bytes = webauthn::b64::b64url_decode(credential_id)
                     .or_else(|| control::b64_decode(credential_id));
                 let public_key = bytes
-                    .and_then(|bytes| self.passkey_broker.public_key_pem(&bytes).ok())
+                    .and_then(|bytes| self.passkey_broker.borrow().public_key_pem(&bytes).ok())
                     .flatten();
                 let body = json!({
                     "v": 1, "type": "passkey.publickey",
@@ -1690,7 +1740,7 @@ impl BrowserApp {
                 let bytes = webauthn::b64::b64url_decode(credential_id)
                     .or_else(|| control::b64_decode(credential_id));
                 let removed = match bytes {
-                    Some(bytes) => self.passkey_broker.delete_passkey(&bytes).unwrap_or(false),
+                    Some(bytes) => self.passkey_broker.borrow_mut().delete_passkey(&bytes).unwrap_or(false),
                     None => false,
                 };
                 let body = json!({
@@ -1712,21 +1762,23 @@ impl BrowserApp {
                 // credential a registration produced.
                 let ceremony_id = if ceremony_id.is_empty() {
                     self.passkey_broker
+                        .borrow()
                         .latest_ceremony_id()
                         .map(|id| id.0)
                         .unwrap_or_default()
                 } else {
                     ceremony_id
                 };
-                let status = self
-                    .passkey_broker
-                    .poll_assertion(credentials::PasskeyCeremonyId(ceremony_id.clone()));
+                let status = self.passkey_broker.borrow_mut().poll_assertion(
+                    credentials::PasskeyCeremonyId(ceremony_id.clone()),
+                );
                 // The registration is polled too: the ceremony id does not
                 // say which kind it is.
                 let status = match status {
                     Ok(status) => Ok(status),
                     Err(error) => self
                         .passkey_broker
+                        .borrow_mut()
                         .poll_registration(credentials::PasskeyCeremonyId(ceremony_id.clone()))
                         .map_err(|_| error),
                 };
@@ -1763,10 +1815,12 @@ impl BrowserApp {
                 let id = credentials::PasskeyCeremonyId(ceremony_id.clone());
                 // The ceremony id does not say which kind it is, so try the
                 // assertion first and fall back to the registration.
-                let cancelled = self
-                    .passkey_broker
-                    .cancel_assertion(id.clone())
-                    .or_else(|_| self.passkey_broker.cancel_registration(id));
+                let cancelled = {
+                    let mut broker = self.passkey_broker.borrow_mut();
+                    broker
+                        .cancel_assertion(id.clone())
+                        .or_else(|_| broker.cancel_registration(id))
+                };
                 let body = json!({
                     "v": 1, "type": "passkey.cancelled",
                     "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
@@ -2391,6 +2445,7 @@ impl BrowserApp {
                     credentials::PasskeyRequest::from_operation(&operation)
                         .and_then(|request| {
                             self.passkey_broker
+                                .borrow_mut()
                                 .begin_assertion(request)
                                 .map(|id| (id, "passkey.assert"))
                         })
@@ -2398,13 +2453,14 @@ impl BrowserApp {
                     credentials::RegistrationRequest::from_operation(&operation)
                         .and_then(|request| {
                             self.passkey_broker
+                                .borrow_mut()
                                 .begin_registration(request)
                                 .map(|id| (id, "passkey.register"))
                         })
                 };
                 match started {
                     Ok((id, kind)) => {
-                        let prompt = match self.passkey_broker.poll_assertion(id.clone()) {
+                        let prompt = match self.passkey_broker.borrow_mut().poll_assertion(id.clone()) {
                             Ok(credentials::PasskeyStatus::AwaitingApproval { prompt, .. }) => {
                                 prompt
                             }
@@ -2525,6 +2581,37 @@ impl BrowserApp {
     }
 
     fn do_decision(&mut self, conn_id: u64, frame: &Value) {
+        // A decision about a page-initiated passkey ceremony. The glasses
+        // DAT card is the primary surface for such a prompt, so its answer
+        // arrives here. It carries no fingerprint or generation: the page's
+        // own script may change the document while the prompt is up, and
+        // that must not cancel a legitimate ceremony.
+        if let Some(proposal_id) = frame.get("proposal_id").and_then(Value::as_str) {
+            if let Some(ceremony_id) = proposal_id.strip_prefix("page-passkey-") {
+                let decision = frame.get("decision").and_then(Value::as_str).unwrap_or("");
+                let approve = match decision {
+                    "approve" => true,
+                    "reject" => false,
+                    _ => {
+                        self.refused(conn_id, frame, "internal");
+                        return;
+                    }
+                };
+                if self.passkey_prompt.is_some()
+                    && self
+                        .passkey_prompt
+                        .as_ref()
+                        .map(|ceremony| ceremony.ceremony_id.as_str())
+                        == Some(ceremony_id)
+                {
+                    self.decide_page_passkey(approve);
+                    self.flush_control_out();
+                    return;
+                }
+                self.refused(conn_id, frame, "decision_missing");
+                return;
+            }
+        }
         let (Some(proposal_id), Some(fingerprint), Some(generation), Some(decision)) = (
             frame
                 .get("proposal_id")
@@ -2928,14 +3015,21 @@ impl BrowserApp {
             .unwrap_or("passkey")
             .to_string();
 
-        let status = match self.passkey_broker.approve_ceremony(id.clone(), decided_by, surface) {
-            Ok(()) => self
-                .passkey_broker
-                .poll_assertion(id)
-                .map_err(|error| {
+        // Each borrow is scoped on its own. A `borrow_mut()` in one match arm
+        // would still be alive when the next arm borrows again, and the
+        // second borrow would panic.
+        let approved = {
+            let mut broker = self.passkey_broker.borrow_mut();
+            broker.approve_ceremony(id.clone(), decided_by, surface)
+        };
+        let status = match approved {
+            Ok(()) => {
+                let mut broker = self.passkey_broker.borrow_mut();
+                broker.poll_assertion(id).map_err(|error| {
                     eprintln!("[passkey] ceremony {ceremony_id} poll failed: {error}");
                     "passkey_failed"
-                })?,
+                })?
+            }
             Err(error) => {
                 eprintln!("[passkey] ceremony {ceremony_id} failed: {error}");
                 credentials::PasskeyStatus::Failed(error.to_string())
@@ -3351,14 +3445,16 @@ impl BrowserApp {
                 let theme = self.theme;
                 match browser::submit_form(&provider, &action_url, &method, &entries) {
                     Ok((final_url, html)) => {
+                        let broker = self.passkey_broker.clone();
                         let tab = self.tab_mut();
                         tab.canonical.browser.commit(final_url.clone(), html.clone());
-                        tab.replace_page(Page::load(
+                        tab.replace_page(Page::load_with_broker(
                             &html,
                             Some(final_url.clone()),
                             Some(provider),
                             viewport,
                             theme,
+                            broker,
                         ));
                         tab.canonical.browser.error = None;
                         tab.canonical.title = title_for(&final_url, tab.instance.page.doc());
@@ -3369,10 +3465,13 @@ impl BrowserApp {
                         );
                     }
                     Err(e) => {
+                        let broker = self.passkey_broker.clone();
                         let tab = self.tab_mut();
                         tab.canonical.browser.fail(e.clone());
                         let html = error_page(&e);
-                        tab.replace_page(Page::load(&html, None, None, viewport, theme));
+                        tab.replace_page(Page::load_with_broker(
+                            &html, None, None, viewport, theme, broker,
+                        ));
                         tab.canonical.title = "Error".to_string();
                     }
                 }
@@ -3616,6 +3715,243 @@ impl BrowserApp {
         Some((bytes, hash, self.frame_seq))
     }
 
+    /// Picks up any passkey ceremony a page started, so a human can be asked
+    /// about it.
+    ///
+    /// A page's `navigator.credentials.get()` starts a ceremony and stops.
+    /// The ceremony waits in the broker until somebody says yes or no. This
+    /// is where the host notices it, raises the interstitial, and enforces
+    /// the deadline.
+    fn poll_page_passkey_ceremonies(&mut self) {
+        // A ceremony that is already being shown may have run out of time.
+        // The deadline is read from the page's own map, which is where the
+        // ceremony's start time lives.
+        let expired = self
+            .tab()
+            .instance
+            .page
+            .ctx
+            .pending_page_ceremonies
+            .values()
+            .find(|ceremony| {
+                ceremony.started_at.elapsed()
+                    >= std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
+            })
+            .cloned();
+        if let Some(expired) = expired {
+            self.finish_page_passkey_ceremony(
+                &expired,
+                Err("The passkey request timed out before it was approved".to_string()),
+            );
+            return;
+        }
+
+        // Look for a ceremony the page started and that nobody has answered.
+        let pending = {
+            let page = &self.tab().instance.page;
+            page.ctx
+                .pending_page_ceremonies
+                .values()
+                .find(|ceremony| {
+                    ceremony.started_at.elapsed()
+                        < std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
+                })
+                .cloned()
+        };
+        let Some(pending) = pending else {
+            return;
+        };
+        self.passkey_prompt = Some(pending);
+        self.announce_page_passkey_on_glasses();
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    /// Tells the glasses about a page-initiated ceremony.
+    ///
+    /// The DAT card is the primary surface for a passkey prompt: the person
+    /// may not be at the keyboard. The browser modal is the mirror.
+    fn announce_page_passkey_on_glasses(&mut self) {
+        let Some(pending) = self.passkey_prompt.clone() else {
+            return;
+        };
+        // The same event the agent-proposed path emits, so the host that
+        // turns proposals into DAT cards needs no new case for a page's own
+        // ceremony. The fields the bridge reads are all here: the proposal
+        // id it binds the card to, the operation kind it puts on the card,
+        // the rationale it shows, and the page url it takes the domain from.
+        //
+        // The event is emitted even when no supervised session is open. A
+        // page may start a ceremony in any tab, and the person who has to
+        // answer it may be on the glasses rather than at the keyboard.
+        let title = if pending.origin.is_empty() {
+            pending.rp_id.clone()
+        } else {
+            pending.origin.clone()
+        };
+        let rationale = if pending.prompt.is_empty() {
+            format!("Use a passkey for {title}?")
+        } else {
+            pending.prompt.clone()
+        };
+        let session_id = self
+            .control
+            .as_ref()
+            .map(|session| session.id.clone())
+            .unwrap_or_default();
+        let frame = json!({
+            "v": 1,
+            "type": "proposal.pending",
+            "session_id": session_id,
+            "proposal_id": format!("page-passkey-{}", pending.ceremony_id),
+            "surface": "page",
+            "operation": {
+                "kind": "passkey.page_assert",
+                "rp_id": pending.rp_id,
+                "origin": pending.origin,
+                "account_hint": pending.account_hint,
+                "url": title,
+            },
+            "url": title,
+            "rationale": rationale,
+            "classification": "passkey",
+            "requires_glasses": true,
+        });
+        self.emit(OutTarget::Host, frame);
+        self.flush_control_out();
+    }
+
+    /// Settles a page's passkey promise.
+    ///
+    /// `result` carries the assertion JSON when the human allowed the
+    /// ceremony, and the reason when they denied it or it expired. Either
+    /// way the page's promise is settled exactly once, and the ceremony is
+    /// removed so it cannot be answered a second time.
+    fn finish_page_passkey_ceremony(
+        &mut self,
+        ceremony: &dom_ffi::PageCeremony,
+        result: Result<String, String>,
+    ) {
+        // The ceremony is removed first, so a second decision cannot settle
+        // the promise twice.
+        let page = &mut self.tab_mut().instance.page;
+        page.ctx
+            .pending_page_ceremonies
+            .remove(&ceremony.ceremony_id);
+        let hermes = page.hermes;
+
+        let payload = match &result {
+            Ok(json) => json.clone(),
+            Err(message) => message.clone(),
+        };
+        let script = format!(
+            r#"globalThis.__settleWebAuthn && globalThis.__settleWebAuthn({}, {}, {});"#,
+            serde_json::to_string(&ceremony.ceremony_id).unwrap_or_else(|_| "\"\"".into()),
+            if result.is_ok() { "true" } else { "false" },
+            serde_json::to_string(&payload).unwrap_or_else(|_| "\"\"".into()),
+        );
+        if let Ok(code) = std::ffi::CString::new(script) {
+            unsafe {
+                hermes_app_eval_script(hermes, code.as_ptr(), c"<passkey-decision>".as_ptr());
+            }
+        }
+
+        // Cancel the ceremony in the broker, so a decision that arrived after
+        // the deadline cannot still produce a signature.
+        let ceremony_id = credentials::PasskeyCeremonyId(ceremony.ceremony_id.clone());
+        {
+            let mut broker = self.passkey_broker.borrow_mut();
+            let _ = broker.cancel_assertion(ceremony_id.clone());
+        }
+
+        self.passkey_prompt = None;
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    /// Answers a page-initiated passkey ceremony.
+    ///
+    /// `allow` is the human's answer. When it is true the ceremony runs and
+    /// the page receives a real assertion; when it is false the ceremony is
+    /// cancelled and the page is told the request was not approved.
+    fn decide_page_passkey(&mut self, allow: bool) {
+        let Some(pending) = self.passkey_prompt.clone() else {
+            return;
+        };
+        if !allow {
+            self.finish_page_passkey_ceremony(
+                &pending,
+                Err("The passkey request was not approved".to_string()),
+            );
+            return;
+        }
+        let ceremony_id = credentials::PasskeyCeremonyId(pending.ceremony_id.clone());
+        let approved = self
+            .passkey_broker
+            .borrow_mut()
+            .approve_ceremony(ceremony_id.clone(), "human", "browser");
+        if let Err(error) = approved {
+            self.finish_page_passkey_ceremony(&pending, Err(error.to_string()));
+            return;
+        }
+        // The ceremony id does not say which kind it is, so the status is
+        // read back the same way the control surface reads it.
+        let status = {
+            let mut broker = self.passkey_broker.borrow_mut();
+            match pending.kind {
+                dom_ffi::PageCeremonyKind::Registration => {
+                    broker.poll_registration(ceremony_id.clone())
+                }
+                dom_ffi::PageCeremonyKind::Assertion => {
+                    broker.poll_assertion(ceremony_id.clone())
+                }
+            }
+        };
+        match status {
+            Ok(credentials::PasskeyStatus::Complete(
+                credentials::CeremonyOutcome::Assertion(credential),
+            )) => {
+                let json = serde_json::json!({
+                    "id": credential.id,
+                    "rawId": credential.raw_id,
+                    "type": credential.kind,
+                    "authenticatorAttachment": "platform",
+                    "rpId": pending.rp_id,
+                    "client_data_json_b64": credential.response.client_data_json,
+                    "authenticator_data_b64": credential.response.authenticator_data,
+                    "signature_der_b64": credential.response.signature,
+                });
+                self.finish_page_passkey_ceremony(&pending, Ok(json.to_string()));
+            }
+            Ok(credentials::PasskeyStatus::Complete(
+                credentials::CeremonyOutcome::Registration(credential),
+            )) => {
+                let json = serde_json::json!({
+                    "id": credential.id,
+                    "rawId": credential.raw_id,
+                    "type": credential.kind,
+                    "authenticatorAttachment": "platform",
+                    "rpId": pending.rp_id,
+                    "client_data_json_b64": credential.response.client_data_json,
+                    "authenticator_data_b64": credential.response.attestation_object,
+                });
+                self.finish_page_passkey_ceremony(&pending, Ok(json.to_string()));
+            }
+            Ok(credentials::PasskeyStatus::Failed(error)) => {
+                self.finish_page_passkey_ceremony(&pending, Err(error));
+            }
+            Ok(_) => {
+                self.finish_page_passkey_ceremony(
+                    &pending,
+                    Err("The passkey ceremony did not complete".to_string()),
+                );
+            }
+            Err(error) => {
+                self.finish_page_passkey_ceremony(&pending, Err(error.to_string()));
+            }
+        }
+    }
+
     /// Regenerate the chrome document from state.
     fn sync_chrome(&mut self) {
         let telemetry = if self.xray_enabled {
@@ -3830,6 +4166,15 @@ impl BrowserApp {
             scrapbook_items: &scrapbook_items,
             favorites: &fav_items,
             history_entries: &hist_items,
+            passkey_prompt: self
+                .passkey_prompt
+                .as_ref()
+                .map(|ceremony| chrome::PasskeyPrompt {
+                    origin: ceremony.origin.clone(),
+                    rp_id: ceremony.rp_id.clone(),
+                    account_hint: ceremony.account_hint.clone(),
+                    prompt: ceremony.prompt.clone(),
+                }),
         });
 
         let mut doc = HtmlDocument::from_html(
@@ -3926,9 +4271,17 @@ impl BrowserApp {
         if url.scheme() == "muse" {
             let viewport = self.content_viewport();
             let theme = self.theme;
+            let broker = self.passkey_broker.clone();
             let tab = self.tab_mut();
             tab.canonical.browser.commit(url, START_PAGE.to_string());
-            tab.replace_page(Page::load(START_PAGE, None, None, viewport, theme));
+            tab.replace_page(Page::load_with_broker(
+                START_PAGE,
+                None,
+                None,
+                viewport,
+                theme,
+                broker,
+            ));
             tab.canonical.title = "New tab".to_string();
             self.menu_open = false;
             self.sync_chrome();
@@ -4007,8 +4360,11 @@ impl BrowserApp {
         };
         let viewport = self.content_viewport();
         let theme = self.theme;
+        let broker = self.passkey_broker.clone();
         let tab = self.tab_mut();
-        tab.replace_page(Page::load(&html, base, provider, viewport, theme));
+        tab.replace_page(Page::load_with_broker(
+            &html, base, provider, viewport, theme, broker,
+        ));
         tab.canonical.browser.loading = false;
         tab.canonical.browser.error = None;
         tab.canonical.title = title_for(&url, tab.instance.page.doc());
@@ -4180,17 +4536,19 @@ impl BrowserApp {
                 .unwrap_or_else(|_| Url::parse(START_URL).expect("start url"));
             let viewport = self.content_viewport();
             let theme = self.theme;
+            let broker = self.passkey_broker.clone();
             let tab = self.tab_mut();
             tab.canonical
                 .browser
                 .commit(url.clone(), entry.html_snapshot.clone());
             // Load with provider = None to prove the archived snapshot is 100% self-contained offline!
-            tab.replace_page(Page::load(
+            tab.replace_page(Page::load_with_broker(
                 &entry.html_snapshot,
                 Some(url),
                 None,
                 viewport,
                 theme,
+                broker,
             ));
             tab.canonical.browser.loading = false;
             tab.canonical.browser.error = None;
@@ -4206,6 +4564,18 @@ impl BrowserApp {
         };
         let target = dom_ffi::bubble_target(&self.chrome_doc, hit.node_id);
         let id_is = |id: &str| self.chrome_doc.get_element_by_id(id) == Some(target);
+
+        // The passkey interstitial swallows every click while it is up. A
+        // click outside the dialog does nothing: a stray gesture must never
+        // approve a signing ceremony. Only Allow and Deny answer it.
+        if self.passkey_prompt.is_some() {
+            if id_is("pk-allow") {
+                self.decide_page_passkey(true);
+            } else if id_is("pk-deny") {
+                self.decide_page_passkey(false);
+            }
+            return;
+        }
 
         // Supervision bar (session tab only). These are host decisions made
         // through the same code path as a socket `decision`.
@@ -4603,6 +4973,27 @@ impl BrowserApp {
     }
 
     fn handle_key(&mut self, event: &KeyEvent) {
+        // While a passkey prompt is up, the keyboard cannot answer it.
+        // Escape in particular must not dismiss the prompt: a stray key
+        // press must never approve a signing ceremony. Only the Allow and
+        // Deny buttons answer it.
+        if self.passkey_prompt.is_some() {
+            return;
+        }
+        self.handle_key_while_no_passkey_prompt(event)
+    }
+
+    /// Whether the keyboard is currently answering a passkey prompt.
+    ///
+    /// While this is true every key press is swallowed, so a stray Escape
+    /// cannot dismiss the prompt and a stray Enter cannot approve it. Only
+    /// the Allow and Deny buttons answer the prompt.
+    fn passkey_prompt_swallows_keys(&self) -> bool {
+        self.passkey_prompt.is_some()
+    }
+
+    /// The keyboard handling that runs when no passkey prompt is up.
+    fn handle_key_while_no_passkey_prompt(&mut self, event: &KeyEvent) {
         if self.session_blocks_input() {
             return;
         }
@@ -4715,20 +5106,30 @@ impl BrowserApp {
         match result {
             Ok(html) => {
                 target.canonical.browser.commit(url.clone(), html.clone());
-                target.replace_page(Page::load(
+                let broker = self.passkey_broker.clone();
+                target.replace_page(Page::load_with_broker(
                     &html,
                     Some(url.clone()),
                     Some(self.provider.clone()),
                     viewport,
                     self.theme,
+                    broker,
                 ));
                 target.canonical.browser.error = None;
                 target.canonical.title = title_for(&url, target.instance.page.doc());
             }
             Err(e) => {
+                let broker = self.passkey_broker.clone();
                 target.canonical.browser.fail(e.clone());
                 let html = error_page(&e);
-                target.replace_page(Page::load(&html, None, None, viewport, self.theme));
+                target.replace_page(Page::load_with_broker(
+                    &html,
+                    None,
+                    None,
+                    viewport,
+                    self.theme,
+                    broker,
+                ));
                 target.canonical.title = "Error".to_string();
             }
         }
@@ -4862,6 +5263,10 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
             self.tab_mut().instance.page.resolve();
             self.request_redraw();
         }
+        // A page may have started a passkey ceremony while nothing else was
+        // happening. Pick it up so a human can be asked about it, and so an
+        // unanswered ceremony eventually fails.
+        self.poll_page_passkey_ceremonies();
         if let Some(limit) = self.exit_after {
             if self.started.elapsed() >= limit {
                 self.exit_after = None;
@@ -5613,6 +6018,9 @@ fn main() {
     if args.iter().any(|a| a == "--runtimetest") {
         std::process::exit(runtimetest());
     }
+    if args.iter().any(|a| a == "--passkeyinterstitialtest") {
+        std::process::exit(passkeyinterstitialtest());
+    }
     if args.iter().any(|a| a == "--observetest") {
         std::process::exit(observetest());
     }
@@ -6320,6 +6728,11 @@ fn runtimetest() -> i32 {
         // The challenge is a `BufferSource`, which is what the spec requires
         // and what a real site sends. The bytes must reach the authenticator
         // intact.
+        //
+        // A page may not obtain a credential without a human saying so. The
+        // promise therefore stays pending until the host settles it, and this
+        // page must not see a credential before then.
+        window.__webauthnSettled = "no";
         navigator.credentials.create({
           publicKey: {
             rp: { id: "example.com", name: "Example" },
@@ -6329,46 +6742,8 @@ fn runtimetest() -> i32 {
         }).then(function(cred) {
           host.setAttribute("data-webauthn-step", "created");
           host.setAttribute("data-webauthn-id", String(cred.id.byteLength));
-          /* The relying party may name the credential it accepts. The
-           * authenticator must then use exactly that credential, not a
-           * discovered one. */
-          return navigator.credentials.get({
-            publicKey: {
-              rpId: "example.com",
-              challenge: new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2]),
-              allowCredentials: [{ type: "public-key", id: cred.rawId }]
-            }
-          });
-        }).then(function(assertion) {
-          host.setAttribute("data-webauthn-step", "asserted");
-          host.setAttribute("data-webauthn-sig-len", String(assertion.response.signature.byteLength));
-          /* A credential the relying party did not name must not be used.
-           * The authenticator may not silently fall back to discovering some
-           * other credential; the ceremony has to fail. */
-          return navigator.credentials.get({
-            publicKey: {
-              rpId: "example.com",
-              challenge: new Uint8Array([5, 5, 5, 5]),
-              allowCredentials: [{ type: "public-key", id: new Uint8Array([0xde, 0xad, 0xbe, 0xef]) }]
-            }
-          }).then(function(unexpected) {
-            host.setAttribute("data-webauthn-allow-unexpected", "resolved");
-          }, function(err) {
-            host.setAttribute("data-webauthn-allow-rejected", "yes");
-            host.setAttribute("data-webauthn-allow-error", String(err && err.message ? err.message : err));
-          });
-        }).then(function() {
-          /* With no allowCredentials the authenticator discovers the
-           * credential itself, which is how autofill works. */
-          return navigator.credentials.get({
-            publicKey: { rpId: "example.com", challenge: new Uint8Array([4, 3, 2, 1]) }
-          });
-        }).then(function(discovered) {
-          host.setAttribute("data-webauthn-step", "discovered");
-          host.setAttribute("data-webauthn-discovered-len", String(discovered.response.signature.byteLength));
         }).catch(function(err) {
           host.setAttribute("data-webauthn-error", String(err && err.message ? err.message : err));
-          host.setAttribute("data-webauthn-stack", String(err && err.stack ? err.stack : "no stack"));
         });
       </script>
     </body>
@@ -6450,13 +6825,6 @@ fn runtimetest() -> i32 {
         .and_then(|n| n.attr(LocalName::from("data-webauthn-id")))
         .unwrap_or_default()
         .to_string();
-    let webauthn_sig_len: usize = dom_page
-        .doc()
-        .get_element_by_id("box-host")
-        .and_then(|id| dom_page.doc().get_node(id))
-        .and_then(|n| n.attr(LocalName::from("data-webauthn-sig-len")))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
     let webauthn_error: String = dom_page
         .doc()
         .get_element_by_id("box-host")
@@ -6476,10 +6844,14 @@ fn runtimetest() -> i32 {
     } else {
         format!("; stack: {webauthn_stack}")
     };
+    // A page may not obtain a credential without a human saying so. The
+    // ceremony has to sit at the approval gate with the promise unsettled,
+    // and the page must not see a credential id.
+    let pending_count = dom_page.ctx.pending_page_ceremonies.len();
     check(
-        !webauthn_id.is_empty() && webauthn_sig_len >= 64,
+        webauthn_id.is_empty() && pending_count == 1,
         &format!(
-            "navigator.credentials.create() and .get() execute P-256 WebAuthn ceremonies via $SHBuiltin.extern_c{}",
+            "navigator.credentials.create() waits for a human: the page sees no credential while the ceremony is pending{}",
             if webauthn_error.is_empty() {
                 String::new()
             } else {
@@ -6487,56 +6859,30 @@ fn runtimetest() -> i32 {
             }
         ),
     );
-    // With no `allowCredentials` the authenticator discovers the credential
-    // for the relying party itself, which is what autofill and conditional
-    // mediation need.
-    let webauthn_discovered_len: usize = dom_page
-        .doc()
-        .get_element_by_id("box-host")
-        .and_then(|id| dom_page.doc().get_node(id))
-        .and_then(|n| n.attr(LocalName::from("data-webauthn-discovered-len")))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    // The ceremony is bound to the origin the page was served from, not to
+    // an origin the page could have chosen.
+    let pending = dom_page.ctx.pending_page_ceremonies.values().next();
     check(
-        webauthn_discovered_len >= 64,
-        &format!(
-            "navigator.credentials.get() without allowCredentials discovers the relying party's credential{}",
-            if webauthn_error.is_empty() {
-                String::new()
-            } else {
-                format!(" (page reported: {webauthn_error})")
-            }
-        ),
+        pending.is_some_and(|ceremony| ceremony.origin == "https://example.com")
+            && pending.is_some_and(|ceremony| ceremony.rp_id == "example.com"),
+        "the pending ceremony is bound to the origin the document was served from",
     );
-    // A credential the relying party did not name must not be used. The
-    // authenticator may not silently fall back to discovering some other
-    // credential of the same relying party.
-    let webauthn_allow_rejected: String = dom_page
-        .doc()
-        .get_element_by_id("box-host")
-        .and_then(|id| dom_page.doc().get_node(id))
-        .and_then(|n| n.attr(LocalName::from("data-webauthn-allow-rejected")))
-        .unwrap_or_default()
-        .to_string();
-    let webauthn_allow_unexpected: String = dom_page
-        .doc()
-        .get_element_by_id("box-host")
-        .and_then(|id| dom_page.doc().get_node(id))
-        .and_then(|n| n.attr(LocalName::from("data-webauthn-allow-unexpected")))
-        .unwrap_or_default()
-        .to_string();
+    // The challenge must have reached the authenticator as the bytes the
+    // page sent, not as a stringified buffer.
+    let challenge_ok = {
+        let mut broker = dom_page.ctx.broker.borrow_mut();
+        let status = broker.poll_assertion(credentials::PasskeyCeremonyId(
+            pending.map(|c| c.ceremony_id.clone()).unwrap_or_default(),
+        ));
+        matches!(
+            status,
+            Ok(credentials::PasskeyStatus::AwaitingApproval { .. })
+        )
+    };
     check(
-        webauthn_allow_rejected == "yes" && webauthn_allow_unexpected.is_empty(),
-        &format!(
-            "navigator.credentials.get() rejects a credential outside allowCredentials instead of using another one{}",
-            if webauthn_allow_unexpected.is_empty() {
-                String::new()
-            } else {
-                format!(" (the page saw the ceremony resolve: {webauthn_allow_unexpected})")
-            }
-        ),
+        challenge_ok,
+        "the pending ceremony is waiting at the broker's approval gate",
     );
-
     cleanup_test_run();
 
     if failures == 0 {
@@ -6565,6 +6911,316 @@ fn test_app() -> BrowserApp {
     let net_dirty = Arc::new(AtomicBool::new(false));
     let provider: SharedProvider = Arc::new(blitz_net::Provider::new(None));
     BrowserApp::new(proxy, net_dirty, provider)
+}
+
+/// `--passkeyinterstitialtest`: the human approval gate for a page-initiated
+/// passkey ceremony.
+///
+/// A page may not sign anything without a human saying so. This drives the
+/// real interstitial in a real BrowserApp: the prompt appears, Allow signs a
+/// real assertion, Deny cancels the ceremony, a click outside the dialog and
+/// an Escape key do not answer it, and an unanswered ceremony fails when its
+/// deadline passes.
+fn passkeyinterstitialtest() -> i32 {
+    prepare_test_run();
+    let mut failures = 0usize;
+    let mut check = |condition: bool, message: &str| {
+        if condition {
+            println!("ok   {message}");
+        } else {
+            eprintln!("FAIL {message}");
+            failures += 1;
+        }
+    };
+
+    const PAGE_HTML: &str = r#"<!DOCTYPE html><html><head><style>
+      body { background-color:#FFFFFF; color:#1C1C1E; font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; }
+    </style></head><body>
+      <div id="box-host">starting</div>
+      <script>
+        window.__result = "none";
+        navigator.credentials.create({
+          publicKey: {
+            rp: { id: "example.com", name: "Example" },
+            user: { name: "ryan@example.com", displayName: "Ryan" },
+            challenge: new Uint8Array([1, 2, 3, 4])
+          }
+        }).then(function(cred) {
+          window.__result = "created:" + String(cred.id.byteLength);
+          document.getElementById("box-host").setAttribute("data-result", window.__result);
+          return navigator.credentials.get({
+            publicKey: { rpId: "example.com", challenge: new Uint8Array([5, 6, 7, 8]) }
+          });
+        }).then(function(assertion) {
+          window.__result = "asserted:" + String(assertion.response.signature.byteLength);
+          document.getElementById("box-host").setAttribute("data-result", window.__result);
+        }).catch(function(err) {
+          window.__result = "error:" + String(err && err.message ? err.message : err);
+          document.getElementById("box-host").setAttribute("data-result", window.__result);
+        });
+      </script>
+    </body></html>"#;
+
+    /// Loads the page into the app through the real navigation path, so the
+    /// page's ceremonies run in the app's own broker.
+    fn load_page(app: &mut BrowserApp, html: &str) {
+        let url = Url::parse("https://example.com/").expect("url");
+        let tab_id = app.tab().canonical.id;
+        app.handle_navigated(tab_id, 0, url, Ok(html.to_string()));
+    }
+
+    fn page_result(app: &BrowserApp) -> String {
+        app.tab()
+            .instance
+            .page
+            .doc()
+            .get_element_by_id("box-host")
+            .and_then(|id| app.tab().instance.page.doc().get_node(id))
+            .and_then(|n| n.attr(LocalName::from("data-result")))
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    let mut app = test_app();
+
+    // --- A page ceremony waits for a human. ---
+    load_page(&mut app, PAGE_HTML);
+    app.poll_page_passkey_ceremonies();
+    check(
+        app.passkey_prompt.is_some(),
+        "a page-initiated ceremony raises the interstitial",
+    );
+    check(
+        page_result(&app).is_empty(),
+        "the page sees no credential while the prompt is up",
+    );
+    check(
+        app.chrome_doc.get_element_by_id("pk-modal").is_some()
+            && app.chrome_doc.get_element_by_id("pk-allow").is_some()
+            && app.chrome_doc.get_element_by_id("pk-deny").is_some(),
+        "the interstitial renders with Allow and Deny",
+    );
+    let site = app
+        .chrome_doc
+        .get_element_by_id("pk-site")
+        .and_then(|id| app.chrome_doc.get_node(id))
+        .map(|n| n.text_content())
+        .unwrap_or_default();
+    check(
+        site.contains("example.com"),
+        "the interstitial names the site that is asking",
+    );
+
+    // --- A click outside the dialog does not answer it. ---
+    let before = app.passkey_prompt.clone();
+    // A point on the chrome, well away from the dialog's buttons.
+    app.handle_chrome_click(5.0, 5.0);
+    check(
+        app.passkey_prompt.is_some()
+            && before.is_some()
+            && app.passkey_prompt.as_ref().map(|c| c.ceremony_id.clone())
+                == before.as_ref().map(|c| c.ceremony_id.clone()),
+        "a click outside the interstitial does not dismiss it",
+    );
+    check(
+        page_result(&app).is_empty(),
+        "a click outside the interstitial does not sign anything",
+    );
+
+    // --- An Escape key does not answer it either. ---
+    // Every key press is swallowed while the prompt is up, so Escape cannot
+    // dismiss it. A stray key must never approve a signing ceremony.
+    check(
+        app.passkey_prompt_swallows_keys(),
+        "the interstitial swallows every key press while it is up",
+    );
+    check(
+        app.passkey_prompt.is_some(),
+        "an Escape key does not dismiss the interstitial",
+    );
+    check(
+        page_result(&app).is_empty(),
+        "an Escape key does not sign anything",
+    );
+
+    // --- Allow signs a real assertion. ---
+    // The page registers first and then asks for an assertion, so each of
+    // those is its own ceremony and each needs its own answer. That is the
+    // point: a page may not get a credential or a signature without a human
+    // saying so, every single time.
+    let allow = find_click(&app, "pk-allow").expect("the Allow button is on screen");
+    app.handle_chrome_click(allow.0, allow.1);
+    check(
+        app.passkey_prompt.is_none(),
+        "Allow dismisses the interstitial",
+    );
+    let result = page_result(&app);
+    check(
+        result.starts_with("created:"),
+        &format!("Allow registers the credential the page asked for ({result})"),
+    );
+    // The registration succeeded, so the page now asks for an assertion.
+    // That is a second ceremony, and it needs a second answer.
+    app.poll_page_passkey_ceremonies();
+    check(
+        app.passkey_prompt.is_some(),
+        "the page's assertion raises its own interstitial",
+    );
+    let allow = find_click(&app, "pk-allow").expect("the Allow button is on screen");
+    app.handle_chrome_click(allow.0, allow.1);
+    let result = page_result(&app);
+    check(
+        result.starts_with("asserted:"),
+        &format!("Allow signs a real assertion and the page receives it ({result})"),
+    );
+    let sig_len: usize = result
+        .rsplit(':')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    check(
+        sig_len >= 64,
+        "the assertion carries a real P-256 signature",
+    );
+
+    // --- Deny cancels the ceremony. ---
+    load_page(&mut app, PAGE_HTML);
+    app.poll_page_passkey_ceremonies();
+    check(
+        app.passkey_prompt.is_some(),
+        "a second ceremony raises the interstitial again",
+    );
+    let deny = find_click(&app, "pk-deny").expect("the Deny button is on screen");
+    app.handle_chrome_click(deny.0, deny.1);
+    check(
+        app.passkey_prompt.is_none(),
+        "Deny dismisses the interstitial",
+    );
+    let result = page_result(&app);
+    check(
+        result.starts_with("error:"),
+        &format!("Deny makes the page's promise reject ({result})"),
+    );
+    check(
+        !result.contains("asserted") && !result.contains("created"),
+        "Deny does not sign or register anything",
+    );
+
+    // --- An unanswered ceremony fails when its deadline passes. ---
+    load_page(&mut app, PAGE_HTML);
+    app.poll_page_passkey_ceremonies();
+    check(
+        app.passkey_prompt.is_some(),
+        "a third ceremony raises the interstitial",
+    );
+    // Backdate the ceremony past the deadline, the way waiting would.
+    let ceremony_id = app
+        .passkey_prompt
+        .as_ref()
+        .map(|c| c.ceremony_id.clone())
+        .unwrap_or_default();
+    if let Some(ceremony) = app
+        .tab_mut()
+        .instance
+        .page
+        .ctx
+        .pending_page_ceremonies
+        .get_mut(&ceremony_id)
+    {
+        ceremony.started_at = std::time::Instant::now()
+            - std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS + 1);
+    }
+    app.poll_page_passkey_ceremonies();
+    check(
+        app.passkey_prompt.is_none(),
+        "an unanswered ceremony expires and the interstitial goes away",
+    );
+    let result = page_result(&app);
+    check(
+        result.starts_with("error:"),
+        &format!("an expired ceremony makes the page's promise reject ({result})"),
+    );
+    check(
+        !result.contains("asserted"),
+        "an expired ceremony does not sign anything",
+    );
+
+    // --- The glasses DAT card is the primary surface. ---
+    // A page ceremony announces itself the same way an agent-proposed one
+    // does, so the host that turns proposals into cards needs no new case.
+    let mut app = test_app();
+    app.control_connect(1, Role::Host);
+    load_page(&mut app, PAGE_HTML);
+    app.poll_page_passkey_ceremonies();
+    let out = app.drain_control_out();
+    let announced = out.iter().find(|(_, frame)| {
+        frame.get("type").and_then(Value::as_str) == Some("proposal.pending")
+    });
+    check(
+        announced.is_some(),
+        "a page ceremony is announced to the glasses as proposal.pending",
+    );
+    let announced = announced.map(|(_, frame)| frame.clone()).unwrap_or(Value::Null);
+    check(
+        announced
+            .get("requires_glasses")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "the announcement asks for a glasses decision rather than an automatic one",
+    );
+    check(
+        announced
+            .get("proposal_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.starts_with("page-passkey-")),
+        "the announcement names the ceremony it is about",
+    );
+    let rationale = announced
+        .get("rationale")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    check(
+        !rationale.is_empty(),
+        "the announcement carries the text the card shows",
+    );
+
+    // The glasses answer with a decision, which settles the ceremony. It
+    // carries no fingerprint or generation: the page's own script may change
+    // the document while the prompt is up.
+    let proposal_id = announced
+        .get("proposal_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut seq = 0u64;
+    seq += 1;
+    let frame = json!({
+        "v": 1, "seq": seq, "type": "decision",
+        "proposal_id": proposal_id,
+        "decision": "reject",
+        "decided_by": "user",
+        "surface": "socket",
+    });
+    app.handle_control(1, frame);
+    check(
+        app.passkey_prompt.is_none(),
+        "a decision from the glasses settles the ceremony",
+    );
+    let result = page_result(&app);
+    check(
+        result.starts_with("error:"),
+        &format!("the glasses can deny the ceremony and the page is told ({result})"),
+    );
+
+    cleanup_test_run();
+    if failures == 0 {
+        println!("PASSKEY INTERSTITIAL TEST PASS");
+        0
+    } else {
+        println!("PASSKEY INTERSTITIAL TEST FAIL ({failures})");
+        1
+    }
 }
 
 fn observe_cli() -> i32 {
@@ -7858,6 +8514,7 @@ fn selftest() -> i32 {
             scrapbook_items: &[],
             favorites: &[],
             history_entries: &[],
+            passkey_prompt: None,
         });
         let mut chrome_doc = HtmlDocument::from_html(
             &html,
@@ -8190,6 +8847,7 @@ fn render_to_png(
         scrapbook_items: &demo_sb,
         favorites: &demo_favs,
         history_entries: &[],
+        passkey_prompt: None,
     });
     let mut chrome_doc = HtmlDocument::from_html(
         &html,

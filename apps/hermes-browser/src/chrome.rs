@@ -207,6 +207,27 @@ pub struct EngineTelemetry {
     pub overlays: Vec<XRayBox>,
 }
 
+/// A passkey ceremony a page started, waiting for a human to allow or deny
+/// it.
+///
+/// This is the browser-chrome half of the interstitial. The glasses DAT card
+/// is the primary surface; this mirrors the same decision in the window the
+/// person is already looking at.
+#[derive(Clone, Debug, Default)]
+pub struct PasskeyPrompt {
+    /// The site that is asking.
+    pub origin: String,
+    /// The relying party the ceremony is for.
+    pub rp_id: String,
+    /// The account the ceremony would use, when the browser knows one.
+    pub account_hint: Option<String>,
+    /// The prompt text the broker produced.
+    pub prompt: String,
+}
+
+/// How long a page ceremony may wait for a human before it fails.
+pub const PASSKEY_PROMPT_TIMEOUT_SECS: u64 = 60;
+
 pub struct ChromeState<'a> {
     pub url: &'a str,
     pub focused: bool,
@@ -234,6 +255,8 @@ pub struct ChromeState<'a> {
     pub favorites: &'a [NavEntryInfo<'a>],
     /// Active tab navigation history list.
     pub history_entries: &'a [NavEntryInfo<'a>],
+    /// A page-initiated passkey ceremony waiting for a human.
+    pub passkey_prompt: Option<PasskeyPrompt>,
 }
 
 /// Total height of the IE5 Mac top chrome scaled for modern desktop windows:
@@ -398,6 +421,9 @@ pub fn render(state: &ChromeState<'_>) -> String {
     // Classic IE5 Mac 3D silver circular `@` badge (`16x16px`): raised metallic disc with a clean,
     // high-contrast `@` glyph (open spiral tail on the right so it never looks like concentric rings).
     let at_swirl_svg = r##"<svg class="at-svg" width="16" height="16" viewBox="0 0 16 16"><defs><radialGradient id="atg" cx="30%" cy="25%" r="75%"><stop offset="0%" stop-color="#FFFFFF"/><stop offset="60%" stop-color="#E0E0E0"/><stop offset="100%" stop-color="#9A9A9A"/></radialGradient></defs><circle cx="8" cy="8" r="6.8" fill="url(#atg)" stroke="#707070" stroke-width="0.9"/><path d="M9.7,6.0 L9.7,9.1 C9.7,9.8 10.6,9.9 11.2,9.2 C11.9,8.4 12.0,6.9 11.4,5.6 C10.5,3.9 8.3,3.2 6.3,4.0 C4.2,4.9 3.4,7.3 4.2,9.5 C5.0,11.6 7.3,12.5 9.7,11.9" fill="none" stroke="#1F1F1F" stroke-width="1.2" stroke-linecap="round"/><path d="M9.6,6.6 C9.1,5.9 8.3,5.6 7.5,5.7 C6.2,5.9 5.5,7.0 5.7,8.3 C5.9,9.5 6.9,10.2 8.1,10.0 C8.8,9.9 9.3,9.5 9.6,8.9" fill="none" stroke="#1F1F1F" stroke-width="1.2" stroke-linecap="round"/></svg>"##;
+
+    // A key glyph for the passkey interstitial.
+    let key_svg = r##"<svg class="pk-key-svg" width="44" height="44" viewBox="0 0 44 44"><defs><linearGradient id="pkg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F6D98A"/><stop offset="55%" stop-color="#D9A93C"/><stop offset="100%" stop-color="#A8791F"/></linearGradient></defs><circle cx="22" cy="15" r="9.5" fill="none" stroke="url(#pkg)" stroke-width="4"/><path d="M22 24.5 L22 39" stroke="url(#pkg)" stroke-width="4" stroke-linecap="round"/><path d="M22 31.5 L29 31.5" stroke="url(#pkg)" stroke-width="4" stroke-linecap="round"/><path d="M22 36 L27.5 36" stroke="url(#pkg)" stroke-width="4" stroke-linecap="round"/></svg>"##;
 
     let mut tabs = String::new();
     for (index, tab) in state.tabs.iter().enumerate() {
@@ -1074,6 +1100,52 @@ pub fn render(state: &ChromeState<'_>) -> String {
     };
 
     let _ = (p.strip, p.tab_active);
+
+    // The passkey interstitial. A page asked for a credential, and a human
+    // has to say yes before the ceremony signs anything. The modal is the
+    // browser-chrome half of that prompt; the glasses DAT card is the
+    // primary one.
+    let passkey_prompt = match &state.passkey_prompt {
+        Some(prompt) => {
+            let origin = escape_html(if prompt.origin.is_empty() {
+                &prompt.rp_id
+            } else {
+                &prompt.origin
+            });
+            let account = match &prompt.account_hint {
+                Some(hint) if !hint.is_empty() => format!(
+                    r#"<div class="pk-account" id="pk-account">{}</div>"#,
+                    escape_html(hint)
+                ),
+                _ => String::new(),
+            };
+            format!(
+                r#"<div class="pk-scrim" id="pk-scrim">
+                     <div class="pk-modal" id="pk-modal" role="alertdialog" aria-modal="true" aria-labelledby="pk-title">
+                       <div class="pk-icon" id="pk-icon">{key_svg}</div>
+                       <div class="pk-title" id="pk-title">Use a passkey?</div>
+                       <div class="pk-site" id="pk-site">{origin}</div>
+                       {account}
+                       <div class="pk-detail" id="pk-detail">{detail}</div>
+                       <div class="pk-actions">
+                         <div class="pk-btn pk-deny" id="pk-deny">Deny</div>
+                         <div class="pk-btn pk-allow" id="pk-allow">Allow</div>
+                       </div>
+                     </div>
+                   </div>"#,
+                origin = origin,
+                account = account,
+                detail = escape_html(if prompt.prompt.is_empty() {
+                    "This site is asking to use a passkey."
+                } else {
+                    &prompt.prompt
+                }),
+                key_svg = key_svg,
+            )
+        }
+        None => String::new(),
+    };
+
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -1830,6 +1902,92 @@ pub fn render(state: &ChromeState<'_>) -> String {
     color: #30D158;
     font-weight: 700;
   }}
+
+  /* ---- Passkey interstitial ----
+     A page asked for a credential. The modal covers the chrome until a human
+     allows or denies it. There is deliberately no click-outside and no
+     Escape: a stray gesture must never approve a signing ceremony. */
+  .pk-scrim {{
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.28);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 90;
+  }}
+  .pk-modal {{
+    width: 340px;
+    padding: 20px 22px 18px 22px;
+    background-color: #F6F6F6;
+    border: 1px solid #9A9A9A;
+    border-radius: 12px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: auto;
+  }}
+  .pk-icon {{
+    margin-bottom: 8px;
+  }}
+  .pk-key-svg {{
+    pointer-events: none;
+  }}
+  .pk-title {{
+    font-size: 15px;
+    font-weight: 700;
+    color: #1C1C1E;
+    margin-bottom: 6px;
+  }}
+  .pk-site {{
+    font-size: 12px;
+    color: #4A4A4E;
+    margin-bottom: 4px;
+    word-break: break-all;
+    text-align: center;
+  }}
+  .pk-account {{
+    font-size: 12px;
+    color: #4A4A4E;
+    margin-bottom: 4px;
+    text-align: center;
+  }}
+  .pk-detail {{
+    font-size: 11px;
+    color: #6E7176;
+    margin-top: 6px;
+    margin-bottom: 14px;
+    text-align: center;
+  }}
+  .pk-actions {{
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+    width: 100%;
+  }}
+  .pk-btn {{
+    flex: 1;
+    height: 26px;
+    line-height: 26px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid #8E8E93;
+    background-color: #FFFFFF;
+    color: #1C1C1E;
+    cursor: pointer;
+  }}
+  .pk-allow {{
+    background-color: #1B8A38;
+    border-color: #146B2C;
+    color: #FFFFFF;
+  }}
 </style>
 </head>
 <body>
@@ -1841,9 +1999,11 @@ pub fn render(state: &ChromeState<'_>) -> String {
   {xray_layer}
   {supbar}
   {menu}
+  {passkey_prompt}
 </body>
 </html>"#,
         surface_height = state.surface_height,
+        passkey_prompt = passkey_prompt,
         nav = p.nav,
         hairline = p.hairline,
         bevel_light = p.bevel_light,

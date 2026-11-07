@@ -46,6 +46,58 @@ pub struct BlitzHostContext {
     /// authenticator must use exactly those. When it names none, the
     /// authenticator discovers the credential itself.
     pub allow_credentials: Vec<AllowCredential>,
+    /// The passkey broker the page's ceremonies run in.
+    ///
+    /// The broker is shared with the host, because a page ceremony has to
+    /// outlive the call that started it: the host has to raise the approval
+    /// prompt, wait for a human, and only then approve the ceremony. A
+    /// broker owned by this context alone would be dropped when the call
+    /// returned, and the ceremony with it.
+    pub broker: std::rc::Rc<std::cell::RefCell<crate::credentials::LocalPasskeyBroker>>,
+    /// The page ceremonies that are waiting for a human, by ceremony id.
+    pub pending_page_ceremonies: std::collections::HashMap<String, PageCeremony>,
+}
+
+/// What kind of ceremony a page started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageCeremonyKind {
+    /// The page asked to register a new credential.
+    Registration,
+    /// The page asked for an assertion.
+    Assertion,
+}
+
+/// A page-initiated ceremony that is waiting for a human.
+#[derive(Clone, Debug)]
+pub struct PageCeremony {
+    /// The ceremony id the broker gave it.
+    pub ceremony_id: String,
+    /// What kind of ceremony this is.
+    pub kind: PageCeremonyKind,
+    /// The prompt shown to the human.
+    pub prompt: String,
+    /// The origin the ceremony is bound to.
+    pub origin: String,
+    /// The relying party the ceremony is for.
+    pub rp_id: String,
+    /// The account the ceremony would use.
+    pub account_hint: Option<String>,
+    /// When the ceremony started.
+    pub started_at: std::time::Instant,
+}
+
+impl Default for PageCeremony {
+    fn default() -> Self {
+        Self {
+            ceremony_id: String::new(),
+            kind: PageCeremonyKind::Assertion,
+            prompt: String::new(),
+            origin: String::new(),
+            rp_id: String::new(),
+            account_hint: None,
+            started_at: std::time::Instant::now(),
+        }
+    }
 }
 
 /// A credential the relying party named in `allowCredentials`.
@@ -63,6 +115,18 @@ pub struct AllowCredential {
 
 impl BlitzHostContext {
     pub fn new(doc: HtmlDocument) -> Self {
+        Self::with_broker(doc, default_broker())
+    }
+
+    /// Creates a context that runs its page ceremonies in `broker`.
+    ///
+    /// The host passes the same broker it uses for its own ceremonies, so a
+    /// page ceremony and an agent-proposed ceremony are both visible to the
+    /// host, and the host can approve or cancel either one.
+    pub fn with_broker(
+        doc: HtmlDocument,
+        broker: std::rc::Rc<std::cell::RefCell<crate::credentials::LocalPasskeyBroker>>,
+    ) -> Self {
         Self {
             doc,
             dirty: false,
@@ -71,16 +135,30 @@ impl BlitzHostContext {
             scratch_bytes: Vec::new(),
             origin: String::new(),
             allow_credentials: Vec::new(),
+            broker,
+            pending_page_ceremonies: std::collections::HashMap::new(),
         }
     }
 
-    /// Creates a context for a document served from `origin`.
-    pub fn with_origin(doc: HtmlDocument, origin: &str) -> Self {
+    /// Creates a context for a document served from `origin`, running its
+    /// page ceremonies in `broker`.
+    pub fn with_origin_and_broker(
+        doc: HtmlDocument,
+        origin: &str,
+        broker: std::rc::Rc<std::cell::RefCell<crate::credentials::LocalPasskeyBroker>>,
+    ) -> Self {
         Self {
             origin: origin.to_string(),
-            ..Self::new(doc)
+            ..Self::with_broker(doc, broker)
         }
     }
+}
+
+/// The broker a context uses when the host does not supply one.
+pub fn default_broker() -> std::rc::Rc<std::cell::RefCell<crate::credentials::LocalPasskeyBroker>> {
+    std::rc::Rc::new(std::cell::RefCell::new(
+        crate::credentials::LocalPasskeyBroker::new(),
+    ))
 }
 
 #[inline]
@@ -782,7 +860,10 @@ pub unsafe extern "C" fn blitz_dom_set_allow_credentials(ctx: *mut c_void, json:
     ctx.allow_credentials = items
         .iter()
         .map(|item| AllowCredential {
-            id: item.get("id").and_then(serde_json::Value::as_str).map(str::to_string),
+            id: item
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
             transports: item
                 .get("transports")
                 .and_then(serde_json::Value::as_array)
@@ -885,9 +966,7 @@ pub unsafe extern "C" fn blitz_dom_webauthn_create(
         rp_id.trim().to_string()
     };
 
-    use crate::credentials::{
-        LocalPasskeyBroker, PasskeyBroker, PasskeyStatus, RegistrationRequest,
-    };
+    use crate::credentials::{PasskeyBroker, PasskeyStatus, RegistrationRequest};
     use crate::webauthn::types::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
 
     let user_name = if user_name.trim().is_empty() {
@@ -895,7 +974,6 @@ pub unsafe extern "C" fn blitz_dom_webauthn_create(
     } else {
         user_name.trim().to_string()
     };
-    let mut broker = LocalPasskeyBroker::new();
     let request = RegistrationRequest {
         task_id: "page-webauthn-create".to_string(),
         origin: origin.clone(),
@@ -916,54 +994,69 @@ pub unsafe extern "C" fn blitz_dom_webauthn_create(
         extensions: None,
         cross_origin: false,
     };
-    let ceremony = match broker.begin_registration(request) {
-        Ok(id) => id,
-        Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
+    // The ceremony is NOT approved here. A page may not register a
+    // credential without a human saying so, so the ceremony stops here and
+    // the host raises the approval prompt. The page's promise stays pending
+    // until the human answers.
+    let started = {
+        let mut broker = ctx.broker.borrow_mut();
+        broker.begin_registration(request).map(|ceremony| {
+            let (prompt, account_hint) = match broker.poll_registration(ceremony.clone()) {
+                Ok(PasskeyStatus::AwaitingApproval {
+                    prompt,
+                    account_hint,
+                    ..
+                }) => (prompt, account_hint),
+                _ => (String::new(), None),
+            };
+            (ceremony, prompt, account_hint)
+        })
     };
-    // A registration asked for by a page is approved by the host, which is
-    // the same approval the control surface uses. Until then the ceremony
-    // produces nothing.
-    if let Err(error) = broker.approve_ceremony(ceremony.clone(), "host", "page") {
-        return write_json(ctx, &webauthn_error(&error.to_string()));
-    }
-    match broker.poll_registration(ceremony) {
-        Ok(PasskeyStatus::Complete(crate::credentials::CeremonyOutcome::Registration(credential))) => {
-            write_json(
-                ctx,
-                &serde_json::json!({
-                    "id": credential.id,
-                    "rawId": credential.raw_id,
-                    "type": credential.kind,
-                    "authenticatorAttachment": "platform",
-                    "rpId": rp_id,
-                    "userName": user_name,
-                    "client_data_json_b64": credential.response.client_data_json,
-                    "authenticator_data_b64": credential.response.attestation_object,
-                    "publicKeyPem": crate::webauthn::b64::b64url_decode(&credential.id)
-                        .and_then(|bytes| broker.public_key_pem(&bytes).ok())
-                        .flatten()
-                        .unwrap_or_default(),
-                }),
-            )
+    let (ceremony, prompt, account_hint) = match started {
+        Ok(started) => started,
+        Err(error) => {
+            let message = error.to_string();
+            return write_json(ctx, &webauthn_error(&message));
         }
-        Ok(PasskeyStatus::Failed(error)) => write_json(ctx, &webauthn_error(&error)),
-        Ok(_) => write_json(ctx, &webauthn_error("the ceremony did not complete")),
-        Err(error) => write_json(ctx, &webauthn_error(&error.to_string())),
-    }
+    };
+    let ceremony_id = ceremony.0;
+    ctx.pending_page_ceremonies.insert(
+        ceremony_id.clone(),
+        PageCeremony {
+            ceremony_id: ceremony_id.clone(),
+            kind: PageCeremonyKind::Registration,
+            prompt: prompt.clone(),
+            origin: origin.clone(),
+            rp_id: rp_id.clone(),
+            account_hint,
+            started_at: std::time::Instant::now(),
+        },
+    );
+    write_json(
+        ctx,
+        &serde_json::json!({
+            "pending": true,
+            "ceremony_id": ceremony_id,
+            "prompt": prompt,
+            "origin": origin,
+            "rp_id": rp_id,
+        }),
+    )
 }
 
-/// `navigator.credentials.get(options)` -> runs a real NIST P-256 WebAuthn
-/// assertion ceremony and writes the JSON assertion response into
-/// `ctx.scratch_utf8`.
+/// `navigator.credentials.get(options)` -> starts a real NIST P-256 WebAuthn
+/// assertion ceremony and writes the JSON result into `ctx.scratch_utf8`.
 ///
 /// The ceremony is performed by the passkey broker against the macOS
 /// Keychain. The challenge arrives as raw bytes, and the origin is the one
 /// the document was actually served from.
+///
+/// The ceremony is NOT approved here. The result is a *pending* result that
+/// names the ceremony; the host raises the approval prompt, and the page's
+/// promise is settled when the human answers. A page may not obtain a
+/// signature without a human having said yes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn blitz_dom_webauthn_get(
-    ctx: *mut c_void,
-    rp_id: *const c_char,
-) -> c_int {
+pub unsafe extern "C" fn blitz_dom_webauthn_get(ctx: *mut c_void, rp_id: *const c_char) -> c_int {
     let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
         return -1;
     };
@@ -978,10 +1071,7 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(
         ctx.origin.clone()
     };
     let effective_rp = match crate::webauthn::origin::validate_origin_and_effective_rp_id(
-        &origin,
-        None,
-        false,
-        false,
+        &origin, None, false, false,
     ) {
         Ok(validated) => validated.effective_rp_id,
         Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
@@ -994,9 +1084,7 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(
         Some(rp_id.trim().to_string())
     };
 
-    use crate::credentials::{
-        CeremonyOutcome, LocalPasskeyBroker, PasskeyBroker, PasskeyRequest, PasskeyStatus,
-    };
+    use crate::credentials::{PasskeyBroker, PasskeyRequest, PasskeyStatus};
 
     // The relying party may name the credentials it accepts. When it does,
     // the authenticator must use exactly those; when it does not, the
@@ -1014,12 +1102,15 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(
                 id: bytes,
                 transports: raw.transports,
                 rk: raw.rk,
-                kind: if raw.kind.is_empty() { "public-key".to_string() } else { raw.kind },
+                kind: if raw.kind.is_empty() {
+                    "public-key".to_string()
+                } else {
+                    raw.kind
+                },
             })
         })
         .collect();
 
-    let mut broker = LocalPasskeyBroker::new();
     let request = PasskeyRequest {
         task_id: "page-webauthn-get".to_string(),
         origin: origin.clone(),
@@ -1031,33 +1122,55 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(
         cross_origin: false,
         top_origin: None,
     };
-    let ceremony = match broker.begin_assertion(request) {
-        Ok(id) => id,
-        Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
+
+    // The broker is shared with the host, so the ceremony this call starts
+    // is still there when the host comes to approve it.
+    let started = {
+        let mut broker = ctx.broker.borrow_mut();
+        broker.begin_assertion(request).map(|ceremony| {
+            let (prompt, account_hint) = match broker.poll_assertion(ceremony.clone()) {
+                Ok(PasskeyStatus::AwaitingApproval {
+                    prompt,
+                    account_hint,
+                    ..
+                }) => (prompt, account_hint),
+                _ => (String::new(), None),
+            };
+            (ceremony, prompt, account_hint)
+        })
     };
-    // A page asked for an assertion. The host approves it, exactly as the
-    // control surface does, and the ceremony produces nothing until then.
-    if let Err(error) = broker.approve_ceremony(ceremony.clone(), "host", "page") {
-        return write_json(ctx, &webauthn_error(&error.to_string()));
-    }
-    match broker.poll_assertion(ceremony) {
-        Ok(PasskeyStatus::Complete(CeremonyOutcome::Assertion(credential))) => write_json(
-            ctx,
-            &serde_json::json!({
-                "id": credential.id,
-                "rawId": credential.raw_id,
-                "type": credential.kind,
-                "authenticatorAttachment": "platform",
-                "rpId": effective_rp,
-                "client_data_json_b64": credential.response.client_data_json,
-                "authenticator_data_b64": credential.response.authenticator_data,
-                "signature_der_b64": credential.response.signature,
-            }),
-        ),
-        Ok(PasskeyStatus::Failed(error)) => write_json(ctx, &webauthn_error(&error)),
-        Ok(_) => write_json(ctx, &webauthn_error("the ceremony did not complete")),
-        Err(error) => write_json(ctx, &webauthn_error(&error.to_string())),
-    }
+    let (ceremony, prompt, account_hint) = match started {
+        Ok(started) => started,
+        Err(error) => {
+            let message = error.to_string();
+            return write_json(ctx, &webauthn_error(&message));
+        }
+    };
+    let ceremony_id = ceremony.0;
+
+    ctx.pending_page_ceremonies.insert(
+        ceremony_id.clone(),
+        PageCeremony {
+            ceremony_id: ceremony_id.clone(),
+            kind: PageCeremonyKind::Assertion,
+            prompt: prompt.clone(),
+            origin: origin.clone(),
+            rp_id: effective_rp.clone(),
+            account_hint,
+            started_at: std::time::Instant::now(),
+        },
+    );
+
+    write_json(
+        ctx,
+        &serde_json::json!({
+            "pending": true,
+            "ceremony_id": ceremony_id,
+            "prompt": prompt,
+            "origin": origin,
+            "rp_id": effective_rp,
+        }),
+    )
 }
 
 /// Mark the document damaged without mutating it.

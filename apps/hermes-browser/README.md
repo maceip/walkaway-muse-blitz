@@ -68,7 +68,8 @@ arrive.
 | Docked width | `--render out.png --dark --menu --size 560x760` | Chrome fits the ~560px desktop panel without overflow |
 | Static Hermes embed | `_sh_init` → unit → JSI call | Verified |
 | Passkey end-to-end | `--passkeytest` | PASS — 12 assertions: real registration and assertion ceremonies, macOS Keychain storage, the demo fixture's independent `openssl` verifier accepts the assertion and rejects replay / unknown credential / mismatched challenge |
-| Credential + passkey unit suite | `cargo test --release` | PASS — 74 assertions, including 11 against the real login keychain |
+| Passkey interstitial | `--passkeyinterstitialtest` | PASS — 26 assertions: a page ceremony waits for a human, Allow signs a real P-256 assertion, Deny and the 60-second expiry sign nothing, an outside click and an Escape key do not answer the prompt, and the glasses can answer it over the control socket |
+| Credential + passkey unit suite | `cargo test --release` | PASS — 78 assertions, including 11 against the real login keychain |
 | Keychain cleanup | `--keychain-cleanup` | Removes the Keychain items earlier test runs left behind and reports what it could not remove; confirms first that keychain user interaction is disabled, so it cannot ask for a password |
 
 The click path was verified by rendering before/after through the real paint
@@ -283,6 +284,16 @@ the document was actually served from, not one the page gets to choose. An
 `allowCredentials` list selects exactly the credential the relying party
 named, and a ceremony naming a credential that does not exist fails instead of
 falling back to some other credential of the same site.
+
+**A page cannot get a credential or a signature on its own.** The ceremony
+starts, stops at the approval gate, and the page's promise stays pending
+until a human answers. The prompt appears twice: as a DAT card on the
+glasses, which is the primary surface, and as a modal in the browser chrome
+that mirrors it. The modal has no click-outside dismissal and no Escape
+dismissal, and the keyboard is swallowed while it is up, so a stray gesture
+can never approve a signing ceremony. Only the explicit **Allow** and **Deny**
+buttons answer it. An unanswered ceremony expires after 60 seconds and fails
+cleanly rather than hanging the page.
 
 Remote JavaScript remains unimplemented and is reported as an unsupported
 capability. An unimplemented protocol in the tree is worse than a written one,
