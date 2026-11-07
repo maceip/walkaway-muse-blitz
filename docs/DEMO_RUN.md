@@ -38,6 +38,21 @@ timeout is 30s — too short for a human tap; do not use the CLI). Logs:
 a `walkaway-live-demo-*` temp dir (`live_demo.sqlite3`, `vault.json`,
 `audit.jsonl`); disco view `http://127.0.0.1:8795/disco-workbench`.
 
+## The weather app (no glasses, no campaign)
+
+The fixture also serves a real weather web app, which is useful on its own
+and needs none of the bus/phone/glasses preconditions above:
+
+```sh
+python3 services/demo-fixtures/signup_fixture.py --port 8795 --db /tmp/hermes-weather/fixture.sqlite3
+```
+
+Then open `http://127.0.0.1:8795/weather` in Hermes, or call
+`http://127.0.0.1:8795/api/weather?place=Tokyo` for the same real data as
+JSON. The data comes from the live key-less Open-Meteo service. The page is
+rendered by the server, because this engine has no `fetch` and no
+`XMLHttpRequest`; see `T-HERMES-WEATHER-APP` in `docs/TEST_REGISTRY.md`.
+
 ## Human script (exactly 3 taps, glasses only)
 
 - Card 1: SoCon account + vault commit → **Approve**

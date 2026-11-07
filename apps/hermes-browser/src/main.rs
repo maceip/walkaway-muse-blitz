@@ -23,6 +23,7 @@ mod keychain;
 mod observe;
 mod page_endpoint;
 mod passkeytest;
+mod weathertest;
 mod recall;
 mod scrapbook;
 mod vault;
@@ -34,7 +35,6 @@ use blitz_dom::{DocumentConfig, LocalName, Namespace, NodeData, Point, QualName}
 use blitz_html::HtmlDocument;
 use blitz_traits::node_id::NodeId;
 use blitz_traits::shell::{ColorScheme, Viewport};
-use markup5ever::local_name;
 use browser::{Browser, SharedProvider};
 use chrome::{
     CHROME_HEIGHT, ChromeState, EXPLORER_DRAWER_WIDTH, EXPLORER_RAIL_WIDTH, ExplorerTab,
@@ -44,6 +44,7 @@ use chrome::{
 use control::{ControlHub, Role};
 use credentials::{CredentialBroker, PasskeyBroker};
 use dom_ffi::BlitzHostContext;
+use markup5ever::local_name;
 use page_endpoint::PageCommand;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -6238,6 +6239,9 @@ fn main() {
     }
     if args.iter().any(|a| a == "--passkeytest") {
         std::process::exit(passkeytest::passkeytest());
+    }
+    if args.iter().any(|a| a == "--weathertest") {
+        std::process::exit(weathertest::weathertest());
     }
     if args.iter().any(|a| a == "--keychain-cleanup") {
         std::process::exit(keychain_cleanup());

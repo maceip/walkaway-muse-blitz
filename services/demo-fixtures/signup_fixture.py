@@ -10,6 +10,7 @@ Serves:
 - GET /campaign-receipt, GET /api/campaign_receipt, POST /api/campaign_receipt (Clean Final Campaign Receipt)
 - POST /api/reset (Deterministic <2s SQLite & Workbench Reset)
 - GET /signin, POST /signin, GET /api/logins (Slice 3: Zero-LLM FormRecipe Recall + Instant Sign-In)
+- GET /weather, GET /api/weather (Real weather web app: same-origin proxy to Open-Meteo)
 """
 
 import argparse
@@ -27,6 +28,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+import weather_app
 
 CONFERENCE_PORTALS: list[dict[str, object]] = [
     {"portal_id": 1, "conference_name": "SoCon 2026", "rp_id": "socon2026.local"},
@@ -1160,6 +1163,15 @@ def make_handler(db_path: Path):
                 )
             if parsed.path == "/signin":
                 return self.send_html(200, SIGNIN_HTML)
+            if parsed.path == "/weather":
+                qs = parse_qs(parsed.query)
+                place = (qs.get("place") or ["San Francisco"])[0].strip() or "San Francisco"
+                return self.send_html(200, weather_app.render_weather_html(place))
+            if parsed.path == "/api/weather":
+                qs = parse_qs(parsed.query)
+                place = (qs.get("place") or [""])[0]
+                status, payload = weather_app.weather_api_json(place)
+                return self.send_json(status, payload)
             if parsed.path == "/api/accounts":
                 with lock, contextlib.closing(sqlite3.connect(db_path)) as conn:
                     conn.row_factory = sqlite3.Row

@@ -150,6 +150,41 @@ hop works across devices.
   its bytes one index at a time yields zeros; it must be wrapped in a
   `Uint8Array` view first.
 
+### T-HERMES-WEATHER-APP
+
+- Command: `./target/release/hermes-blitz-browser --weathertest` from
+  `apps/hermes-browser/`. The harness starts the real demo fixture as a
+  subprocess on an ephemeral port and tears it down afterwards.
+- Real components: the demo fixture (`services/demo-fixtures/signup_fixture.py`)
+  and the weather module (`services/demo-fixtures/weather_app.py`), the real
+  key-less **Open-Meteo** upstream services (`geocoding-api.open-meteo.com`
+  and `api.open-meteo.com`), and the Hermes/Blitz engine's own DOM
+  (`Page::load` + `Document`). Nothing is mocked: there is no canned
+  forecast anywhere in the module, and a run with no network fails loudly
+  rather than showing invented weather.
+- Asserts: the weather API answers 200 for a real place and reports a
+  place name resolved by the real geocoder, a current temperature in a
+  plausible range, and a multi-day forecast; the served page already
+  contains that real temperature, so **no page-side network call is needed**
+  — the Blitz runtime Hermes builds on has no `fetch` and no
+  `XMLHttpRequest`, so a page that pulled its own data would render
+  nothing at all; the engine's own DOM, after loading that page, holds the
+  rendered temperature, the condition, the place, one row per forecast day,
+  and the inline SVG weather icon; the page carries inline SVG for the icon
+  rather than an emoji glyph, because the engine's font stack has no emoji
+  font and an emoji renders as a tofu box; an unknown place is a 404 naming
+  the real reason, and its page shows that reason with no temperature.
+- Last observed: **PASS** 2026-11-07 00:5x PT — 16 checks, all ok.
+- Note: the DOM assertions were mutation-tested. Rendering the temperature
+  100° off makes the DOM check fail, and replacing the inline SVG with a
+  text glyph makes both SVG checks fail. A test that cannot fail proves
+  nothing, so both mutations were applied and observed to fail the suite
+  before the real implementation was restored.
+- Note: this is the first thing the browser is pointed at that is not the
+  demo fixture's own campaign machinery. It exists to prove the browser
+  renders an ordinary, real web app — real upstream data, real HTTP, real
+  DOM, real vector icons — and not only the fixture's own pages.
+
 ### T-HERMES-PASSKEY-INTERSTITIAL
 
 - Command: `./target/release/hermes-blitz-browser --passkeyinterstitialtest`
