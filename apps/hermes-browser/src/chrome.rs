@@ -1,33 +1,33 @@
 //! The browser chrome, rendered by the same HTML/CSS engine as the page.
 //!
-//! Faithfully implements the Internet Explorer 5 Macintosh Edition Aqua chrome
-//! and Collapsible Explorer Bar shown in the reference screenshots, scaled cleanly
-//! for modern desktop windows:
-//! - Multi-row IE5 Mac Aqua top chrome (`CHROME_HEIGHT = 128.0`):
-//!   1. Classic Mac OS Platinum/Aqua title & tab bar (`26px`) with window collapse
-//!      box, 6-line horizontal grip ridges across the bar, tabs (`#tab-N`,
-//!      `#tab-close-N`, `#btn-newtab`), and right window zoom/shade boxes.
-//!   2. Fluted/ribbed horizontal pinstripe Aqua button bar (`48px`) with 3D glossy
-//!      Aqua Blue icons (`Back`, `Forward`, `Stop`, `Refresh`, `Home`, beaded
-//!      divider, `AutoFill`, `Print`, `Mail`, `Sherlock`) and the 3D Aqua `e`
-//!      emblem on the far right.
-//!   3. Full-height 3D cylindrical Aqua Blue `Address :` bar (`30px`) with `@`
-//!      swirl badge, sunken white URL input (`#address`), and `▸ go` button
-//!      (`#btn-go`) on the right.
-//!   4. Fluted/ribbed horizontal pinstripe Favorites bar (`24px`: `@ Web Gallery`,
-//!      `@ Office for Macintosh`, `@ Products for Mac`, `@ Microsoft Internet`,
-//!      `@ Apple`, `@ Google`, `@ Developer Hub`, plus Aqua `»` chevron `#btn-fav-overflow`
-//!      on the right).
-//! - Left vertical Explorer Bar rail (`EXPLORER_RAIL_WIDTH = 36.0`) with
-//!   `#btn-collapse-toolbar` (3D Aqua Blue `◀|||` / `|||▶`) and five interlocking
-//!   angled folder tabs (`Favorites`, `History`, `Search`, `Scrapbook`,
-//!   `Page Holder`) with horizontal fluted pinstripes and 90°-rotated sideways
-//!   labels. When an Explorer Bar drawer (`EXPLORER_DRAWER_WIDTH = 286.0`) is open,
-//!   the drawer sits on the left (`x = 0..286`) and the vertical tab rail attaches
-//!   to the right edge of the drawer (`x = 286..322`), with the active tab
-//!   merging seamlessly into the drawer and highlighted in bold Aqua Blue.
+//! Faithfully implements the 4 walls of the Internet Explorer 5 Macintosh Edition
+//! (Mac OS X Cheetah/Puma Aqua) window (`media_1794020340993_5f6a11ae.jpg` /
+//! `media_1794021684097_68c9727c.jpg`) at 1:1 native pixel fidelity:
+//! - Top Wall (`CHROME_HEIGHT = 116.0`):
+//!   1. `23px` Mac OS X Aqua pinstriped title bar (`title_left` 67x23 gumdrops,
+//!      centered `title_at` 16x16 + window title, `title_right` 17x23 cap).
+//!   2. `41px` 4px-period horizontal pinstriped Aqua toolbar with contiguous 1:1
+//!      native sprites (`Back`, `Forward`, `Stop`, `Refresh`, `Home`, beaded
+//!      separator, `AutoFill`, `Print`, `Mail`) and the 42x41 `e` emblem on the right.
+//!   3. `27px` cylindrical Bondi-Teal Aqua `Address:` bar (`addr_left` 71x27,
+//!      18px sunken white input `#address` with `addr_at` 19x18, `addr_right` 51x27 `> go`).
+//!   4. `25px` 4px-period horizontal pinstriped Favorites bar (`fav_left` 23x25,
+//!      `@ Live Home Page`, `@ Apple`, `@ Apple Support`, `@ Apple Store`,
+//!      `@ iTools`, `@ Mac OS X`, `@ Microsoft MacTopia`, and `fav_right` 25x25 `>>`).
+//! - Left Wall (`EXPLORER_RAIL_WIDTH = 23.0`):
+//!   - `23x23` `◄|||` collapse button (`#btn-collapse-toolbar`), `23x368` continuous
+//!     5-tab vertical Explorer Bar strip (`Favorites`, `History`, `Search`,
+//!     `Scrapbook`, `Page Holder`), and `23px` lower pinstriped rail with `1px`
+//!     solid black inner right border.
+//! - Right Wall (`1px`):
+//!   - `1px solid #919191` outer right window frame border (no 15px scrollbar track).
+//! - Bottom Wall (`16px`):
+//!   - `23x16` `bottom_left` corner cap, `16px` 4px-period pinstriped bottom bar
+//!     with `1px solid #010101` inner top border, and `16x16` `bottom_right` resize grip.
 
 use std::fmt::Write;
+
+use crate::ie5_sprites::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Theme {
@@ -85,25 +85,18 @@ pub struct NavEntryInfo<'a> {
 }
 
 struct Palette {
-    strip: &'static str,
-    tab_active: &'static str,
     nav: &'static str,
     hairline: &'static str,
     bevel_light: &'static str,
-    bevel_dark: &'static str,
     pill: &'static str,
-    pill_focus: &'static str,
     ink: &'static str,
     muted: &'static str,
     menu_bg: &'static str,
     separator: &'static str,
     accent: &'static str,
-    aqua_badge: &'static str,
     rail_bg: &'static str,
-    rail_tab_bg: &'static str,
     drawer_bg: &'static str,
     drawer_header_bg: &'static str,
-    brand_teal: &'static str,
     link_blue: &'static str,
     rib_base: &'static str,
     rib_hi: &'static str,
@@ -113,50 +106,36 @@ struct Palette {
 fn palette(theme: Theme) -> Palette {
     match theme {
         Theme::Light => Palette {
-            strip: "#D4D4D4",
-            tab_active: "#F2F2F2",
-            nav: "#E6E6E6",
+            nav: "#ECECEC",
             hairline: "#555555",
             bevel_light: "#FFFFFF",
-            bevel_dark: "#6A6A6A",
             pill: "#FFFFFF",
-            pill_focus: "#FFFFFF",
             ink: "#111111",
-            muted: "#727E88",
-            menu_bg: "#E6E6E6",
+            muted: "#6E6E6E",
+            menu_bg: "#ECECEC",
             separator: "#B0B0B0",
             accent: "#16689E",
-            aqua_badge: "#2476AE",
-            rail_bg: "#D8D8D8",
-            rail_tab_bg: "#E6E6E6",
-            drawer_bg: "#EAEAEA",
+            rail_bg: "#ECECEC",
+            drawer_bg: "#EEEEEE",
             drawer_header_bg: "#DEDEDE",
-            brand_teal: "#146696",
             link_blue: "#0000EE",
-            rib_base: "#E6E6E6",
-            rib_hi: "#F7F7F7",
-            rib_lo: "#D2D2D2",
+            rib_base: "#ECECEC",
+            rib_hi: "#FCFCFC",
+            rib_lo: "#DEDEDE",
         },
         Theme::Dark => Palette {
-            strip: "#1E1E20",
-            tab_active: "#2E2E32",
             nav: "#262629",
             hairline: "#48484C",
             bevel_light: "#3E3E42",
-            bevel_dark: "#141416",
             pill: "#1B1B1D",
-            pill_focus: "#141416",
             ink: "#F2F2F7",
             muted: "#7E8894",
             menu_bg: "#2C2C2E",
             separator: "#3A3A3C",
             accent: "#38A3F8",
-            aqua_badge: "#1E5B88",
             rail_bg: "#222225",
-            rail_tab_bg: "#2C2C30",
             drawer_bg: "#1C1C1E",
             drawer_header_bg: "#28282B",
-            brand_teal: "#58B4F8",
             link_blue: "#5AC8FA",
             rib_base: "#262629",
             rib_hi: "#303034",
@@ -236,18 +215,16 @@ pub struct ChromeState<'a> {
     pub history_entries: &'a [NavEntryInfo<'a>],
 }
 
-/// Total height of the IE5 Mac top chrome scaled for modern desktop windows:
-/// Title/Tab Strip (26) + Ribbed Aqua Button Bar (48) + Cylindrical Aqua Address Bar (30) + Ribbed Favorites Strip (24) = 128.0.
-pub const CHROME_HEIGHT: f64 = 128.0;
-/// Width of the vertical IE5 Mac Explorer Bar folder-tab rail.
-pub const EXPLORER_RAIL_WIDTH: f64 = 28.0;
+/// Exact 1:1 height of the IE5 Mac top chrome (`media_1794020340993_5f6a11ae.jpg`):
+/// Title Bar (23) + Aqua Toolbar (41) + Cylindrical Address Bar (27) + Favorites Bar (25) = 116.0.
+pub const CHROME_HEIGHT: f64 = 116.0;
+/// Exact 1:1 width of the vertical IE5 Mac Explorer Bar folder-tab rail (`23px`).
+pub const EXPLORER_RAIL_WIDTH: f64 = 23.0;
 /// Width of the collapsible Explorer Bar drawer panel when open.
 pub const EXPLORER_DRAWER_WIDTH: f64 = 286.0;
 /// Height of the Page Holder drawer's top control header bar.
 pub const PH_HEADER_HEIGHT: f64 = 52.0;
 
-/// Generates a `<div class="rib-bg">` wrapping an SVG with explicit horizontal fluted/ribbed
-/// Aqua pinstripe `<path>` lines (`anyrender_svg` renders `<path>` strokes directly).
 fn ribbed_rect_svg(width: u32, height: u32, base: &str, hi: &str, lo: &str) -> String {
     let mut hi_path = String::new();
     let mut lo_path = String::new();
@@ -257,100 +234,10 @@ fn ribbed_rect_svg(width: u32, height: u32, base: &str, hi: &str, lo: &str) -> S
         if y + 1 < height {
             let _ = write!(lo_path, "M0,{}.5 H{} ", y + 1, width);
         }
-        y += 3;
+        y += 4;
     }
     format!(
         r##"<div class="rib-bg"><svg width="{width}" height="{height}" viewBox="0 0 {width} {height}"><rect width="{width}" height="{height}" fill="{base}"/><path d="{hi_path}" stroke="{hi}" stroke-width="1"/><path d="{lo_path}" stroke="{lo}" stroke-width="1"/></svg></div>"##
-    )
-}
-
-/// Generates an interlocking angled IE5 Mac Explorer Bar folder tab (`27x90px`) wrapped in
-/// `<div class="exp-tab-bg">` with horizontal fluted/ribbed pinstripes and authentic shoulders:
-/// - Inactive boundary lines slope UP-RIGHT (`/`, from `(0, 90)` to `(26, 77)`).
-/// - The active tab (`active == true`) pops to the front: its top shoulder slopes
-///   DOWN-RIGHT (`\`, from `(0, 0)` to `(26, 13)`) and its bottom shoulder slopes
-///   UP-RIGHT (`/`, from `(0, 90)` to `(26, 77)`), while the tab immediately above
-///   it (`next_active == true`) tucks behind that `\` shoulder (`(0, 77)` to `(26, 90)`).
-fn folder_tab_svg(
-    first_tab: bool,
-    active: bool,
-    next_active: bool,
-    drawer_open: bool,
-    base: &str,
-    hi: &str,
-    lo: &str,
-    active_base: &str,
-) -> String {
-    let fill_col = if active { active_base } else { base };
-
-    let (tl_y, tr_y) = if first_tab {
-        (0u32, 0u32)
-    } else if active {
-        (0u32, 13u32)
-    } else {
-        (13u32, 0u32)
-    };
-
-    let (bl_y, br_y) = if next_active {
-        (77u32, 90u32)
-    } else {
-        (90u32, 77u32)
-    };
-
-    let poly_pts = format!("0,{tl_y} 26,{tr_y} 26,{br_y} 0,{bl_y}");
-
-    let mut ribs = String::new();
-    let rib_hi = if active { "#FAFAFA" } else { hi };
-    let rib_lo = if active { "#DCDCDC" } else { lo };
-    let mut y = 2u32;
-    while y < 89 {
-        let yf = y as f64;
-        let mut x_left = 1u32;
-        let mut x_right = 25u32;
-        if tl_y == 13 && tr_y == 0 && yf < 13.0 {
-            x_left = ((13.0 - yf) * (26.0 / 13.0)).ceil() as u32;
-        } else if tl_y == 0 && tr_y == 13 && yf < 13.0 {
-            x_right = ((yf * (26.0 / 13.0)).floor() as u32).min(25);
-        }
-        if bl_y == 90 && br_y == 77 && yf > 77.0 {
-            x_right = x_right.min(((90.0 - yf) * (26.0 / 13.0)).floor() as u32);
-        } else if bl_y == 77 && br_y == 90 && yf > 77.0 {
-            x_left = x_left.max(((yf - 77.0) * (26.0 / 13.0)).ceil() as u32);
-        }
-        if x_right > x_left + 1 {
-            let stroke_col = if (y / 2) % 2 == 0 { rib_hi } else { rib_lo };
-            let _ = write!(
-                ribs,
-                r#"<line x1="{x_left}" y1="{y}.5" x2="{x_right}" y2="{y}.5" stroke="{stroke_col}" stroke-width="1"/>"#
-            );
-        }
-        y += 2;
-    }
-
-    let left_border = if active && drawer_open {
-        String::new()
-    } else {
-        format!(
-            r##"<line x1="0.5" y1="{tl_y}" x2="0.5" y2="{bl_y}" stroke="#333333" stroke-width="1.1"/><line x1="1.5" y1="{tl_y}" x2="1.5" y2="{bl_y}" stroke="#FFFFFF" stroke-width="1"/>"##
-        )
-    };
-
-    let top_border = if first_tab {
-        r##"<line x1="0" y1="0.5" x2="26" y2="0.5" stroke="#444444" stroke-width="1.2"/><line x1="0" y1="1.5" x2="25" y2="1.5" stroke="#FFFFFF" stroke-width="1"/>"##.to_string()
-    } else if active {
-        r##"<line x1="0" y1="0" x2="26" y2="13" stroke="#333333" stroke-width="1.3"/><line x1="1" y1="1.5" x2="25" y2="13.5" stroke="#FFFFFF" stroke-width="1.1"/>"##.to_string()
-    } else {
-        r##"<line x1="0" y1="13" x2="26" y2="0" stroke="#444444" stroke-width="1.2"/><line x1="1" y1="13.8" x2="25.5" y2="1.2" stroke="#FFFFFF" stroke-width="1"/>"##.to_string()
-    };
-
-    let bottom_border = if next_active {
-        r##"<line x1="0" y1="77" x2="26" y2="90" stroke="#333333" stroke-width="1.3"/>"##
-    } else {
-        r##"<line x1="0" y1="90" x2="26" y2="77" stroke="#333333" stroke-width="1.3"/><line x1="1" y1="88.6" x2="25" y2="76.2" stroke="#B5B5B5" stroke-width="1"/>"##
-    };
-
-    format!(
-        r##"<div class="exp-tab-bg"><svg width="27" height="90" viewBox="0 0 27 90"><polygon points="{poly_pts}" fill="{fill_col}"/>{ribs}{top_border}{left_border}<line x1="26" y1="{tr_y}" x2="26" y2="{br_y}" stroke="#333333" stroke-width="1.2"/><line x1="24.8" y1="{tr_y}" x2="24.8" y2="{br_y}" stroke="#FFFFFF" stroke-width="0.9"/>{bottom_border}</svg></div>"##
     )
 }
 
@@ -362,9 +249,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
         CHROME_HEIGHT
     };
     let drawer_open = state.explorer_tab.is_some();
-    // In IE5 Mac (Figure 6), when the Explorer Bar drawer is open, the drawer
-    // occupies x = 0..EXPLORER_DRAWER_WIDTH and the vertical folder-tab rail
-    // attaches to the right edge of the drawer at x = EXPLORER_DRAWER_WIDTH.
     let rail_left_x = if drawer_open {
         EXPLORER_DRAWER_WIDTH
     } else {
@@ -376,9 +260,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
         } else {
             0.0
         };
-    let back_class = button_class(state.can_back);
-    let forward_class = button_class(state.can_forward);
-    let stop_class = button_class(state.loading);
+
     let bar_class = if state.focused {
         "bar bar-focused"
     } else {
@@ -395,23 +277,32 @@ pub fn render(state: &ChromeState<'_>) -> String {
         ""
     };
 
-    // Classic IE5 Mac 3D silver circular `@` badge (`16x16px`): raised metallic disc with a clean,
-    // high-contrast `@` glyph (open spiral tail on the right so it never looks like concentric rings).
-    let at_swirl_svg = r##"<svg class="at-svg" width="16" height="16" viewBox="0 0 16 16"><defs><radialGradient id="atg" cx="30%" cy="25%" r="75%"><stop offset="0%" stop-color="#FFFFFF"/><stop offset="60%" stop-color="#E0E0E0"/><stop offset="100%" stop-color="#9A9A9A"/></radialGradient></defs><circle cx="8" cy="8" r="6.8" fill="url(#atg)" stroke="#707070" stroke-width="0.9"/><path d="M9.7,6.0 L9.7,9.1 C9.7,9.8 10.6,9.9 11.2,9.2 C11.9,8.4 12.0,6.9 11.4,5.6 C10.5,3.9 8.3,3.2 6.3,4.0 C4.2,4.9 3.4,7.3 4.2,9.5 C5.0,11.6 7.3,12.5 9.7,11.9" fill="none" stroke="#1F1F1F" stroke-width="1.2" stroke-linecap="round"/><path d="M9.6,6.6 C9.1,5.9 8.3,5.6 7.5,5.7 C6.2,5.9 5.5,7.0 5.7,8.3 C5.9,9.5 6.9,10.2 8.1,10.0 C8.8,9.9 9.3,9.5 9.6,8.9" fill="none" stroke="#1F1F1F" stroke-width="1.2" stroke-linecap="round"/></svg>"##;
+    let single_tab = state.tabs.len() <= 1;
+    let tab_close_cls = if single_tab {
+        "tab-close tab-close-single"
+    } else {
+        "tab-close"
+    };
+    let newtab_cls = if single_tab {
+        "newtab newtab-single"
+    } else {
+        "newtab"
+    };
 
     let mut tabs = String::new();
     for (index, tab) in state.tabs.iter().enumerate() {
         let class = if tab.active { "tab tab-active" } else { "tab" };
         tabs.push_str(&format!(
             r#"<div class="{class}" id="tab-{index}">
-                 {at_swirl_svg}
+                 {SPRITE_TITLE_AT}
                  <div class="tab-title">{title}</div>
-                 <div class="tab-close" id="tab-close-{index}">&#215;</div>
+                 <div class="{tab_close_cls}" id="tab-close-{index}">&#215;</div>
                </div>"#,
             class = class,
             index = index,
-            at_swirl_svg = at_swirl_svg,
+            SPRITE_TITLE_AT = SPRITE_TITLE_AT,
             title = escape_html(tab.title),
+            tab_close_cls = tab_close_cls,
         ));
     }
 
@@ -419,296 +310,180 @@ pub fn render(state: &ChromeState<'_>) -> String {
     let mut fav_strip_items = String::new();
     for (i, fav) in state.favorites.iter().take(7).enumerate() {
         fav_strip_items.push_str(&format!(
-            r#"<div class="fav-pill" id="fav-bar-{i}" data-url="{url}">{at_swirl_svg}<span class="fav-pill-text">{title}</span></div>"#,
+            r#"<div class="fav-pill" id="fav-bar-{i}" data-url="{url}">{SPRITE_FAV_AT}<span class="fav-pill-text">{title}</span></div>"#,
             i = i,
             url = escape_html(fav.url),
-            at_swirl_svg = at_swirl_svg,
+            SPRITE_FAV_AT = SPRITE_FAV_AT,
             title = escape_html(fav.title),
         ));
     }
 
     let secure_attr = if state.secure { "https" } else { "http" };
 
-    // Fluted / ribbed horizontal pinstripe SVG backgrounds wrapped in `<div class="rib-bg">`
-    let title_rib_bg = ribbed_rect_svg(2400, 26, "#EAEAEA", "#F8F8F8", "#DCDCDC");
-    let nav_rib_bg = ribbed_rect_svg(2400, 48, p.rib_base, p.rib_hi, p.rib_lo);
-    let fav_rib_bg = ribbed_rect_svg(2400, 24, p.rib_base, p.rib_hi, p.rib_lo);
+    // Exact 1px scanline SVG backgrounds from `media_1794020340993_5f6a11ae.jpg`
+    let title_scan_bg = title_bg(2400);
+    let nav_scan_bg = nav_bg(2400);
+    let addr_scan_bg = addr_mid_bg(2400);
+    let fav_scan_bg = fav_bg(2400);
 
-    // 3D Cylindrical Deep Bondi-Teal Aqua tube SVG background for the 30px Address bar row
-    let addr_aqua_tube_bg = r##"<div class="rib-bg"><svg width="2400" height="30" viewBox="0 0 2400 30"><defs><linearGradient id="aquatube" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0E4463"/><stop offset="22%" stop-color="#3784AB"/><stop offset="44%" stop-color="#88C8E4"/><stop offset="60%" stop-color="#3B89B0"/><stop offset="86%" stop-color="#14567A"/><stop offset="100%" stop-color="#092E46"/></linearGradient></defs><rect width="2400" height="30" fill="url(#aquatube)"/><line x1="0" y1="0.5" x2="2400" y2="0.5" stroke="#062133" stroke-width="1"/><line x1="0" y1="29.5" x2="2400" y2="29.5" stroke="#062133" stroke-width="1"/></svg></div>"##;
-
-    // Mac OS X Aqua Traffic Light Gumdrop Buttons (Red, Yellow, Green) for the left of the Title Bar
-    let traffic_lights_svg = r##"<svg class="traffic-svg" width="54" height="16" viewBox="0 0 54 16"><defs><radialGradient id="tlr" cx="35%" cy="25%" r="70%"><stop offset="0%" stop-color="#FFACA6"/><stop offset="45%" stop-color="#FF5F57"/><stop offset="100%" stop-color="#B81D13"/></radialGradient><radialGradient id="tly" cx="35%" cy="25%" r="70%"><stop offset="0%" stop-color="#FFF0A8"/><stop offset="45%" stop-color="#FFBD2E"/><stop offset="100%" stop-color="#B57B00"/></radialGradient><radialGradient id="tlg" cx="35%" cy="25%" r="70%"><stop offset="0%" stop-color="#B4F8C0"/><stop offset="45%" stop-color="#28C840"/><stop offset="100%" stop-color="#0F7A1E"/></radialGradient></defs><circle cx="8" cy="8" r="6" fill="url(#tlr)" stroke="#7A160E" stroke-width="1"/><ellipse cx="8" cy="5.2" rx="3.2" ry="1.6" fill="#FFFFFF" fill-opacity="0.75"/><circle cx="27" cy="8" r="6" fill="url(#tly)" stroke="#7D5600" stroke-width="1"/><ellipse cx="27" cy="5.2" rx="3.2" ry="1.6" fill="#FFFFFF" fill-opacity="0.75"/><circle cx="46" cy="8" r="6" fill="url(#tlg)" stroke="#0C5917" stroke-width="1"/><ellipse cx="46" cy="5.2" rx="3.2" ry="1.6" fill="#FFFFFF" fill-opacity="0.75"/></svg>"##;
-
-    // Mac OS X Aqua Oblong Toolbar-Toggle Pill Button on the right of the Title Bar
-    let aqua_pill_svg = r##"<svg width="24" height="12" viewBox="0 0 24 12"><defs><linearGradient id="aqpil" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF"/><stop offset="55%" stop-color="#DCE4EC"/><stop offset="100%" stop-color="#AEBCC8"/></linearGradient></defs><rect x="1" y="1" width="22" height="10" rx="5" fill="url(#aqpil)" stroke="#52606C" stroke-width="1.1"/><ellipse cx="12" cy="4" rx="7" ry="1.8" fill="#FFFFFF" fill-opacity="0.85"/></svg>"##;
-
-    // 3D Translucent Bondi-Teal Aqua Glass SVG Icons for the top toolbar (`media_1794020340993_5f6a11ae.jpg`)
-    let back_icon_svg = if state.can_back {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="abk" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8AE0FA"/><stop offset="48%" stop-color="#2286AE"/><stop offset="100%" stop-color="#0B4663"/></linearGradient></defs><path d="M19,3.5 C20.5,2.5 22,3.5 22,5.5 L22,18.5 C22,20.5 20.5,21.5 19,20.5 L6.5,13.5 C5,12.5 5,11.5 6.5,10.5 Z" fill="url(#abk)" stroke="#093B54" stroke-width="1.2"/><path d="M19.5,5 L8,11.5 L19.5,9.5 Z" fill="#D4F4FF" fill-opacity="0.7"/></svg>"##
+    let back_btn_svg = if state.can_back {
+        SPRITE_BTN_BACK_ON
     } else {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="abkd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#B0C4CE"/><stop offset="100%" stop-color="#92A8B4"/></linearGradient></defs><path d="M19,3.5 C20.5,2.5 22,3.5 22,5.5 L22,18.5 C22,20.5 20.5,21.5 19,20.5 L6.5,13.5 C5,12.5 5,11.5 6.5,10.5 Z" fill="url(#abkd)" stroke="#859AA6" stroke-width="1.1"/><path d="M19.5,5 L8,11.5 L19.5,9.5 Z" fill="#F0F7FA" fill-opacity="0.65"/></svg>"##
+        SPRITE_BTN_BACK_OFF
     };
-
-    let fwd_icon_svg = if state.can_forward {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="afw" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8AE0FA"/><stop offset="48%" stop-color="#2286AE"/><stop offset="100%" stop-color="#0B4663"/></linearGradient></defs><path d="M9,3.5 C7.5,2.5 6,3.5 6,5.5 L6,18.5 C6,20.5 7.5,21.5 9,20.5 L21.5,13.5 C23,12.5 23,11.5 21.5,10.5 Z" fill="url(#afw)" stroke="#093B54" stroke-width="1.2"/><path d="M8.5,5 L20,11.5 L8.5,9.5 Z" fill="#D4F4FF" fill-opacity="0.7"/></svg>"##
+    let fwd_btn_svg = if state.can_forward {
+        SPRITE_BTN_FWD_ON
     } else {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="afwd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#B0C4CE"/><stop offset="100%" stop-color="#92A8B4"/></linearGradient></defs><path d="M9,3.5 C7.5,2.5 6,3.5 6,5.5 L6,18.5 C6,20.5 7.5,21.5 9,20.5 L21.5,13.5 C23,12.5 23,11.5 21.5,10.5 Z" fill="url(#afwd)" stroke="#859AA6" stroke-width="1.1"/><path d="M8.5,5 L20,11.5 L8.5,9.5 Z" fill="#F0F7FA" fill-opacity="0.65"/></svg>"##
+        SPRITE_BTN_FWD_OFF
     };
-
-    let stop_icon_svg = if state.loading {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="astp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8AE0FA"/><stop offset="50%" stop-color="#2286AE"/><stop offset="100%" stop-color="#0B4663"/></linearGradient></defs><path d="M7,3.5 Q14,9.5 21,3.5 Q15.5,12 21,20.5 Q14,14.5 7,20.5 Q12.5,12 7,3.5 Z" fill="url(#astp)" stroke="#093B54" stroke-width="1.2"/></svg>"##
+    let stop_btn_svg = if state.loading {
+        SPRITE_BTN_STOP_ON
     } else {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="astpd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#B0C4CE"/><stop offset="100%" stop-color="#92A8B4"/></linearGradient></defs><path d="M7,3.5 Q14,9.5 21,3.5 Q15.5,12 21,20.5 Q14,14.5 7,20.5 Q12.5,12 7,3.5 Z" fill="url(#astpd)" stroke="#859AA6" stroke-width="1.1"/></svg>"##
+        SPRITE_BTN_STOP_OFF
     };
-
-    let refresh_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="arf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8AE0FA"/><stop offset="48%" stop-color="#2286AE"/><stop offset="100%" stop-color="#0B4663"/></linearGradient></defs><path d="M7,12 C7,7.2 11,4 15.5,4 C17.8,4 19.8,4.8 21.2,6.2 L23.5,4 L23.5,10.5 L17,10.5 L19.2,8.3 C18.2,7.3 16.9,6.8 15.5,6.8 C12.4,6.8 10,9.1 10,12 Z" fill="url(#arf)" stroke="#093B54" stroke-width="1"/><path d="M21,12 C21,16.8 17,20 12.5,20 C10.2,20 8.2,19.2 6.8,17.8 L4.5,20 L4.5,13.5 L11,13.5 L8.8,15.7 C9.8,16.7 11.1,17.2 12.5,17.2 C15.6,17.2 18,14.9 18,12 Z" fill="url(#arf)" stroke="#093B54" stroke-width="1"/></svg>"##;
-
-    // Arrow 1 Target: IE5 Mac Bondi-Teal Aqua Glass `Home` icon with dark teal roof chevron,
-    // right chimney, translucent aqua house walls, white left window square, and dark teal right door!
-    let home_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="ahmw" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#9BE4FA"/><stop offset="55%" stop-color="#389EC2"/><stop offset="100%" stop-color="#146485"/></linearGradient><linearGradient id="ahmr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2A88AC"/><stop offset="100%" stop-color="#093C55"/></linearGradient></defs><rect x="18" y="4" width="3" height="5.5" fill="#0B4663" stroke="#072E42" stroke-width="0.8"/><polygon points="14,3.5 5.5,11 7,11 7,20.5 21,20.5 21,11 22.5,11" fill="url(#ahmw)" stroke="#093D57" stroke-width="1.1"/><polygon points="14,2.2 3.2,11.5 5.8,13.2 14,5.8 22.2,13.2 24.8,11.5" fill="url(#ahmr)" stroke="#072E42" stroke-width="0.9"/><rect x="8.8" y="12.2" width="4.2" height="4.2" fill="#FFFFFF" stroke="#0B4663" stroke-width="1"/><rect x="14.8" y="12.5" width="4.2" height="8" fill="#093D57"/></svg>"##;
-
-    let autofill_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="aaf" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#A8C0CC"/><stop offset="100%" stop-color="#829CA8"/></linearGradient></defs><path d="M16,2.5 C19.5,2.5 22,5.5 20.5,9.5 L12.5,19.5 L7.5,16.5 L12.5,5.5 C13.5,3.5 14.5,2.5 16,2.5 Z" fill="url(#aaf)" stroke="#78909C" stroke-width="1.1"/><ellipse cx="16.2" cy="6.8" rx="2.4" ry="1.5" fill="#F2F8FA" fill-opacity="0.8"/><line x1="6" y1="20.5" x2="18" y2="20.5" stroke="#859AA6" stroke-width="1.2"/></svg>"##;
-
-    let print_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="apr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#A8C0CC"/><stop offset="100%" stop-color="#829CA8"/></linearGradient></defs><rect x="8" y="2.5" width="12" height="6.5" fill="#F4F8FA" stroke="#8298A4" stroke-width="1"/><rect x="4.5" y="8" width="19" height="9.5" rx="2" fill="url(#apr)" stroke="#78909C" stroke-width="1.1"/><rect x="7" y="15" width="14" height="6" fill="#F4F8FA" stroke="#8298A4" stroke-width="1"/></svg>"##;
-
-    let mail_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="aml" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#88DCF8"/><stop offset="55%" stop-color="#288BB0"/><stop offset="100%" stop-color="#0D4D6B"/></linearGradient></defs><rect x="4" y="5" width="20" height="14" rx="1.5" fill="url(#aml)" stroke="#093B54" stroke-width="1.2"/><polygon points="4.8,5.5 14,13.2 23.2,5.5" fill="#CEEFFB" stroke="#093B54" stroke-width="1"/><polyline points="4.8,18.5 11.5,12 14,13.8 16.5,12 23.2,18.5" fill="none" stroke="#0B435E" stroke-width="1"/></svg>"##;
-
-    // Arrow 2 Target: Sculpted 3D Bondi-Teal Aqua lowercase `e` logo (`38x36px`) on the right of the toolbar
-    // with open counter eye, open lower-right gap, orbital swoosh ring, and glossy specular highlight!
-    let ie_aqua_emblem_svg = r##"<svg width="38" height="36" viewBox="0 0 38 36"><defs><linearGradient id="iee" x1="0.15" y1="0.05" x2="0.85" y2="0.95"><stop offset="0%" stop-color="#9EE8FF"/><stop offset="38%" stop-color="#38A2CA"/><stop offset="78%" stop-color="#146B90"/><stop offset="100%" stop-color="#093C56"/></linearGradient><linearGradient id="iering" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#B8F0FF"/><stop offset="50%" stop-color="#2E96BE"/><stop offset="100%" stop-color="#0B4766"/></linearGradient></defs><path d="M5,25 C1.5,21 6,12 16,7 C26,2 35,4 36,8.5 C37,12 31,17 24,20.5" fill="none" stroke="url(#iering)" stroke-width="2.2" stroke-linecap="round"/><path fill-rule="evenodd" d="M31.5,18.5 C31.8,10.5 26.2,4.8 18.8,4.8 C10.8,4.8 5.2,10.8 5.2,18.5 C5.2,26.5 11.0,32.0 19.2,32.0 C24.8,32.0 29.2,29.4 31.2,25.0 L25.4,22.8 C24.0,25.4 21.8,26.8 19.0,26.8 C14.8,26.8 11.8,24.0 11.5,19.8 L31.4,19.8 Z M11.6,15.2 C12.2,11.5 15.0,9.4 18.8,9.4 C22.5,9.4 25.2,11.6 25.6,15.2 Z" fill="url(#iee)" stroke="#083A54" stroke-width="1.1"/><path d="M9.5,11.5 C12,7.8 16,6.2 20.5,6.5" fill="none" stroke="#E0F8FF" stroke-width="1.8" stroke-linecap="round"/><path d="M3.5,23.5 C6.5,27.5 16,25 26,19.5" fill="none" stroke="#7ED8F8" stroke-width="1.8" stroke-linecap="round"/></svg>"##;
-
-    let beaded_sep_svg = r##"<svg class="nav-sep-svg" width="6" height="38" viewBox="0 0 6 38"><circle cx="3" cy="3" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="7" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="11" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="15" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="19" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="23" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="27" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="31" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="35" r="1.1" fill="#6E6E6E"/></svg>"##;
 
     let top_bars = if state.toolbar_collapsed {
         String::new()
     } else {
         format!(
             r##"<div class="tabstrip">
-                 {title_rib_bg}
-                 <div class="traffic-lights">{traffic_lights_svg}</div>
+                 {title_scan_bg}
+                 <div class="traffic-lights">{SPRITE_TITLE_LEFT}</div>
                  <div class="title-tabs-wrap">
                    {tabs}
-                   <div class="newtab" id="btn-newtab">+</div>
+                   <div class="{newtab_cls}" id="btn-newtab">+</div>
                  </div>
-                 <div class="aqua-pill-btn" id="btn-menu">{aqua_pill_svg}</div>
+                 <div class="aqua-pill-btn" id="btn-menu">{SPRITE_TITLE_RIGHT}</div>
                </div>
                <div class="nav">
-                 {nav_rib_bg}
-                 <div class="{back_class}" id="btn-back">
-                   {back_icon_svg}
-                   <div class="btn-lbl">Back</div>
-                 </div>
-                 <div class="{forward_class}" id="btn-forward">
-                   {fwd_icon_svg}
-                   <div class="btn-lbl">Forward</div>
-                 </div>
-                 <div class="{stop_class}" id="btn-stop">
-                   {stop_icon_svg}
-                   <div class="btn-lbl">Stop</div>
-                 </div>
-                 <div class="btn" id="btn-reload">
-                   {refresh_icon_svg}
-                   <div class="btn-lbl">Refresh</div>
-                 </div>
-                 <div class="btn" id="btn-home">
-                   {home_icon_svg}
-                   <div class="btn-lbl">Home</div>
-                 </div>
-                 <div class="nav-sep">{beaded_sep_svg}</div>
-                 <div class="btn" id="btn-autofill">
-                   {autofill_icon_svg}
-                   <div class="btn-lbl">AutoFill</div>
-                 </div>
-                 <div class="btn" id="btn-print">
-                   {print_icon_svg}
-                   <div class="btn-lbl">Print</div>
-                 </div>
-                 <div class="btn" id="btn-mail">
-                   {mail_icon_svg}
-                   <div class="btn-lbl">Mail</div>
-                 </div>
-                 <div class="ie-emblem">{ie_aqua_emblem_svg}</div>
+                 {nav_scan_bg}
+                 <div class="btn btn-back" id="btn-back">{back_btn_svg}</div>
+                 <div class="btn btn-fwd" id="btn-forward">{fwd_btn_svg}</div>
+                 <div class="btn btn-stop" id="btn-stop">{stop_btn_svg}</div>
+                 <div class="btn btn-refresh" id="btn-reload">{SPRITE_BTN_REFRESH}</div>
+                 <div class="btn btn-home" id="btn-home">{SPRITE_BTN_HOME}</div>
+                 <div class="nav-sep">{SPRITE_NAV_SEP}</div>
+                 <div class="btn btn-autofill" id="btn-autofill">{SPRITE_BTN_AUTOFILL}</div>
+                 <div class="btn btn-print" id="btn-print">{SPRITE_BTN_PRINT}</div>
+                 <div class="btn btn-mail" id="btn-mail">{SPRITE_BTN_MAIL}</div>
+                 <div class="ie-emblem">{SPRITE_NAV_LOGO_E}</div>
                </div>
                <div class="address-row">
-                 {addr_aqua_tube_bg}
-                 <div class="address-badge">Address:</div>
+                 <div class="address-badge">{SPRITE_ADDR_LEFT}</div>
                  <div class="{bar_class}" id="address" data-scheme="{secure_attr}">
-                   {at_swirl_svg}
-                   <div class="url">{url}</div>
-                   {caret}
+                   {addr_scan_bg}
+                   <div class="addr-inner">
+                     {SPRITE_ADDR_AT}
+                     <div class="url">{url}</div>
+                     {caret}
+                   </div>
                  </div>
-                 <div class="go-btn" id="btn-go">
-                   <svg width="8" height="10" viewBox="0 0 8 10"><polygon points="1,1 7,5 1,9" fill="#FFFFFF"/></svg>
-                   <span class="go-lbl">go</span>
-                 </div>
+                 <div class="go-btn" id="btn-go">{SPRITE_ADDR_RIGHT}</div>
                </div>
                <div class="favbar">
-                 {fav_rib_bg}
-                 {fav_strip_items}
-                 <div class="fav-chevron" id="btn-fav-overflow">&#187;</div>
+                 {fav_scan_bg}
+                 <div class="fav-left-cap">{SPRITE_FAV_LEFT}</div>
+                 <div class="fav-items-wrap">{fav_strip_items}</div>
+                 <div class="fav-chevron" id="btn-fav-overflow">{SPRITE_FAV_RIGHT}</div>
                </div>"##,
-            title_rib_bg = title_rib_bg,
-            traffic_lights_svg = traffic_lights_svg,
+            title_scan_bg = title_scan_bg,
+            SPRITE_TITLE_LEFT = SPRITE_TITLE_LEFT,
             tabs = tabs,
-            aqua_pill_svg = aqua_pill_svg,
-            nav_rib_bg = nav_rib_bg,
-            back_class = back_class,
-            forward_class = forward_class,
-            stop_class = stop_class,
-            back_icon_svg = back_icon_svg,
-            fwd_icon_svg = fwd_icon_svg,
-            stop_icon_svg = stop_icon_svg,
-            refresh_icon_svg = refresh_icon_svg,
-            home_icon_svg = home_icon_svg,
-            beaded_sep_svg = beaded_sep_svg,
-            autofill_icon_svg = autofill_icon_svg,
-            print_icon_svg = print_icon_svg,
-            mail_icon_svg = mail_icon_svg,
-            ie_aqua_emblem_svg = ie_aqua_emblem_svg,
-            addr_aqua_tube_bg = addr_aqua_tube_bg,
+            newtab_cls = newtab_cls,
+            SPRITE_TITLE_RIGHT = SPRITE_TITLE_RIGHT,
+            nav_scan_bg = nav_scan_bg,
+            back_btn_svg = back_btn_svg,
+            fwd_btn_svg = fwd_btn_svg,
+            stop_btn_svg = stop_btn_svg,
+            SPRITE_BTN_REFRESH = SPRITE_BTN_REFRESH,
+            SPRITE_BTN_HOME = SPRITE_BTN_HOME,
+            SPRITE_NAV_SEP = SPRITE_NAV_SEP,
+            SPRITE_BTN_AUTOFILL = SPRITE_BTN_AUTOFILL,
+            SPRITE_BTN_PRINT = SPRITE_BTN_PRINT,
+            SPRITE_BTN_MAIL = SPRITE_BTN_MAIL,
+            SPRITE_NAV_LOGO_E = SPRITE_NAV_LOGO_E,
+            SPRITE_ADDR_LEFT = SPRITE_ADDR_LEFT,
             bar_class = bar_class,
             secure_attr = secure_attr,
-            at_swirl_svg = at_swirl_svg,
+            addr_scan_bg = addr_scan_bg,
+            SPRITE_ADDR_AT = SPRITE_ADDR_AT,
             url = escape_html(state.url),
             caret = caret,
-            fav_rib_bg = fav_rib_bg,
+            SPRITE_ADDR_RIGHT = SPRITE_ADDR_RIGHT,
+            fav_scan_bg = fav_scan_bg,
+            SPRITE_FAV_LEFT = SPRITE_FAV_LEFT,
             fav_strip_items = fav_strip_items,
+            SPRITE_FAV_RIGHT = SPRITE_FAV_RIGHT,
         )
     };
 
-    // Compact 3D Aqua navigation buttons rendered inside the left Explorer Bar rail when the top toolbar is collapsed (PDF Page 2 right).
+    // Compact 23x22 navigation buttons rendered inside the left Explorer Bar rail when top toolbar is collapsed.
     let rail_compact_nav = if state.toolbar_collapsed {
-        let b_cls = if state.can_back {
-            "rail-icon"
+        let b_svg = if state.can_back {
+            SPRITE_RAIL_BACK_ON
         } else {
-            "rail-icon rail-icon-off"
+            SPRITE_RAIL_BACK_OFF
         };
-        let f_cls = if state.can_forward {
-            "rail-icon"
+        let f_svg = if state.can_forward {
+            SPRITE_RAIL_FWD_ON
         } else {
-            "rail-icon rail-icon-off"
+            SPRITE_RAIL_FWD_OFF
         };
-        let s_cls = if state.loading {
-            "rail-icon"
+        let s_svg = if state.loading {
+            SPRITE_RAIL_STOP_ON
         } else {
-            "rail-icon rail-icon-off"
+            SPRITE_RAIL_STOP_OFF
         };
         format!(
-            r##"<div class="{b_cls}" id="btn-back">{back_icon_svg}</div>
-               <div class="{f_cls}" id="btn-forward">{fwd_icon_svg}</div>
-               <div class="{s_cls}" id="btn-stop">{stop_icon_svg}</div>
-               <div class="rail-icon" id="btn-reload">{refresh_icon_svg}</div>"##,
-            b_cls = b_cls,
-            f_cls = f_cls,
-            s_cls = s_cls,
-            back_icon_svg = back_icon_svg,
-            fwd_icon_svg = fwd_icon_svg,
-            stop_icon_svg = stop_icon_svg,
-            refresh_icon_svg = refresh_icon_svg,
+            r##"<div class="rail-icon" id="btn-back">{b_svg}</div>
+               <div class="rail-icon" id="btn-forward">{f_svg}</div>
+               <div class="rail-icon" id="btn-stop">{s_svg}</div>
+               <div class="rail-icon" id="btn-reload">{SPRITE_RAIL_REFRESH}</div>"##,
+            b_svg = b_svg,
+            f_svg = f_svg,
+            s_svg = s_svg,
+            SPRITE_RAIL_REFRESH = SPRITE_RAIL_REFRESH,
         )
     } else {
         String::new()
     };
 
-    // Arrow 3 Target: 3D Bondi-Aqua `◀|||` / `|||▶` collapse toggle icon at the top of the slim 28px Explorer Bar rail
     let collapse_svg = if state.toolbar_collapsed {
-        r##"<svg width="24" height="16" viewBox="0 0 24 16"><defs><linearGradient id="aclp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#88E0FA"/><stop offset="50%" stop-color="#2286AE"/><stop offset="100%" stop-color="#093B56"/></linearGradient></defs><rect x="2" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><rect x="5.5" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><rect x="9" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><polygon points="13.5,2 22,8 13.5,14" fill="url(#aclp)" stroke="#073047" stroke-width="0.8"/></svg>"##
+        SPRITE_RAIL_COLLAPSE_CLOSED
     } else {
-        r##"<svg width="24" height="16" viewBox="0 0 24 16"><defs><linearGradient id="aclp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#88E0FA"/><stop offset="50%" stop-color="#2286AE"/><stop offset="100%" stop-color="#093B56"/></linearGradient></defs><polygon points="10.5,2 2,8 10.5,14" fill="url(#aclp)" stroke="#073047" stroke-width="0.8"/><rect x="12.5" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><rect x="16" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><rect x="19.5" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/></svg>"##
+        SPRITE_RAIL_COLLAPSE_OPEN
     };
 
-    let is_fav = state.explorer_tab == Some(ExplorerTab::Favorites);
-    let is_hist = state.explorer_tab == Some(ExplorerTab::History);
-    let is_srch = state.explorer_tab == Some(ExplorerTab::Search);
-    let is_scrp = state.explorer_tab == Some(ExplorerTab::Scrapbook);
-    let is_ph = state.explorer_tab == Some(ExplorerTab::PageHolder);
-
-    let fav_cls = exp_tab_class(is_fav);
-    let hist_cls = exp_tab_class(is_hist);
-    let srch_cls = exp_tab_class(is_srch);
-    let scrp_cls = exp_tab_class(is_scrp);
-    let ph_cls = if is_ph {
-        "exp-tab exp-tab-last exp-tab-active"
-    } else {
-        "exp-tab exp-tab-last"
+    let rail_tabs_svg = match state.explorer_tab {
+        None => SPRITE_RAIL_TABS_NONE,
+        Some(ExplorerTab::Favorites) => SPRITE_RAIL_TABS_FAV,
+        Some(ExplorerTab::History) => SPRITE_RAIL_TABS_HIST,
+        Some(ExplorerTab::Search) => SPRITE_RAIL_TABS_SRCH,
+        Some(ExplorerTab::Scrapbook) => SPRITE_RAIL_TABS_SCRP,
+        Some(ExplorerTab::PageHolder) => SPRITE_RAIL_TABS_PH,
     };
 
-    let fav_bg = folder_tab_svg(
-        true,
-        is_fav,
-        is_hist,
-        drawer_open,
-        p.rib_base,
-        p.rib_hi,
-        p.rib_lo,
-        p.drawer_bg,
-    );
-    let hist_bg = folder_tab_svg(
-        false,
-        is_hist,
-        is_srch,
-        drawer_open,
-        p.rib_base,
-        p.rib_hi,
-        p.rib_lo,
-        p.drawer_bg,
-    );
-    let srch_bg = folder_tab_svg(
-        false,
-        is_srch,
-        is_scrp,
-        drawer_open,
-        p.rib_base,
-        p.rib_hi,
-        p.rib_lo,
-        p.drawer_bg,
-    );
-    let scrp_bg = folder_tab_svg(
-        false,
-        is_scrp,
-        is_ph,
-        drawer_open,
-        p.rib_base,
-        p.rib_hi,
-        p.rib_lo,
-        p.drawer_bg,
-    );
-    let ph_bg = folder_tab_svg(
-        false,
-        is_ph,
-        false,
-        drawer_open,
-        p.rib_base,
-        p.rib_hi,
-        p.rib_lo,
-        p.drawer_bg,
-    );
-
-    let rail_rib_bg = ribbed_rect_svg(28, 1200, p.rib_base, p.rib_hi, p.rib_lo);
+    let rail_lower_svg = rail_lower_bg(1200, drawer_open);
     let drawer_rib_bg = ribbed_rect_svg(286, 1200, p.rib_base, p.rib_hi, p.rib_lo);
-    let rail_bottom_border_cls = if drawer_open {
-        "rail-globe rail-globe-bordered"
-    } else {
-        "rail-globe"
-    };
 
     let explorer_rail = format!(
         r##"<div class="exp-rail" id="exp-rail" style="top:{top_chrome_h:.1}px;left:{rail_left_x:.1}px;">
-             {rail_rib_bg}
              <div class="rail-collapse" id="btn-collapse-toolbar">{collapse_svg}</div>
              {rail_compact_nav}
-             <div class="{fav_cls}" id="exp-favorites">{fav_bg}<div class="exp-tab-label">Favorites</div></div>
-             <div class="{hist_cls}" id="exp-history">{hist_bg}<div class="exp-tab-label">History</div></div>
-             <div class="{srch_cls}" id="exp-search">{srch_bg}<div class="exp-tab-label">Search</div></div>
-             <div class="{scrp_cls}" id="exp-scrapbook">{scrp_bg}<div class="exp-tab-label">Scrapbook</div></div>
-             <div class="{ph_cls}" id="exp-pageholder">{ph_bg}<div class="exp-tab-label">Page Holder</div></div>
-             <div class="{rail_bottom_border_cls}"></div>
+             <div class="exp-tabs-wrap">
+               <div class="exp-tabs-bg">{rail_tabs_svg}</div>
+               <div class="exp-tab" id="exp-favorites" style="height:68px;"></div>
+               <div class="exp-tab" id="exp-history" style="height:60px;"></div>
+               <div class="exp-tab" id="exp-search" style="height:61px;"></div>
+               <div class="exp-tab" id="exp-scrapbook" style="height:81px;"></div>
+               <div class="exp-tab" id="exp-pageholder" style="height:98px;"></div>
+             </div>
+             <div class="rail-globe">{rail_lower_svg}</div>
            </div>"##,
     );
 
     // Camera-and-page icon used for Scrapbook entries (PDF Page 1 Figure 6).
-    let sb_doc_icon = r##"<svg width="18" height="15" viewBox="0 0 18 15"><rect x="1" y="2.5" width="11" height="10" rx="1.8" fill="#7A8B99" stroke="#2F3E4C" stroke-width="1.1"/><circle cx="6.5" cy="7.5" r="2.6" fill="#D9E6F2" stroke="#2F3E4C" stroke-width="1"/><rect x="10" y="1" width="7" height="12.5" fill="#FFFFFF" stroke="#4A5568" stroke-width="1"/><line x1="11.5" y1="4.5" x2="15" y2="4.5" stroke="#286090" stroke-width="1"/><line x1="11.5" y1="7.5" x2="15" y2="7.5" stroke="#718096" stroke-width="1"/></svg>"##;
+    let sb_doc_icon = r##"<svg class="sp-svg" width="18" height="15" viewBox="0 0 18 15"><rect x="1" y="2.5" width="11" height="10" rx="1.8" fill="#7A8B99" stroke="#2F3E4C" stroke-width="1.1"/><circle cx="6.5" cy="7.5" r="2.6" fill="#D9E6F2" stroke="#2F3E4C" stroke-width="1"/><rect x="10" y="1" width="7" height="12.5" fill="#FFFFFF" stroke="#4A5568" stroke-width="1"/><line x1="11.5" y1="4.5" x2="15" y2="4.5" stroke="#286090" stroke-width="1"/><line x1="11.5" y1="7.5" x2="15" y2="7.5" stroke="#718096" stroke-width="1"/></svg>"##;
     let link_tri_svg = r##"<svg class="ph-tri-svg" width="8" height="10" viewBox="0 0 8 10"><polygon points="1,1 7,5 1,9" fill="#146696"/></svg>"##;
     let btn_tri_svg = r##"<svg class="ph-tri-svg" width="6" height="10" viewBox="0 0 6 10"><polygon points="1,4 5,7 1,10" fill="#111111"/></svg>"##;
 
@@ -742,7 +517,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
                 }
                 format!(r#"<div class="drawer-body drawer-body-white" id="ph-links-list">{rows}</div>"#)
             } else if state.page_holder.has_doc {
-                // Transparent body so the live `page_holder_doc` painted in its clipped Vello layer underneath shows through.
                 r#"<div class="drawer-body-transparent" id="ph-canvas"></div>"#.to_string()
             } else {
                 r#"<div class="drawer-body"><div class="drawer-empty" id="ph-empty">Click "Add" to place a copy of the current page in the Page Holder for reference while browsing.</div></div>"#.to_string()
@@ -849,12 +623,12 @@ pub fn render(state: &ChromeState<'_>) -> String {
             for (i, fav) in state.favorites.iter().enumerate() {
                 rows.push_str(&format!(
                     r#"<div class="sb-row" id="fav-item-{i}" data-url="{url}">
-                         {at_swirl_svg}
+                         {SPRITE_FAV_AT}
                          <span class="sb-row-title">{title}</span>
                        </div>"#,
                     i = i,
                     url = escape_html(fav.url),
-                    at_swirl_svg = at_swirl_svg,
+                    SPRITE_FAV_AT = SPRITE_FAV_AT,
                     title = escape_html(fav.title),
                 ));
             }
@@ -883,12 +657,12 @@ pub fn render(state: &ChromeState<'_>) -> String {
                 for (i, entry) in state.history_entries.iter().enumerate() {
                     rows.push_str(&format!(
                         r#"<div class="sb-row" id="hist-item-{i}" data-url="{url}">
-                             {at_swirl_svg}
+                             {SPRITE_FAV_AT}
                              <span class="sb-row-title">{title}</span>
                            </div>"#,
                         i = i,
                         url = escape_html(entry.url),
-                        at_swirl_svg = at_swirl_svg,
+                        SPRITE_FAV_AT = SPRITE_FAV_AT,
                         title = escape_html(entry.title),
                     ));
                 }
@@ -938,21 +712,19 @@ pub fn render(state: &ChromeState<'_>) -> String {
         }
     };
 
-    // Arrow 4 Target: Mac OS X Aqua 15px Right & Bottom Scrollbar Tracks + 15x15 Bottom-Right Diagonal Resize Grip Box (`media_1794020340993_5f6a11ae.jpg`)
+    // Wall 3 (Right 1px window border) + Wall 4 (Bottom 16px pinstriped bar + 16x16 resize grip corner)
+    let bottom_scan_bg = bottom_mid_bg(2400);
     let bottom_aqua_bar = format!(
-        r##"<div class="aqua-vscroll" style="top:{top_chrome_h:.1}px;">
-             <svg width="15" height="1200" viewBox="0 0 15 1200"><rect width="15" height="1200" fill="#F4F4F4"/><line x1="0.5" y1="0" x2="0.5" y2="1200" stroke="#9A9A9A" stroke-width="1"/></svg>
-           </div>
-           <div class="aqua-bottom-wrap" style="left:{content_x:.1}px;">
-             <div class="aqua-hscroll">
-               <svg width="2400" height="15" viewBox="0 0 2400 15"><rect width="2400" height="15" fill="#F4F4F4"/><line x1="0" y1="0.5" x2="2400" y2="0.5" stroke="#9A9A9A" stroke-width="1"/></svg>
-             </div>
-             <div class="aqua-resize-corner">
-               <svg width="15" height="15" viewBox="0 0 15 15"><rect width="15" height="15" fill="#ECECEC"/><line x1="0.5" y1="0" x2="0.5" y2="15" stroke="#8C8C8C" stroke-width="1"/><line x1="0" y1="0.5" x2="15" y2="0.5" stroke="#8C8C8C" stroke-width="1"/><line x1="4" y1="13" x2="13" y2="4" stroke="#7A7A7A" stroke-width="1"/><line x1="5" y1="13" x2="13" y2="5" stroke="#FFFFFF" stroke-width="1"/><line x1="7" y1="13" x2="13" y2="7" stroke="#7A7A7A" stroke-width="1"/><line x1="8" y1="13" x2="13" y2="8" stroke="#FFFFFF" stroke-width="1"/><line x1="10" y1="13" x2="13" y2="10" stroke="#7A7A7A" stroke-width="1"/></svg>
-             </div>
+        r##"<div class="window-right-wall" style="top:{top_chrome_h:.1}px;"></div>
+           <div class="window-bottom-wall">
+             <div class="bottom-left-cap">{SPRITE_BOTTOM_LEFT}</div>
+             <div class="bottom-mid">{bottom_scan_bg}</div>
+             <div class="bottom-right-cap">{SPRITE_BOTTOM_RIGHT}</div>
            </div>"##,
         top_chrome_h = top_chrome_h,
-        content_x = content_x,
+        SPRITE_BOTTOM_LEFT = SPRITE_BOTTOM_LEFT,
+        bottom_scan_bg = bottom_scan_bg,
+        SPRITE_BOTTOM_RIGHT = SPRITE_BOTTOM_RIGHT,
     );
 
     let supbar = match &state.supervision {
@@ -1064,21 +836,20 @@ pub fn render(state: &ChromeState<'_>) -> String {
     let menu = if state.menu_open {
         format!(
             r#"<div class="menu" id="menu">
-                 <div class="menu-item" id="menu-home">{at_swirl_svg}<span>Home</span></div>
-                 <div class="menu-item" id="menu-reload">{at_swirl_svg}<span>Reload</span></div>
+                 <div class="menu-item" id="menu-home">{SPRITE_FAV_AT}<span>Home</span></div>
+                 <div class="menu-item" id="menu-reload">{SPRITE_FAV_AT}<span>Reload</span></div>
                  <div class="menu-sep"></div>
-                 <div class="menu-item" id="menu-back">{at_swirl_svg}<span>Back</span></div>
-                 <div class="menu-item" id="menu-forward">{at_swirl_svg}<span>Forward</span></div>
+                 <div class="menu-item" id="menu-back">{SPRITE_FAV_AT}<span>Back</span></div>
+                 <div class="menu-item" id="menu-forward">{SPRITE_FAV_AT}<span>Forward</span></div>
                  <div class="menu-sep"></div>
-                 <div class="menu-item" id="menu-close-tab">{at_swirl_svg}<span>Close tab</span></div>
+                 <div class="menu-item" id="menu-close-tab">{SPRITE_FAV_AT}<span>Close tab</span></div>
                </div>"#,
-            at_swirl_svg = at_swirl_svg,
+            SPRITE_FAV_AT = SPRITE_FAV_AT,
         )
     } else {
         String::new()
     };
 
-    let _ = (p.strip, p.tab_active);
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -1097,41 +868,33 @@ pub fn render(state: &ChromeState<'_>) -> String {
     left: 0;
     pointer-events: none;
   }}
-  .at-svg, .ph-tri-svg {{
+  .sp-svg, .ph-tri-svg, svg, image {{
     flex-shrink: 0;
     pointer-events: none;
   }}
 
-  /* ---- Row 1: Mac OS X Aqua Pinstriped Window Title & Tab Strip (26px) ---- */
+  /* ---- Row 1: Mac OS X Aqua Pinstriped Window Title Bar (23px) ---- */
   .tabstrip {{
     position: relative;
-    height: 26px;
-    background-color: #EAEAEA;
-    border-top: 1px solid {bevel_light};
-    border-bottom: 1px solid #7A7A7A;
+    height: 23px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 0 10px;
-    gap: 8px;
+    padding: 0;
+    gap: 0;
     overflow: hidden;
   }}
   .traffic-lights {{
     position: relative;
-    width: 54px;
-    height: 16px;
+    width: 67px;
+    height: 23px;
     flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    pointer-events: none;
-  }}
-  .traffic-svg {{
     pointer-events: none;
   }}
   .title-tabs-wrap {{
     position: relative;
     flex: 1;
-    height: 24px;
+    height: 22px;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -1141,28 +904,22 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
   .aqua-pill-btn {{
     position: relative;
-    width: 28px;
-    height: 16px;
+    width: 17px;
+    height: 23px;
     flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }}
-  .aqua-pill-btn svg {{
-    pointer-events: none;
   }}
   .tab {{
     height: 20px;
-    max-width: 280px;
+    max-width: 340px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 6px;
-    padding: 0 8px;
+    gap: 5px;
+    padding: 0 4px 1px 4px;
     background-color: transparent;
-    color: {ink};
-    font-size: 12.5px;
-    font-weight: 600;
+    color: #181818;
+    font-size: 13px;
+    font-weight: 700;
     flex-shrink: 0;
   }}
   .tab-active {{
@@ -1172,181 +929,163 @@ pub fn render(state: &ChromeState<'_>) -> String {
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
-    line-height: 20px;
+    line-height: 18px;
     pointer-events: none;
   }}
   .tab-close {{
-    width: 15px;
-    height: 15px;
-    font-size: 12px;
-    line-height: 14px;
+    width: 14px;
+    height: 14px;
+    font-size: 11px;
+    line-height: 13px;
     text-align: center;
     color: #555555;
   }}
+  .tab-close-single {{
+    color: transparent;
+  }}
   .newtab {{
-    width: 20px;
-    height: 18px;
-    font-size: 13px;
+    width: 18px;
+    height: 16px;
+    font-size: 12px;
     font-weight: 700;
-    line-height: 16px;
+    line-height: 14px;
     text-align: center;
     color: #444444;
     background-color: #E2E2E2;
-    border-top: 1px solid {bevel_light};
-    border-left: 1px solid {bevel_light};
-    border-right: 1px solid #777777;
-    border-bottom: 1px solid #777777;
+    border: 1px solid #888888;
     flex-shrink: 0;
   }}
+  .newtab-single {{
+    color: transparent;
+    background-color: transparent;
+    border: none;
+  }}
 
-  /* ---- Row 2: IE5 Mac Fluted/Ribbed Aqua Icon Button Bar (48px) ---- */
+  /* ---- Row 2: IE5 Mac 41px Aqua Toolbar ---- */
   .nav {{
     position: relative;
-    height: 48px;
-    background-color: {nav};
-    border-top: 1px solid {bevel_light};
-    border-bottom: 1px solid #4A4A4A;
+    height: 41px;
     display: flex;
     flex-direction: row;
-    align-items: center;
-    padding: 0 18px;
-    gap: 12px;
+    align-items: flex-start;
+    padding: 0;
+    gap: 0;
     overflow: hidden;
   }}
   .btn {{
     position: relative;
-    min-width: 72px;
-    height: 42px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 2px 10px;
-    color: {ink};
-    gap: 2px;
+    height: 41px;
+    flex-shrink: 0;
   }}
-  .btn svg {{
-    pointer-events: none;
-  }}
-  .btn-lbl {{
-    font-size: 11.5px;
-    line-height: 13px;
-    font-weight: 600;
-    text-align: center;
-    white-space: nowrap;
-    pointer-events: none;
-  }}
-  .btn-off {{
-    color: {muted};
-  }}
+  .btn-back {{ width: 72px; }}
+  .btn-fwd {{ width: 63px; }}
+  .btn-stop {{ width: 55px; }}
+  .btn-refresh {{ width: 53px; }}
+  .btn-home {{ width: 51px; }}
+  .btn-autofill {{ width: 60px; }}
+  .btn-print {{ width: 52px; }}
+  .btn-mail {{ width: 50px; }}
   .nav-sep {{
     position: relative;
-    width: 10px;
-    height: 38px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 4px;
-    pointer-events: none;
-  }}
-  .nav-sep-svg {{
+    width: 11px;
+    height: 41px;
+    flex-shrink: 0;
     pointer-events: none;
   }}
   .ie-emblem {{
     position: relative;
     margin-left: auto;
-    width: 38px;
-    height: 38px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 42px;
+    height: 41px;
+    flex-shrink: 0;
     pointer-events: none;
   }}
 
-  /* ---- Row 3: IE5 Mac 3D Cylindrical Aqua Blue Address Bar (30px) ---- */
+  /* ---- Row 3: IE5 Mac 27px Cylindrical Bondi-Teal Address Bar ---- */
   .address-row {{
     position: relative;
-    height: 30px;
-    background-color: {aqua_badge};
+    height: 27px;
     display: flex;
     flex-direction: row;
-    align-items: center;
-    padding: 3px 6px 3px 0;
+    align-items: flex-start;
+    padding: 0;
+    gap: 0;
     overflow: hidden;
   }}
   .address-badge {{
     position: relative;
-    width: 82px;
-    height: 24px;
-    color: #FFFFFF;
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 24px;
-    text-align: right;
-    padding-right: 9px;
-    letter-spacing: 0.01em;
+    width: 71px;
+    height: 27px;
+    flex-shrink: 0;
     pointer-events: none;
   }}
   .bar {{
     position: relative;
     flex: 1;
-    height: 23px;
-    background-color: {pill};
-    border: 1.5px solid #081E2E;
+    height: 27px;
+    overflow: hidden;
+  }}
+  .bar-focused {{
+    position: relative;
+  }}
+  .addr-inner {{
+    position: relative;
+    margin-top: 5px;
+    height: 18px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 0 7px;
-    gap: 6px;
-  }}
-  .bar-focused {{
-    background-color: {pill_focus};
-    border: 1.5px solid {accent};
+    gap: 3px;
+    padding-right: 6px;
+    pointer-events: none;
   }}
   .url {{
-    color: {ink};
-    font-size: 12.5px;
-    line-height: 21px;
+    color: #111111;
+    font-size: 11.5px;
+    line-height: 18px;
     white-space: nowrap;
     overflow: hidden;
     pointer-events: none;
   }}
   .caret {{
-    width: 1.5px;
-    height: 15px;
-    background-color: {ink};
+    width: 1px;
+    height: 13px;
+    background-color: #000000;
     pointer-events: none;
   }}
   .go-btn {{
     position: relative;
-    width: 50px;
-    height: 24px;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    margin-left: 4px;
-    color: #FFFFFF;
-    font-size: 12.5px;
-    font-weight: 700;
-  }}
-  .go-btn svg, .go-lbl {{
-    pointer-events: none;
+    width: 51px;
+    height: 27px;
+    flex-shrink: 0;
   }}
 
-  /* ---- Row 4: IE5 Mac Fluted/Ribbed Favorites Bar (24px) ---- */
+  /* ---- Row 4: IE5 Mac 25px Favorites Bar ---- */
   .favbar {{
     position: relative;
+    height: 25px;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+  }}
+  .fav-left-cap {{
+    position: relative;
+    width: 23px;
+    height: 25px;
+    flex-shrink: 0;
+    pointer-events: none;
+  }}
+  .fav-items-wrap {{
+    position: relative;
     height: 24px;
-    background-color: {nav};
-    border-top: 1px solid {bevel_light};
-    border-bottom: 1px solid {bevel_dark};
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 0 12px;
-    gap: 18px;
+    padding-left: 7px;
+    gap: 12px;
     overflow: hidden;
   }}
   .fav-pill {{
@@ -1354,137 +1093,84 @@ pub fn render(state: &ChromeState<'_>) -> String {
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 5px;
-    height: 20px;
-    padding: 0 4px;
-    font-size: 11.5px;
+    gap: 4px;
+    height: 19px;
+    padding: 0 2px;
+    font-size: 10.5px;
     font-weight: 500;
-    color: {ink};
+    color: #141414;
     white-space: nowrap;
   }}
   .fav-pill-text {{
-    line-height: 20px;
+    line-height: 18px;
     pointer-events: none;
   }}
   .fav-chevron {{
     position: relative;
     margin-left: auto;
-    padding: 0 4px;
-    color: {brand_teal};
-    font-size: 16px;
-    font-weight: 800;
-    line-height: 20px;
+    width: 25px;
+    height: 25px;
+    flex-shrink: 0;
   }}
 
-  /* ---- Left Vertical Explorer Bar Rail (28px wide, Sideways Folder Tabs) ---- */
+  /* ---- Wall 2: Left Vertical Explorer Bar Rail (23px wide) ---- */
   .exp-rail {{
     position: absolute;
-    bottom: 0;
-    width: 28px;
-    background-color: {rail_bg};
-    border-right: 1px solid #4A4A4A;
+    bottom: 16px;
+    width: 23px;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    padding-top: 0px;
-    gap: 0px;
+    padding: 0;
+    gap: 0;
     overflow: hidden;
   }}
   .rail-collapse {{
     position: relative;
-    width: 27px;
-    height: 22px;
+    width: 23px;
+    height: 23px;
     flex-shrink: 0;
-    background-color: transparent;
-    border-top: 1px solid #555555;
-    border-left: 1px solid #333333;
-    border-right: 1px solid #333333;
-    border-bottom: 1px solid #555555;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-top: 4px;
-    margin-bottom: 0px;
-  }}
-  .rail-collapse svg {{
-    pointer-events: none;
   }}
   .rail-icon {{
     position: relative;
-    width: 27px;
-    height: 28px;
+    width: 23px;
+    height: 22px;
     flex-shrink: 0;
-    background-color: {rail_tab_bg};
-    border-top: 1px solid {bevel_light};
-    border-left: 1px solid #333333;
-    border-right: 1px solid {bevel_dark};
-    border-bottom: 1px solid {bevel_dark};
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 2px;
   }}
-  .rail-icon svg {{
-    pointer-events: none;
-  }}
-  .rail-icon-off {{
-    opacity: 0.65;
-  }}
-
-  /* Interlocking Angled Folder Tabs with 90-degree Rotated Sideways Text */
-  .exp-tab {{
+  .exp-tabs-wrap {{
     position: relative;
-    width: 27px;
-    height: 90px;
+    width: 23px;
+    height: 368px;
     flex-shrink: 0;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    color: {ink};
-    margin-bottom: -13px;
-    padding-bottom: 2px;
+    flex-direction: column;
   }}
-  .exp-tab-last {{
-    margin-bottom: 0px;
-  }}
-  .exp-tab-active {{
-    color: #207194;
-  }}
-  .exp-tab-bg {{
+  .exp-tabs-bg {{
     position: absolute;
     top: 0;
     left: 0;
-    width: 27px;
-    height: 90px;
+    width: 23px;
+    height: 368px;
     pointer-events: none;
   }}
-  .exp-tab-label {{
+  .exp-tab {{
     position: relative;
-    width: 82px;
-    height: 16px;
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 16px;
-    text-align: center;
-    white-space: nowrap;
-    transform: rotate(90deg);
-    pointer-events: none;
+    width: 23px;
+    flex-shrink: 0;
   }}
   .rail-globe {{
     position: relative;
     flex: 1;
-    width: 27px;
+    width: 23px;
+    overflow: hidden;
     pointer-events: none;
-  }}
-  .rail-globe-bordered {{
-    border-left: 1px solid #333333;
   }}
 
   /* ---- Explorer Bar Collapsible Drawer (286px wide, left of the vertical tab rail) ---- */
   .exp-drawer {{
     position: absolute;
     left: 0;
-    bottom: 0;
+    bottom: 16px;
     width: 286px;
     background-color: {rail_bg};
     padding: 4px 0 0 6px;
@@ -1592,8 +1278,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
     font-size: 12px;
     line-height: 17px;
   }}
-
-  /* ---- Page Holder Links View Rows (PDF Page 2 Right) ---- */
   .ph-link-row {{
     min-height: 24px;
     padding: 3px 12px;
@@ -1612,8 +1296,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
     overflow: hidden;
     pointer-events: none;
   }}
-
-  /* ---- Internet Scrapbook Rows (PDF Page 1 Figure 6) ---- */
   .sb-row {{
     height: 26px;
     padding: 0 10px 0 22px;
@@ -1624,10 +1306,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
     align-items: center;
     gap: 8px;
     background-color: {drawer_bg};
-  }}
-  .sb-row svg {{
-    flex-shrink: 0;
-    pointer-events: none;
   }}
   .sb-folder {{
     padding-left: 10px;
@@ -1646,36 +1324,42 @@ pub fn render(state: &ChromeState<'_>) -> String {
     pointer-events: none;
   }}
 
-  /* ---- Right 15px Vertical Scrollbar Track + Bottom 15px Horizontal Scrollbar Track + 15x15 Resize Corner ---- */
-  .aqua-vscroll {{
+  /* ---- Wall 3 (1px Right Border) & Wall 4 (16px Bottom Pinstriped Bar + Resize Grip) ---- */
+  .window-right-wall {{
     position: absolute;
     right: 0;
-    bottom: 15px;
-    width: 15px;
-    overflow: hidden;
+    bottom: 16px;
+    width: 1px;
+    background-color: #919191;
     pointer-events: none;
   }}
-  .aqua-bottom-wrap {{
+  .window-bottom-wall {{
     position: absolute;
+    left: 0;
     right: 0;
     bottom: 0;
-    height: 15px;
+    height: 16px;
     display: flex;
     flex-direction: row;
     pointer-events: none;
   }}
-  .aqua-hscroll {{
+  .bottom-left-cap {{
+    position: relative;
+    width: 23px;
+    height: 16px;
+    flex-shrink: 0;
+  }}
+  .bottom-mid {{
     position: relative;
     flex: 1;
-    height: 15px;
+    height: 16px;
     overflow: hidden;
   }}
-  .aqua-resize-corner {{
+  .bottom-right-cap {{
     position: relative;
-    width: 15px;
-    height: 15px;
+    width: 16px;
+    height: 16px;
     flex-shrink: 0;
-    overflow: hidden;
   }}
 
   .progress {{
@@ -1688,7 +1372,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
   .menu {{
     position: absolute;
-    top: 126px;
+    top: 116px;
     right: 8px;
     width: 210px;
     background-color: {menu_bg};
@@ -1721,8 +1405,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .supbar {{
     position: absolute;
     left: {content_x:.1}px;
-    right: 0;
-    bottom: 34px;
+    right: 1px;
+    bottom: 16px;
     height: 36px;
     background-color: {nav};
     border-top: 1px solid {hairline};
@@ -1807,8 +1491,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
   .xray-hud {{
     position: absolute;
-    right: 0;
-    bottom: 34px;
+    right: 1px;
+    bottom: 16px;
     height: 24px;
     background-color: #111318;
     border-top: 1px solid #2C313C;
@@ -1852,20 +1536,15 @@ pub fn render(state: &ChromeState<'_>) -> String {
         nav = p.nav,
         hairline = p.hairline,
         bevel_light = p.bevel_light,
-        bevel_dark = p.bevel_dark,
         pill = p.pill,
-        pill_focus = p.pill_focus,
         ink = p.ink,
         muted = p.muted,
         menu_bg = p.menu_bg,
         separator = p.separator,
         accent = p.accent,
-        aqua_badge = p.aqua_badge,
         rail_bg = p.rail_bg,
-        rail_tab_bg = p.rail_tab_bg,
         drawer_bg = p.drawer_bg,
         drawer_header_bg = p.drawer_header_bg,
-        brand_teal = p.brand_teal,
         link_blue = p.link_blue,
         top_chrome_h = top_chrome_h,
         content_x = content_x,
@@ -1878,22 +1557,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
         supbar = supbar,
         menu = menu,
     )
-}
-
-fn button_class(enabled: bool) -> &'static str {
-    if enabled {
-        "btn"
-    } else {
-        "btn btn-off"
-    }
-}
-
-fn exp_tab_class(active: bool) -> &'static str {
-    if active {
-        "exp-tab exp-tab-active"
-    } else {
-        "exp-tab"
-    }
 }
 
 fn escape_html(s: &str) -> String {

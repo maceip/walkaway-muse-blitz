@@ -19,6 +19,7 @@ mod chrome;
 mod control;
 mod credentials;
 mod dom_ffi;
+mod ie5_sprites;
 mod keychain;
 mod observe;
 mod page_endpoint;
@@ -1047,13 +1048,13 @@ impl BrowserApp {
             Some(0)
         };
         let favorites = vec![
-            ("Web Gallery".to_string(), "https://www.apple.com/".to_string()),
-            ("Office for Macintosh".to_string(), "https://www.microsoft.com/".to_string()),
-            ("Products for Mac".to_string(), "https://en.wikipedia.org/".to_string()),
-            ("Microsoft Internet".to_string(), "https://www.aol.com/".to_string()),
-            ("Apple".to_string(), "https://www.apple.com/mac/".to_string()),
-            ("Google".to_string(), "https://www.google.com/".to_string()),
-            ("Developer Hub".to_string(), "https://lite.duckduckgo.com/lite/".to_string()),
+            ("Live Home Page".to_string(), "https://www.msn.com/".to_string()),
+            ("Apple".to_string(), "https://www.apple.com/".to_string()),
+            ("Apple Support".to_string(), "https://support.apple.com/".to_string()),
+            ("Apple Store".to_string(), "https://www.apple.com/store".to_string()),
+            ("iTools".to_string(), "https://www.icloud.com/".to_string()),
+            ("Mac OS X".to_string(), "https://www.apple.com/macos/".to_string()),
+            ("Microsoft MacTopia".to_string(), "https://www.microsoft.com/mac".to_string()),
         ];
         let mut app = Self {
             window: None,
@@ -8137,32 +8138,32 @@ fn render_to_png(
     ];
     let demo_favs = [
         NavEntryInfo {
-            title: "Web Gallery",
-            url: "https://www.apple.com/",
-        },
-        NavEntryInfo {
-            title: "Office for Macintosh",
-            url: "https://www.microsoft.com/mac",
-        },
-        NavEntryInfo {
-            title: "Products for Mac",
-            url: "https://www.oreillynet.com/",
-        },
-        NavEntryInfo {
-            title: "Microsoft Internet",
+            title: "Live Home Page",
             url: "https://www.msn.com/",
         },
         NavEntryInfo {
             title: "Apple",
-            url: "https://www.apple.com/mac/",
+            url: "https://www.apple.com/",
         },
         NavEntryInfo {
-            title: "Google",
-            url: "https://www.google.com/",
+            title: "Apple Support",
+            url: "https://support.apple.com/",
         },
         NavEntryInfo {
-            title: "Developer Hub",
-            url: "https://lite.duckduckgo.com/lite/",
+            title: "Apple Store",
+            url: "https://www.apple.com/store",
+        },
+        NavEntryInfo {
+            title: "iTools",
+            url: "https://www.icloud.com/",
+        },
+        NavEntryInfo {
+            title: "Mac OS X",
+            url: "https://www.apple.com/macos/",
+        },
+        NavEntryInfo {
+            title: "Microsoft MacTopia",
+            url: "https://www.microsoft.com/mac",
         },
     ];
     let html = chrome::render(&ChromeState {
