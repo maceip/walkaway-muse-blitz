@@ -1048,6 +1048,20 @@ was ever needed. The guarantee is asserted against the live platform
 (`SecKeychainGetUserInteractionAllowed`) by a test that was confirmed to fail
 when the interaction guard is dropped.
 
+**Landed 2026-11-06 (second pass).** The `fill_form` path no longer signs a
+WebAuthn assertion and no longer writes one into a hidden form field: a DOM
+fill fills a password and nothing else. The `--supervisortest` passkey checks
+now drive the broker rather than the legacy vault signer, so the supervisor
+suite exercises the implementation that ships.
+
+The page-facing `navigator.credentials` path is still separate work and is
+recorded as open in `docs/STATUS.md`. A site's `navigator.credentials.get()`
+must end at the broker — real ceremony, RP-ID binding, Keychain, human
+approval — and not at the legacy file-based vault. The broker already does
+RP-ID binding and resident keys; what the page path still lacks is credential
+*discovery*, without which the conditional-mediation (autofill) passkey UX
+that real sites depend on cannot work.
+
 The boundary is explicit: this is a **software authenticator**. The macOS
 platform authenticator (Secure Enclave) and hardware security keys are still
 `Unsupported`, because they need an Objective-C bridge to

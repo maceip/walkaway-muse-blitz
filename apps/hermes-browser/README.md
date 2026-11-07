@@ -270,6 +270,11 @@ prompt fails with an error instead. Hermes reads only the items it created
 itself, which it is trusted for, so no prompt was ever needed. The guarantee
 is asserted against the live platform by the test suite, not assumed.
 
+A WebAuthn assertion is never a DOM fill. `fill_form` fills a password and
+nothing else: it will not sign an assertion and write it into a form field.
+A passkey assertion comes from the broker, in Rust, against the Keychain,
+behind the human approval gate.
+
 Remote JavaScript remains unimplemented and is reported as an unsupported
 capability. An unimplemented protocol in the tree is worse than a written one,
 and the spec has open questions that need the shell team's answers before the

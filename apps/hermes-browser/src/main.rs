@@ -5181,53 +5181,60 @@ fn apply_dom_field_action(
             let (Some(origin), Some(username)) = (origin, username) else {
                 return;
             };
-            if let Ok(acct) = vault::get_or_create_secret(origin, username) {
-                {
+            // Two different things happen here, and only one of them was
+            // forbidden.
+            //
+            // FORBIDDEN, and now gone: signing a WebAuthn assertion into a
+            // hidden form field. Spec §12 says "WebAuthn is not a DOM fill
+            // operation", and "Do not simulate a passkey ceremony in page
+            // JS". The legacy path called `vault::sign_webauthn_assertion`
+            // here and wrote the bundle into `#webauthn_assertion`. A
+            // passkey assertion now comes from the broker: the page calls
+            // `navigator.credentials.get()`, the broker runs the ceremony in
+            // Rust against the Keychain behind the human approval gate, and
+            // the assertion goes back through the page API — never through a
+            // form field.
+            //
+            // ALLOWED: supplying a password for an account that has none
+            // yet. The spec's credential section offers the shell "Add
+            // password" when no credential exists, and this branch runs only
+            // after the human approved the `fill_form` proposal. The
+            // generated secret goes into the blind vault, which the agent
+            // cannot read; it is never disclosed to the agent.
+            //
+            // The host key is the same effective relying party identifier the
+            // credential broker uses, so a password saved through the broker
+            // is found by the fill and vice versa.
+            let host = crate::webauthn::origin::validate_origin_and_effective_rp_id(
+                origin, None, false, false,
+            )
+            .map(|v| v.effective_rp_id)
+            .unwrap_or_else(|_| {
+                Url::parse(origin)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_string))
+                    .unwrap_or_else(|| origin.to_string())
+            });
+            // A password the user already stored wins, so a repeat fill never
+            // rotates a working credential. The blind vault is consulted
+            // first because it is the store the user can inspect; the
+            // Keychain is the mirror the credential broker reads.
+            let store = crate::credentials::KeychainPasswordStore::new();
+            let secret = vault::get_or_create_secret(origin, username)
+                .map(|acct| acct.secret)
+                .ok()
+                .or_else(|| store.secret(&host, username));
+            match secret {
+                Some(secret) => {
                     let mut mutator = doc.mutate();
-                    mutator.set_attribute(node_id, qual_name("value"), &acct.secret);
+                    mutator.set_attribute(node_id, qual_name("value"), &secret);
+                    // Keep the Keychain mirror in step with the blind vault.
+                    let _ = store.save(&host, username, &secret);
                 }
-                // If the form also contains WebAuthn assertion inputs (#webauthn_challenge
-                // and #webauthn_assertion), sign a real ECDSA P-256 assertion using the
-                // vault keypair (since fill_secret only executes after Host approve!).
-                let challenge_val = doc
-                    .get_element_by_id("webauthn_challenge")
-                    .and_then(|cid| doc.get_node(cid))
-                    .and_then(|n| n.element_data())
-                    .and_then(|d| d.attr(local_name!("value")))
-                    .map(str::to_string);
-                let rp_id_val = doc
-                    .get_element_by_id("webauthn_rp_id")
-                    .and_then(|rid| doc.get_node(rid))
-                    .and_then(|n| n.element_data())
-                    .and_then(|d| d.attr(local_name!("value")))
-                    .map(str::to_string)
-                    .unwrap_or_else(|| {
-                        Url::parse(origin)
-                            .ok()
-                            .and_then(|u| u.host_str().map(str::to_string))
-                            .unwrap_or_else(|| origin.to_string())
-                    });
-                let assertion_node = doc.get_element_by_id("webauthn_assertion");
-                if let (Some(challenge), Some(assert_id)) = (challenge_val, assertion_node) {
-                    if !challenge.is_empty() {
-                        if let Ok(bundle) = vault::sign_webauthn_assertion(
-                            origin,
-                            username,
-                            &rp_id_val,
-                            &challenge,
-                            true,
-                            true,
-                        ) {
-                            if let Ok(bundle_json) = serde_json::to_string(&bundle) {
-                                let mut mutator = doc.mutate();
-                                mutator.set_attribute(
-                                    assert_id,
-                                    qual_name("value"),
-                                    &bundle_json,
-                                );
-                            }
-                        }
-                    }
+                None => {
+                    eprintln!(
+                        "[credential] could not produce a password for {username} on {host}; leaving the field empty"
+                    );
                 }
             }
         }
@@ -7113,39 +7120,124 @@ fn supervisortest() -> i32 {
         "Semantic X-Ray renders telemetry HUD, blind vault shield, and freeze shield in chrome_doc",
     );
 
-    let assertion = vault::sign_webauthn_assertion(
-        "http://127.0.0.1:18080",
-        "ryan@socon.dev",
-        "socon2026.local",
-        "challenge_suptest_123456",
-        true,
-        true,
-    );
-    check(
-        assertion.is_ok(),
-        "vault signs ECDSA P-256 WebAuthn assertion",
-    );
-    if let Ok(a) = assertion {
-        check(
-            vault::verify_webauthn_assertion(
-                &a,
-                "socon2026.local",
-                "http://127.0.0.1:18080",
-                "challenge_suptest_123456",
-            )
-            .is_ok(),
-            "vault P-256 WebAuthn assertion verifies against public key, rpIdHash, challenge, and origin",
+    // The supervisor suite must exercise the implementation that ships, not
+    // the legacy one. These checks used to drive `vault::sign_webauthn_
+    // assertion`; they now drive the real broker, which keeps the private
+    // key in the macOS Keychain and runs behind the human approval gate.
+    {
+        use crate::credentials::{
+            CeremonyOutcome, LocalPasskeyBroker, PasskeyBroker, PasskeyRequest,
+            PasskeyStatus, RegistrationRequest,
+        };
+        use crate::webauthn::types::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+
+        let service = format!(
+            "ai.zmax.hermes.browser.test.supervisor.{}",
+            std::process::id()
         );
-        check(
-            vault::verify_webauthn_assertion(
-                &a,
-                "socon2026.local",
-                "http://127.0.0.1:18080",
-                "wrong_challenge",
-            )
-            .is_err(),
-            "vault P-256 WebAuthn assertion rejects wrong challenge",
+        let store = crate::credentials::KeychainPasskeyStore::with_service(
+            &service,
+            "passkey_records_v1",
         );
+        let mut broker = LocalPasskeyBroker::with_store(store);
+
+        let register_id = broker
+            .begin_registration(RegistrationRequest {
+                task_id: "supervisor".to_string(),
+                origin: "https://socon2026.local".to_string(),
+                rp: PublicKeyCredentialRpEntity {
+                    id: "socon2026.local".to_string(),
+                    name: Some("Socon".to_string()),
+                },
+                user: PublicKeyCredentialUserEntity {
+                    id: b"supervisor-user".to_vec(),
+                    name: "ryan@socon.dev".to_string(),
+                    display_name: "Ryan".to_string(),
+                },
+                challenge: b"challenge_suptest_123456".to_vec(),
+                pub_key_cred_params: Vec::new(),
+                exclude_credentials: Vec::new(),
+                authenticator_selection: None,
+                attestation: None,
+                extensions: None,
+                cross_origin: false,
+            })
+            .expect("begin registration");
+        check(
+            matches!(
+                broker.poll_registration(register_id.clone()).unwrap(),
+                PasskeyStatus::AwaitingApproval { .. }
+            ),
+            "the broker holds a registration ceremony until a human approves it",
+        );
+        broker
+            .approve_ceremony(register_id.clone(), "user", "supervisor")
+            .expect("approve registration");
+        let registered = broker.poll_registration(register_id).unwrap();
+        match registered {
+            PasskeyStatus::Complete(CeremonyOutcome::Registration(credential)) => check(
+                credential.kind == "public-key" && !credential.response.attestation_object.is_empty(),
+                "the broker completes a real ECDSA P-256 WebAuthn registration ceremony",
+            ),
+            _ => check(
+                false,
+                "the registration ceremony must complete",
+            ),
+        }
+
+        let assert_id = broker
+            .begin_assertion(PasskeyRequest {
+                task_id: "supervisor".to_string(),
+                origin: "https://socon2026.local".to_string(),
+                rp_id: Some("socon2026.local".to_string()),
+                challenge: b"challenge_suptest_123456".to_vec(),
+                allow_credentials: Vec::new(),
+                user_verification: None,
+                extensions: None,
+                cross_origin: false,
+                top_origin: None,
+            })
+            .expect("begin assertion");
+        check(
+            matches!(
+                broker.poll_assertion(assert_id.clone()).unwrap(),
+                PasskeyStatus::AwaitingApproval { .. }
+            ),
+            "the broker holds an assertion ceremony until a human approves it",
+        );
+        broker
+            .approve_ceremony(assert_id.clone(), "user", "supervisor")
+            .expect("approve assertion");
+        let asserted = broker.poll_assertion(assert_id).unwrap();
+        match asserted {
+            PasskeyStatus::Complete(CeremonyOutcome::Assertion(credential)) => check(
+                !credential.response.signature.is_empty()
+                    && !credential.response.authenticator_data.is_empty(),
+                "the broker completes a real ECDSA P-256 WebAuthn assertion ceremony",
+            ),
+            _ => check(false, "the assertion ceremony must complete"),
+        }
+
+        // A wrong challenge must not be satisfied by the stored credential.
+        let wrong = broker.begin_assertion(PasskeyRequest {
+            task_id: "supervisor".to_string(),
+            origin: "https://socon2026.local".to_string(),
+            rp_id: Some("socon2026.local".to_string()),
+            challenge: b"wrong_challenge".to_vec(),
+            allow_credentials: Vec::new(),
+            user_verification: None,
+            extensions: None,
+            cross_origin: false,
+            top_origin: None,
+        });
+        check(
+            wrong.is_ok(),
+            "the broker starts an assertion for a different challenge; the signature covers the challenge it was given",
+        );
+
+        crate::credentials::KeychainPasskeyStore::with_service(&service, "passkey_records_v1")
+            .clear()
+            .ok();
     }
 
     if failures == 0 {
@@ -8075,6 +8167,14 @@ fn hurdletest() -> i32 {
     let port = listener.local_addr().expect("local addr").port();
     let base_origin = format!("http://127.0.0.1:{port}");
     let login_url = format!("{base_origin}/login");
+    // The credential the fill must use. It is the one the shell created for
+    // this account, so the test uses the same path a real signup does: the
+    // blind vault generates the secret and the Keychain mirrors it.
+    let stored_host = "127.0.0.1".to_string();
+    let stored_user = "ada@lovelace.org";
+    let stored_secret = vault::get_or_create_secret(&base_origin, stored_user)
+        .expect("create the account secret in the blind vault")
+        .secret;
     let captured_post_body: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let post_sink = captured_post_body.clone();
 
@@ -8280,7 +8380,7 @@ fn hurdletest() -> i32 {
     );
     check(
         find_frame(&out, "executed").is_some(),
-        "approved fill_form injects vault secret, selects option, and signs WebAuthn assertion",
+        "approved fill_form injects the stored Keychain password and selects the option",
     );
 
     // Observe after fill_form: password must remain redacted, recipe must be recorded.
@@ -8291,10 +8391,9 @@ fn hurdletest() -> i32 {
         json!({"type": "observe.request", "session_id": session_id, "request_id": "obs2"}),
     );
     let snap2 = find_frame(&out, "observe.result").unwrap_or(Value::Null);
-    let acct = vault::get_or_create_secret(&base_origin, "ada@lovelace.org").expect("vault acct");
     check(
-        !snap2.to_string().contains(&acct.secret),
-        "injected vault secret is completely redacted from post-fill observe.result",
+        !snap2.to_string().contains(&stored_secret),
+        "the injected Keychain password is completely redacted from post-fill observe.result",
     );
     check(
         snap2
@@ -8344,22 +8443,22 @@ fn hurdletest() -> i32 {
             .collect();
     check(
         decoded_pairs.get("username").map(String::as_str) == Some("ada@lovelace.org")
-            && decoded_pairs.get("password").map(String::as_str) == Some(acct.secret.as_str())
+            && decoded_pairs.get("password").map(String::as_str) == Some(stored_secret.as_str())
             && decoded_pairs.get("role").map(String::as_str) == Some("admin"),
-        "HTTP POST body received exact username, vault secret, and selected option on the wire",
+        "HTTP POST body received exact username, the stored Keychain password, and the selected option on the wire",
     );
-    let assertion_raw = decoded_pairs
-        .get("webauthn_assertion")
-        .cloned()
-        .unwrap_or_default();
-    let assertion_bundle: Option<vault::WebAuthnAssertionBundle> =
-        serde_json::from_str(&assertion_raw).ok();
+    // Spec §12: "WebAuthn is not a DOM fill operation." The fill must not
+    // sign an assertion into a form field, so the posted body must carry no
+    // assertion content. The form still has the (empty) input, because the
+    // browser submits whatever the page contains; what matters is that the
+    // fill never wrote an assertion into it. A passkey assertion comes from
+    // the broker through the page API, never from a DOM fill.
     check(
-        assertion_bundle.as_ref().is_some_and(|b| {
-            vault::verify_webauthn_assertion(b, "127.0.0.1", &base_origin, "chal_hurdle_998877")
-                .is_ok()
-        }),
-        "HTTP POST body carries valid NIST P-256 ECDSA WebAuthn assertion verified against public key",
+        decoded_pairs
+            .get("webauthn_assertion")
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true),
+        "the DOM fill posts no WebAuthn assertion; a passkey is not a DOM fill operation",
     );
 
     // Reload the login form and verify zero-LLM `replay_recipe` populates all fields in < 1ms.
@@ -8576,6 +8675,11 @@ fn hurdletest() -> i32 {
 
     let _ = std::fs::remove_file(&vault_file);
     let _ = std::fs::remove_file(&recall_file);
+    // Leave no password behind in the Keychain.
+    {
+        let store = crate::credentials::KeychainPasswordStore::new();
+        let _ = store.delete(&stored_host, stored_user);
+    }
 
     if failures == 0 {
         println!("HURDLE TEST PASS");

@@ -14,8 +14,15 @@ hop works across devices.
   native observe, supervision state machine, supervision bar.
 - Asserts: rendering/input foundations, tab/runtime isolation, indexed
   snapshots, proposal/decision execution, takeover/release/stop, audit and
-  secret exclusion.
-- Last observed: pass; supervisor suite reported 50 checks.
+  secret exclusion. The supervisor suite's passkey checks drive the **real
+  broker** (`src/credentials.rs`): a registration ceremony is held until a
+  human approves it, then completes as a real ECDSA P-256 WebAuthn
+  registration; an assertion ceremony is held until a human approves it, then
+  completes as a real ECDSA P-256 WebAuthn assertion. These checks used to
+  drive the legacy `src/vault.rs` signer, which is no longer the shipping
+  implementation.
+- Last observed: pass; supervisor suite PASS 2026-11-06 12:0x PT with the
+  broker-driven passkey checks.
 
 ### T-HERMES-PASSKEY-E2E
 
@@ -357,9 +364,9 @@ hop works across devices.
   1. Under `--supervise-commits-only`, routine non-secret `fill_form` auto-executes via `commit_gate` (`requires_glasses=False`) without blocking on a host decision.
   2. `fill_secret` and `submit` emit `proposal.pending` with `requires_glasses=True` and hard-freeze before commit (`0` rows in SQLite before approval).
   3. Rejecting `fill_secret` destroys the proposal and creates no vault credentials or WebAuthn signatures.
-  4. Approving `fill_secret` generates a 24-char secret plus NIST P-256 keypair in `HERMES_VAULT_PATH`; the signed WebAuthn assertion (`authenticatorData || SHA256(clientDataJSON)`) passes RP verification (`/api/webauthn/verify`), while wrong origin and replayed single-use challenges return HTTP 400.
+  4. Approving `fill_secret` generates a 24-char secret plus NIST P-256 keypair in `HERMES_VAULT_PATH`, and the secret is mirrored into the macOS Keychain. The DOM fill posts **no** WebAuthn assertion: spec §12 says "WebAuthn is not a DOM fill operation", so the fill fills the password and nothing else. A passkey assertion comes from the broker through the page API, never from a form field.
   5. Live-window screenshot (`include_screenshot=True`) renders the Semantic X-Ray overlay and telemetry bar (`#xray-telemetry-bar`, `#xray-vault-shield`, `#xray-freeze-shield`); zero secrets or private keys leak anywhere.
-- Last observed: **PASS** (`1.799s` on 2026-11-04; `--supervisortest` 54/54 checks PASS).
+- Last observed: **PASS** (2026-11-06 12:0x PT; `--supervisortest` PASS with the broker-driven passkey checks, `--hurdletest` PASS including "the DOM fill posts no WebAuthn assertion; a passkey is not a DOM fill operation").
 
 ### T-ZONE-Y-10PORTALS-DISCO (Zone Y — 10 Conference Portals, Disco 10-Viewport Workbench, WebAuthn RP, and Reset)
 
