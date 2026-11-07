@@ -26,6 +26,7 @@ import com.meta.wearable.dat.display.views.ButtonStyle
 import com.meta.wearable.dat.display.views.CornerRadius
 import com.meta.wearable.dat.display.views.Direction
 import com.meta.wearable.dat.display.views.FlexBoxBackground
+import com.meta.wearable.dat.display.views.IconName
 import com.meta.wearable.dat.display.views.ImageSize
 import com.meta.wearable.dat.display.views.TextColor
 import com.meta.wearable.dat.display.views.TextStyle
@@ -199,7 +200,7 @@ class WalkawayDat(private val appContext: Context) {
     price: String? = null,
     detail: String? = null,
     iconBitmap: Bitmap? = null,
-    autoApproveSeconds: Int = 3,
+    autoApproveSeconds: Int = 5,
     onAction: (String) -> Unit,
     onResult: (Result<Unit>) -> Unit
   ) {
@@ -234,7 +235,7 @@ class WalkawayDat(private val appContext: Context) {
     }
   }
 
-  // RYAN EXPLICIT MOCK/FALLBACK AUTHORIZATION: "can you quickly push a notification  to me, just push the glasses? They're on my face right now. I want just one notification, approve deny, just make it some, make it match the web app or just have some string that's like normal like like Muse wants your pass key to login to LinkedInBut can you update the DAT thing so it's actually sending the file icon of LinkedIn FAVICON and then I want you to also do it so it auto approves in three seconds with the countdown on the button"
+  // RYAN EXPLICIT MOCK/FALLBACK AUTHORIZATION: "create a gray dark gray rounded corner dart card with lighter gray inlay for the question. The question is going to be this project is under imminent cascading collapse or failure or these Asians are out of control. Say something use more correct terms and then show me a series of four of your little GitHub graphs and then the button is you're gonna this project is heading for imminent failure. Can I step in and take over? And the answers are yes, five second countdown, no, and then watch, but for this specific clip I'm just going to let it count down and auto hit yes."
   private suspend fun renderCardContent(
     readyDisplay: Display,
     title: String,
@@ -243,10 +244,11 @@ class WalkawayDat(private val appContext: Context) {
     approveLabel: String,
     onAction: (String) -> Unit
   ) {
+    val isFullGraphic = iconBitmap != null && iconBitmap.width > 96
     readyDisplay.sendContent {
-      flexBox(gap = 10, padding = 16) {
+      flexBox(gap = if (isFullGraphic) 6 else 10, padding = if (isFullGraphic) 10 else 16) {
         if (iconBitmap != null) {
-          val preset = if (iconBitmap.width > 96) ImageSize.FILL else ImageSize.ICON
+          val preset = if (isFullGraphic) ImageSize.FILL else ImageSize.ICON
           Log.i(TAG, "rendering iconBitmap ${iconBitmap.width}x${iconBitmap.height} preset=$preset in DAT card")
           image(
             bitmap = iconBitmap,
@@ -258,7 +260,9 @@ class WalkawayDat(private val appContext: Context) {
           Log.w(TAG, "iconBitmap is NULL in renderCardContent")
         }
         text(title.take(80), style = TextStyle.BODY)
-        text(body.take(160), style = TextStyle.BODY)
+        if (!isFullGraphic && body.isNotBlank()) {
+          text(body.take(160), style = TextStyle.BODY)
+        }
         button(approveLabel, style = ButtonStyle.PRIMARY, onClick = {
           if (!awaitingAction) return@button
           awaitingAction = false
@@ -266,11 +270,18 @@ class WalkawayDat(private val appContext: Context) {
           onAction("approve")
           scope.launch { dismissAndPowerOff() }
         })
-        button("Deny", style = ButtonStyle.SECONDARY, onClick = {
+        button("No", style = ButtonStyle.SECONDARY, onClick = {
           if (!awaitingAction) return@button
           awaitingAction = false
           countdownJob?.cancel()
           onAction("reject")
+          scope.launch { dismissAndPowerOff() }
+        })
+        button("Watch", style = ButtonStyle.OUTLINE, iconName = IconName.STAR_CIRCLE_TRIANGLE_AI, onClick = {
+          if (!awaitingAction) return@button
+          awaitingAction = false
+          countdownJob?.cancel()
+          onAction("watch")
           scope.launch { dismissAndPowerOff() }
         })
       }
@@ -285,7 +296,7 @@ class WalkawayDat(private val appContext: Context) {
     price: String? = null,
     detail: String? = null,
     iconBitmap: Bitmap? = null,
-    autoApproveSeconds: Int = 3,
+    autoApproveSeconds: Int = 5,
     onAction: (String) -> Unit,
     onResult: (Result<Unit>) -> Unit
   ) {
@@ -294,7 +305,7 @@ class WalkawayDat(private val appContext: Context) {
       onReady = { readyDisplay ->
         scope.launch {
           countdownJob?.cancel()
-          val initialLabel = if (autoApproveSeconds > 0) "Approve (${autoApproveSeconds}s)" else "Approve"
+          val initialLabel = if (autoApproveSeconds > 0) "Yes (${autoApproveSeconds}s)" else "Yes"
           runCatching {
             // Single flat flexBox on purpose (2026-11-06 black-screen
             // regression): nested flexBox/CARD layout renders black on
@@ -310,7 +321,7 @@ class WalkawayDat(private val appContext: Context) {
                   delay(1000)
                   if (!awaitingAction) return@launch
                   runCatching {
-                    renderCardContent(readyDisplay, title, body, iconBitmap, "Approve (${remaining}s)", onAction)
+                    renderCardContent(readyDisplay, title, body, iconBitmap, "Yes (${remaining}s)", onAction)
                   }
                 }
                 delay(1000)
