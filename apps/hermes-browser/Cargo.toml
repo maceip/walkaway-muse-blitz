@@ -17,6 +17,10 @@ png = "0.17"
 blitz-net = "0.3.0-beta.4"
 url = "2"
 tokio = { version = "1.54.1", features = ["rt", "net", "time", "rt-multi-thread"] }
+# The related-origins well-known fetch needs the response status and content
+# type, which blitz-net's `fetch_async` does not expose. reqwest is already a
+# transitive dependency of blitz-net, so this adds no new code to the build.
+reqwest = { version = "0.13", default-features = false, features = ["charset", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

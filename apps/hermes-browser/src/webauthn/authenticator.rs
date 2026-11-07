@@ -22,7 +22,9 @@ use crate::webauthn::cose::{
     cose_key_from_pem, generate_p256_keypair, validate_p256_public_pem,
 };
 use crate::webauthn::largeblob;
-use crate::webauthn::origin::validate_origin_and_effective_rp_id;
+use crate::webauthn::origin::{
+    OriginValidation, ValidatedOrigin, validate_origin_and_effective_rp_id,
+};
 use crate::webauthn::prf;
 use crate::webauthn::random;
 use crate::webauthn::types::{
@@ -139,6 +141,39 @@ pub trait PasskeyStore {
     }
 }
 
+/// Validates an origin for a ceremony, honouring a related origins check the
+/// caller has already made.
+///
+/// The authenticator cannot run the related origins validation procedure
+/// (WebAuthn Level 3 §5.11.1) itself: that procedure fetches the relying
+/// party's `/.well-known/webauthn` document over the network, and a ceremony
+/// must not block on the network while a page waits. When the origin is not a
+/// suffix of the RP ID, the caller has to run the procedure first and say so
+/// with `related_origin_validated`. Without that flag the origin is refused.
+fn validated_origin(
+    origin: &str,
+    requested_rp_id: Option<&str>,
+    cross_origin: bool,
+    is_create: bool,
+    related_origin_validated: bool,
+) -> Result<ValidatedOrigin, WebAuthnError> {
+    match validate_origin_and_effective_rp_id(origin, requested_rp_id, cross_origin, is_create)? {
+        OriginValidation::Suffix(validated) => Ok(validated),
+        OriginValidation::NeedsRelatedOrigins {
+            validated,
+            caller_origin,
+            rp_id,
+        } => {
+            if !related_origin_validated {
+                return Err(WebAuthnError::Security(format!(
+                    "The origin '{caller_origin}' is not related to '{rp_id}'"
+                )));
+            }
+            Ok(validated)
+        }
+    }
+}
+
 /// The software authenticator.
 pub struct Authenticator {
     /// The AAGUID written into attested credential data.
@@ -164,6 +199,14 @@ impl Authenticator {
     ///
     /// Returns the credential the relying party receives and the stored
     /// record the authenticator keeps.
+    ///
+    /// `related_origin_validated` says the caller has already run the related
+    /// origins validation procedure (WebAuthn Level 3 §5.11.1) and the
+    /// relying party's well-known document accepted this origin. The
+    /// authenticator cannot run that procedure itself, because it needs the
+    /// network; without the flag, an origin that is not a suffix of the RP ID
+    /// is refused.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
         store: &mut dyn PasskeyStore,
@@ -172,13 +215,15 @@ impl Authenticator {
         cross_origin: bool,
         top_origin: Option<&str>,
         now_iso: &str,
+        related_origin_validated: bool,
     ) -> Result<(RegistrationCredential, StoredPasskey), WebAuthnError> {
         validate_challenge(&options.challenge)?;
-        let validated = validate_origin_and_effective_rp_id(
+        let validated = validated_origin(
             origin,
             Some(options.rp.id.as_str()),
             cross_origin,
             true,
+            related_origin_validated,
         )?;
         let effective_rp_id = validated.effective_rp_id;
 
@@ -367,6 +412,11 @@ impl Authenticator {
     ///
     /// Returns the assertion the relying party receives and the updated stored
     /// record.
+    ///
+    /// `related_origin_validated` says the caller has already run the related
+    /// origins validation procedure (WebAuthn Level 3 §5.11.1) and the
+    /// relying party's well-known document accepted this origin.
+    #[allow(clippy::too_many_arguments)]
     pub fn get(
         &self,
         store: &mut dyn PasskeyStore,
@@ -374,13 +424,15 @@ impl Authenticator {
         origin: &str,
         cross_origin: bool,
         top_origin: Option<&str>,
+        related_origin_validated: bool,
     ) -> Result<(AssertionCredential, StoredPasskey), WebAuthnError> {
         validate_challenge(&options.challenge)?;
-        let validated = validate_origin_and_effective_rp_id(
+        let validated = validated_origin(
             origin,
             options.rp_id.as_deref(),
             cross_origin,
             false,
+            related_origin_validated,
         )?;
         let effective_rp_id = validated.effective_rp_id;
         let extensions = options.extensions.clone().unwrap_or_default();
@@ -726,6 +778,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap();
 
@@ -751,6 +804,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap();
 
@@ -761,6 +815,7 @@ mod tests {
                 "https://example.com",
                 false,
                 None,
+                false,
             )
             .unwrap();
 
@@ -804,6 +859,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap();
         let (_, first) = authenticator
@@ -813,6 +869,7 @@ mod tests {
                 "https://example.com",
                 false,
                 None,
+                false,
             )
             .unwrap();
         let (_, second) = authenticator
@@ -822,6 +879,7 @@ mod tests {
                 "https://example.com",
                 false,
                 None,
+                false,
             )
             .unwrap();
         assert_eq!(first.sign_count, 1);
@@ -840,6 +898,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap();
         let err = authenticator
@@ -849,6 +908,7 @@ mod tests {
                 "https://other.com",
                 false,
                 None,
+                false,
             )
             .unwrap_err();
         assert_eq!(err.dom_exception_name(), "SecurityError");
@@ -866,6 +926,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap();
         let mut options = creation_options(b"c2");
@@ -883,6 +944,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap_err();
         assert_eq!(err.dom_exception_name(), "InvalidStateError");
@@ -911,6 +973,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap();
         let prf_out = credential
@@ -933,7 +996,14 @@ mod tests {
             ..Default::default()
         });
         let (assertion, _) = authenticator
-            .get(&mut store, &request, "https://example.com", false, None)
+            .get(
+                &mut store,
+                &request,
+                "https://example.com",
+                false,
+                None,
+                false,
+            )
             .unwrap();
         let results = assertion
             .client_extension_results
@@ -962,6 +1032,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap();
 
@@ -975,7 +1046,14 @@ mod tests {
             ..Default::default()
         });
         let (assertion, record) = authenticator
-            .get(&mut store, &write, "https://example.com", false, None)
+            .get(
+                &mut store,
+                &write,
+                "https://example.com",
+                false,
+                None,
+                false,
+            )
             .unwrap();
         assert_eq!(
             assertion
@@ -997,7 +1075,7 @@ mod tests {
             ..Default::default()
         });
         let (assertion, _) = authenticator
-            .get(&mut store, &read, "https://example.com", false, None)
+            .get(&mut store, &read, "https://example.com", false, None, false)
             .unwrap();
         let blob = assertion
             .client_extension_results
@@ -1026,6 +1104,7 @@ mod tests {
                 false,
                 None,
                 "2026-11-06T00:00:00Z",
+                false,
             )
             .unwrap();
         assert!(!record.is_resident_key);
@@ -1038,6 +1117,7 @@ mod tests {
                 "https://example.com",
                 false,
                 None,
+                false,
             )
             .unwrap_err();
         assert_eq!(err.dom_exception_name(), "NotAllowedError");

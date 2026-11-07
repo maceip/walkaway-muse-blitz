@@ -30,5 +30,7 @@ pub mod largeblob;
 pub mod origin;
 pub mod prf;
 pub mod random;
+pub mod related_origins;
+pub mod test_server;
 pub mod types;
 

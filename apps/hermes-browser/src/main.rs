@@ -206,6 +206,30 @@ struct Page {
 /// black on its own dark background.
 const DARK_DEFAULT_TEXT: &str = "html, body { background-color: #1C1C1E; color: #F2F2F7; }";
 
+/// Settles a page's promise after the related-origins well-known fetch has
+/// answered (WebAuthn Level 3 §5.11.1).
+///
+/// The payload carries the ceremony the host started, or the reason the
+/// origin was refused. The page's promise is settled exactly once: the
+/// runtime drops the entry when it is called.
+fn settle_related_origins(hermes: *mut HermesAppRuntime, request_id: &str, payload: &Value) {
+    let script = format!(
+        r#"globalThis.__settleRelatedOrigins && globalThis.__settleRelatedOrigins({}, {}, {});"#,
+        serde_json::to_string(request_id).unwrap_or_else(|_| "\"\"".into()),
+        if payload.get("error").is_some() {
+            "false"
+        } else {
+            "true"
+        },
+        serde_json::to_string(payload).unwrap_or_else(|_| "\"\"".into()),
+    );
+    if let Ok(code) = std::ffi::CString::new(script) {
+        unsafe {
+            hermes_app_eval_script(hermes, code.as_ptr(), c"<related-origins>".as_ptr());
+        }
+    }
+}
+
 fn parse_two_string_args(s: &str, call_prefix: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut cursor = 0;
@@ -776,6 +800,17 @@ enum UserEvent {
     },
     ControlDisconnect {
         conn_id: u64,
+    },
+    /// The related origins well-known fetch has answered (WebAuthn Level 3
+    /// §5.11.1).
+    ///
+    /// The fetch runs on a worker thread, because the UI thread must not wait
+    /// on the network. The result comes back through the event loop, and the
+    /// host settles the page's promise from here.
+    RelatedOriginsResolved {
+        tab: TabId,
+        request_id: String,
+        result: Result<String, String>,
     },
 }
 
@@ -3715,6 +3750,160 @@ impl BrowserApp {
         Some((bytes, hash, self.frame_seq))
     }
 
+    /// Picks up a page ceremony that needs the related-origins well-known
+    /// fetch, and runs the fetch off the UI thread.
+    ///
+    /// WebAuthn Level 3 §5.11.1 lets a relying party name an RP ID that is
+    /// not a suffix of the origin the page was served from, provided the
+    /// relying party publishes the caller's origin in its own
+    /// `/.well-known/webauthn` document. Deciding that needs the network, so
+    /// the FFI entry point parked the request and this is where it is picked
+    /// up.
+    ///
+    /// The fetch runs on a worker thread and the answer comes back through
+    /// the event loop, so the UI thread never waits on the network.
+    fn poll_page_related_origins(&mut self) {
+        // A request whose fetch never answered must not leave the page's
+        // promise pending forever. The deadline is the same one the approval
+        // prompt uses: the request is refused when it is older than the
+        // passkey prompt timeout.
+        let expired = {
+            let page = &self.tab().instance.page;
+            page.ctx
+                .pending_related_origins
+                .values()
+                .find(|request| {
+                    request.started_at.elapsed()
+                        >= std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
+                })
+                .map(|request| request.request_id.clone())
+        };
+        if let Some(request_id) = expired {
+            let page = &mut self.tab_mut().instance.page;
+            page.ctx.related_origins_in_flight.remove(&request_id);
+            page.ctx.pending_related_origins.remove(&request_id);
+            let payload = serde_json::json!({
+                "error": "The relying party's related origins document could not be read in time"
+            });
+            settle_related_origins(page.hermes, &request_id, &payload);
+            return;
+        }
+
+        // The request the host has not started yet. The parked map is drained
+        // from the front, so a page that starts several ceremonies gets them
+        // resolved in order.
+        let pending = {
+            let page = &self.tab().instance.page;
+            let in_flight = &page.ctx.related_origins_in_flight;
+            page.ctx
+                .pending_related_origins
+                .values()
+                .find(|request| !in_flight.contains(&request.request_id))
+                .cloned()
+        };
+        let Some(pending) = pending else {
+            return;
+        };
+        // The request stays in the map until the fetch answers, because the
+        // answer needs the request's inputs to start the ceremony. A marker
+        // keeps it from being fetched twice.
+        self.tab_mut()
+            .instance
+            .page
+            .ctx
+            .related_origins_in_flight
+            .insert(pending.request_id.clone());
+
+        let tab = self.tab().canonical.id;
+        let proxy = self.proxy.clone();
+        let origin = pending.origin.clone();
+        let rp_id = pending.rp_id.clone();
+        let request_id = pending.request_id.clone();
+        std::thread::spawn(move || {
+            // The fetch needs a Tokio reactor. The browser's own runtime is
+            // private, but `enter_runtime` enters it, and the fetch is
+            // awaited inside that context.
+            let _guard = browser::enter_runtime();
+            let outcome =
+                pollster::block_on(crate::webauthn::related_origins::validate(&origin, &rp_id));
+            let result = match outcome {
+                Ok(true) => Ok(String::new()),
+                Ok(false) => Err(format!(
+                    "The origin '{origin}' is not a related origin of '{rp_id}'"
+                )),
+                Err(error) => Err(error.to_string()),
+            };
+            let _ = proxy.send_event(UserEvent::RelatedOriginsResolved {
+                tab,
+                request_id,
+                result,
+            });
+        });
+    }
+
+    /// Settles a page's promise after the related-origins fetch has answered.
+    ///
+    /// The fetch ran in a tab that may have been closed or replaced while it
+    /// was in flight, so the answer is only used when it names the tab that is
+    /// showing now. A stale answer is dropped: the page it belonged to is
+    /// gone, and settling it would touch a document that is no longer there.
+    fn handle_related_origins_resolved_for_tab(
+        &mut self,
+        tab: TabId,
+        request_id: String,
+        result: Result<String, String>,
+    ) {
+        if self.tab().canonical.id != tab {
+            return;
+        }
+        self.handle_related_origins_resolved(&request_id, result);
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    /// Settles a page's promise after the related-origins fetch has answered.
+    ///
+    /// When the relying party's own document named the caller's origin, the
+    /// ceremony is started here and the page's promise moves on to the human
+    /// approval gate. When it did not, the page's promise is rejected with
+    /// the reason.
+    fn handle_related_origins_resolved(
+        &mut self,
+        request_id: &str,
+        result: Result<String, String>,
+    ) {
+        let page = &mut self.tab_mut().instance.page;
+        page.ctx.related_origins_in_flight.remove(request_id);
+        let request = page.ctx.pending_related_origins.remove(request_id);
+        let payload = match (result, request) {
+            (Ok(_), Some(request)) => {
+                // The relying party's own document named the caller's origin,
+                // so the ceremony may proceed. It starts here, with the
+                // related origins check already made.
+                if request.is_create {
+                    dom_ffi::begin_page_registration_with_related_origins(
+                        &mut page.ctx,
+                        &request.origin,
+                        &request.rp_id,
+                        &request.user_name,
+                        &request.challenge,
+                    )
+                } else {
+                    dom_ffi::begin_page_assertion_with_related_origins(
+                        &mut page.ctx,
+                        &request.origin,
+                        &request.rp_id,
+                        &request.challenge,
+                        request.allow_credentials.clone(),
+                    )
+                }
+            }
+            (Ok(_), None) => serde_json::json!({ "error": "the request is gone" }),
+            (Err(message), _) => serde_json::json!({ "error": message }),
+        };
+        settle_related_origins(page.hermes, request_id, &payload);
+    }
+
     /// Picks up any passkey ceremony a page started, so a human can be asked
     /// about it.
     ///
@@ -5254,6 +5443,13 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
             UserEvent::ControlDisconnect { conn_id } => {
                 self.control_disconnect(conn_id);
             }
+            UserEvent::RelatedOriginsResolved {
+                tab,
+                request_id,
+                result,
+            } => {
+                self.handle_related_origins_resolved_for_tab(tab, request_id, result);
+            }
         }
     }
 
@@ -5267,6 +5463,10 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
         // happening. Pick it up so a human can be asked about it, and so an
         // unanswered ceremony eventually fails.
         self.poll_page_passkey_ceremonies();
+        // A page may have started a ceremony that needs the relying party's
+        // related origins well-known document. Run the fetch off the UI
+        // thread.
+        self.poll_page_related_origins();
         if let Some(limit) = self.exit_after {
             if self.started.elapsed() >= limit {
                 self.exit_after = None;
@@ -5679,8 +5879,14 @@ fn apply_dom_field_action(
             let host = crate::webauthn::origin::validate_origin_and_effective_rp_id(
                 origin, None, false, false,
             )
-            .map(|v| v.effective_rp_id)
-            .unwrap_or_else(|_| {
+            .ok()
+            .and_then(|outcome| match outcome {
+                crate::webauthn::origin::OriginValidation::Suffix(validated) => {
+                    Some(validated.effective_rp_id)
+                }
+                crate::webauthn::origin::OriginValidation::NeedsRelatedOrigins { .. } => None,
+            })
+            .unwrap_or_else(|| {
                 Url::parse(origin)
                     .ok()
                     .and_then(|u| u.host_str().map(str::to_string))
@@ -8117,6 +8323,7 @@ fn supervisortest() -> i32 {
                 attestation: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
             })
             .expect("begin registration");
         check(
@@ -8151,6 +8358,7 @@ fn supervisortest() -> i32 {
                 user_verification: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             })
             .expect("begin assertion");
@@ -8184,6 +8392,7 @@ fn supervisortest() -> i32 {
             user_verification: None,
             extensions: None,
             cross_origin: false,
+            related_origin_validated: false,
             top_origin: None,
         });
         check(

@@ -34,13 +34,51 @@ use serde::{Deserialize, Serialize};
 
 use crate::keychain;
 use crate::webauthn::authenticator::{Authenticator, PasskeyStore, StoredPasskey};
-use crate::webauthn::origin::validate_origin_and_effective_rp_id;
+use crate::webauthn::origin::{
+    OriginValidation, ValidatedOrigin, validate_origin_and_effective_rp_id,
+};
 use crate::webauthn::types::{
     AssertionCredential, AuthenticatorSelectionCriteria, ExtensionInputs,
     PublicKeyCredentialCreationOptions, PublicKeyCredentialDescriptor,
     PublicKeyCredentialParameters, PublicKeyCredentialRequestOptions, PublicKeyCredentialRpEntity,
     PublicKeyCredentialUserEntity, RegistrationCredential, WebAuthnError,
 };
+
+/// Validates an origin for the broker, honouring a related origins check the
+/// caller has already made.
+///
+/// The broker's methods are synchronous, so the broker cannot run the related
+/// origins validation procedure (WebAuthn Level 3 §5.11.1) itself: that
+/// procedure fetches the relying party's `/.well-known/webauthn` document
+/// over the network. When the origin is not a suffix of the RP ID, the caller
+/// has to run the procedure first and say so with `related_origin_validated`.
+/// Without that flag the origin is refused, so the broker can never be talked
+/// into accepting an origin the relying party has not claimed.
+fn validated_origin(
+    origin: &str,
+    requested_rp_id: Option<&str>,
+    cross_origin: bool,
+    is_create: bool,
+    related_origin_validated: bool,
+) -> Result<ValidatedOrigin, BrokerError> {
+    match validate_origin_and_effective_rp_id(origin, requested_rp_id, cross_origin, is_create)
+        .map_err(BrokerError::from)?
+    {
+        OriginValidation::Suffix(validated) => Ok(validated),
+        OriginValidation::NeedsRelatedOrigins {
+            validated,
+            caller_origin,
+            rp_id,
+        } => {
+            if !related_origin_validated {
+                return Err(BrokerError::from(WebAuthnError::Security(format!(
+                    "The origin '{caller_origin}' is not related to '{rp_id}'"
+                ))));
+            }
+            Ok(validated)
+        }
+    }
+}
 
 /// The Keychain service that holds the passkey records.
 ///
@@ -501,6 +539,17 @@ pub struct PasskeyRequest {
     /// The top-level origin when the ceremony is framed.
     #[serde(default)]
     pub top_origin: Option<String>,
+    /// Whether the caller has already run the related origins validation
+    /// procedure (WebAuthn Level 3 §5.11.1) for this origin and the relying
+    /// party's well-known document accepted it.
+    ///
+    /// The broker itself cannot run that procedure, because it needs the
+    /// network and the broker's methods are synchronous. When the origin is
+    /// not a suffix of the RP ID, the caller has to run the procedure first
+    /// and set this flag; the broker then accepts the origin on the strength
+    /// of that check.
+    #[serde(default)]
+    pub related_origin_validated: bool,
 }
 
 impl PasskeyRequest {
@@ -548,6 +597,10 @@ impl PasskeyRequest {
                 .get("top_origin")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string),
+            related_origin_validated: operation
+                .get("related_origin_validated")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
         })
     }
 }
@@ -583,6 +636,17 @@ pub struct RegistrationRequest {
     /// Whether the ceremony is running in a cross-origin frame.
     #[serde(default)]
     pub cross_origin: bool,
+    /// Whether the caller has already run the related origins validation
+    /// procedure (WebAuthn Level 3 §5.11.1) for this origin and the relying
+    /// party's well-known document accepted it.
+    ///
+    /// The broker itself cannot run that procedure, because it needs the
+    /// network and the broker's methods are synchronous. When the origin is
+    /// not a suffix of the RP ID, the caller has to run the procedure first
+    /// and set this flag; the broker then accepts the origin on the strength
+    /// of that check.
+    #[serde(default)]
+    pub related_origin_validated: bool,
 }
 
 impl RegistrationRequest {
@@ -687,6 +751,10 @@ impl RegistrationRequest {
             extensions,
             cross_origin: operation
                 .get("cross_origin")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            related_origin_validated: operation
+                .get("related_origin_validated")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
         })
@@ -949,13 +1017,13 @@ impl LocalPasskeyBroker {
         &self,
         req: &PasskeyRequest,
     ) -> Result<CredentialPrompt, BrokerError> {
-        let validated = validate_origin_and_effective_rp_id(
+        let validated = validated_origin(
             &req.origin,
             req.rp_id.as_deref(),
             req.cross_origin,
             false,
-        )
-        .map_err(BrokerError::from)?;
+            req.related_origin_validated,
+        )?;
         let records = self.store.all().map_err(BrokerError::Storage)?;
         let candidates: Vec<&StoredPasskey> = records
             .iter()
@@ -1006,6 +1074,7 @@ impl LocalPasskeyBroker {
                 &req.origin,
                 req.cross_origin,
                 req.top_origin.as_deref(),
+                req.related_origin_validated,
             )
             .map_err(BrokerError::from)?;
         Ok(CeremonyOutcome::Assertion(credential))
@@ -1036,6 +1105,7 @@ impl LocalPasskeyBroker {
                 req.cross_origin,
                 None,
                 &crate::control::now_iso(),
+                req.related_origin_validated,
             )
             .map_err(BrokerError::from)?;
         Ok(CeremonyOutcome::Registration(credential))
@@ -1095,13 +1165,13 @@ impl PasskeyBroker for LocalPasskeyBroker {
     ) -> Result<PasskeyCeremonyId, BrokerError> {
         // Validate the origin before prompting, so the human is never asked to
         // approve a ceremony that cannot succeed.
-        validate_origin_and_effective_rp_id(
+        validated_origin(
             &req.origin,
             Some(req.rp.id.as_str()),
             req.cross_origin,
             true,
-        )
-        .map_err(BrokerError::from)?;
+            req.related_origin_validated,
+        )?;
         let id = format!("passkey-register-{}", self.next_id);
         self.next_id += 1;
         self.ceremonies.insert(
@@ -1268,8 +1338,9 @@ impl CredentialBroker for LocalCredentialBroker {
         &self,
         req: CredentialFillRequest,
     ) -> Result<CredentialPrompt, BrokerError> {
-        let validated = validate_origin_and_effective_rp_id(&req.origin, None, false, false)
-            .map_err(BrokerError::from)?;
+        // A fill has no relying party identifier of its own, so the origin's
+        // host is the relying party identifier and the suffix rule decides.
+        let validated = validated_origin(&req.origin, None, false, false, false)?;
         let host = validated.effective_rp_id.clone();
         // The spec requires the prompt to name the exact registrable domain,
         // and a saved credential matches when it was stored for either the
@@ -1554,6 +1625,7 @@ mod tests {
                 user_verification: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             })
             .unwrap_err();
@@ -1588,6 +1660,7 @@ mod tests {
                 attestation: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
             })
             .unwrap();
         assert!(matches!(
@@ -1615,6 +1688,7 @@ mod tests {
                 user_verification: Some("preferred".to_string()),
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             })
             .unwrap();
@@ -1669,6 +1743,7 @@ mod tests {
                 attestation: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
             })
             .unwrap();
         broker
@@ -1690,6 +1765,7 @@ mod tests {
                 user_verification: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             })
             .expect("the credential must be discoverable for its own relying party");
@@ -1712,6 +1788,7 @@ mod tests {
             user_verification: None,
             extensions: None,
             cross_origin: false,
+            related_origin_validated: false,
             top_origin: None,
         });
         assert!(
@@ -1758,6 +1835,7 @@ mod tests {
                     attestation: None,
                     extensions: None,
                     cross_origin: false,
+                    related_origin_validated: false,
                 })
                 .unwrap();
             broker
@@ -1798,6 +1876,7 @@ mod tests {
                 user_verification: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             })
             .expect("the named credential must be usable");
@@ -1833,6 +1912,7 @@ mod tests {
                 user_verification: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             })
             .expect("the ceremony starts; the failure comes when it runs");
@@ -1876,6 +1956,7 @@ mod tests {
                 attestation: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
             })
             .unwrap();
         broker.cancel_registration(id.clone()).unwrap();

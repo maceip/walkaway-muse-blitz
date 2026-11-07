@@ -370,6 +370,12 @@
    * human answers. */
   let pendingCeremonies: any = {};
 
+  /* WebAuthn ceremonies that are waiting for the host to run the related
+   * origins well-known fetch (WebAuthn Level 3 §5.11.1). Keyed by the request
+   * id the host names, so the host can settle the right promise when the
+   * fetch has answered. */
+  let pendingRelatedOrigins: any = {};
+
   /* A handle to a live DOM node. The id is a versioned slot index, so a stale
    * handle fails to resolve in Rust instead of aliasing a different node. */
   class BlitzElement {
@@ -824,6 +830,20 @@
      * not settled now; the host settles it once the human has answered, and
      * until then the page cannot see a credential. */
     if (parsed.pending === true) {
+      /* A ceremony that has to consult the relying party's related origins
+       * well-known document first is waiting on the network, not on a human.
+       * The host resolves it once the fetch has answered. */
+      if (parsed.phase === "related-origins") {
+        let requestId: string = String(parsed.request_id || "");
+        if (!requestId) {
+          return PromiseCtor.reject(
+            new Error("WebAuthn create: the host did not name the related origins request")
+          );
+        }
+        return new PromiseCtor(function (resolve: any, reject: any): void {
+          pendingRelatedOrigins[requestId] = { resolve: resolve, reject: reject };
+        });
+      }
       let ceremonyId: string = String(parsed.ceremony_id || "");
       if (!ceremonyId) {
         return PromiseCtor.reject(new Error("WebAuthn create: the host did not name the ceremony"));
@@ -865,6 +885,20 @@
      * not settled now; the host settles it once the human has answered, and
      * until then the page cannot see an assertion. */
     if (parsed.pending === true) {
+      /* A ceremony that has to consult the relying party's related origins
+       * well-known document first is waiting on the network, not on a human.
+       * The host resolves it once the fetch has answered. */
+      if (parsed.phase === "related-origins") {
+        let requestId: string = String(parsed.request_id || "");
+        if (!requestId) {
+          return PromiseCtor.reject(
+            new Error("WebAuthn get: the host did not name the related origins request")
+          );
+        }
+        return new PromiseCtor(function (resolve: any, reject: any): void {
+          pendingRelatedOrigins[requestId] = { resolve: resolve, reject: reject };
+        });
+      }
       let ceremonyId: string = String(parsed.ceremony_id || "");
       if (!ceremonyId) {
         return PromiseCtor.reject(new Error("WebAuthn get: the host did not name the ceremony"));
@@ -895,6 +929,45 @@
       return;
     }
     entry.resolve(buildCredentialResponse(parsed, true));
+  };
+  /* Called by the host when the related origins well-known fetch has answered
+   * (WebAuthn Level 3 §5.11.1). `ok` is true when the relying party's own
+   * document named the caller's origin, false when it did not. When it did,
+   * the host has already started the ceremony, so the payload carries the
+   * ceremony the page should now wait on. */
+  (globalThis as any).__settleRelatedOrigins = function (
+    requestId: string,
+    ok: boolean,
+    payload: string
+  ): void {
+    let entry: any = pendingRelatedOrigins[requestId];
+    if (!entry) {
+      return;
+    }
+    delete pendingRelatedOrigins[requestId];
+    if (!ok) {
+      let message: string = payload || "The relying party does not accept this origin";
+      entry.reject(new Error(message));
+      return;
+    }
+    let parsed: any = (globalThis as any).JSON.parse(payload);
+    if (!parsed || parsed.error) {
+      entry.reject(new Error((parsed && parsed.error) || "WebAuthn failed"));
+      return;
+    }
+    /* The host has started the ceremony and named it. The page's promise now
+     * waits for the human, exactly as it would have without the related
+     * origins step. */
+    let ceremonyId: string = String(parsed.ceremony_id || "");
+    if (!ceremonyId) {
+      entry.reject(new Error("WebAuthn: the host did not name the ceremony"));
+      return;
+    }
+    entry.resolve(
+      new (globalThis as any).Promise(function (innerResolve: any, innerReject: any): void {
+        pendingCeremonies[ceremonyId] = { resolve: innerResolve, reject: innerReject };
+      })
+    );
   };
   /* `CredentialsContainer.preventSilentMediation()` is part of the spec. The
    * browser honours it by refusing to answer a conditional request without an

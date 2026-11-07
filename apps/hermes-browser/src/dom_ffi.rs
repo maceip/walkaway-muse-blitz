@@ -56,6 +56,23 @@ pub struct BlitzHostContext {
     pub broker: std::rc::Rc<std::cell::RefCell<crate::credentials::LocalPasskeyBroker>>,
     /// The page ceremonies that are waiting for a human, by ceremony id.
     pub pending_page_ceremonies: std::collections::HashMap<String, PageCeremony>,
+    /// Page ceremonies waiting for the related-origins well-known fetch.
+    ///
+    /// When a relying party names an RP ID that is not a suffix of the
+    /// origin's host, the spec's related origins procedure has to fetch the
+    /// relying party's `/.well-known/webauthn` document before the ceremony
+    /// may start. That is a network fetch, and the FFI entry point is
+    /// synchronous, so the request is parked here and the host resolves it
+    /// off the UI thread. See `PendingRelatedOrigins`.
+    pub pending_related_origins: std::collections::HashMap<String, PendingRelatedOrigins>,
+    /// The related-origins requests whose well-known fetch is already running.
+    ///
+    /// A request stays in `pending_related_origins` until the fetch answers,
+    /// because the answer needs the request's inputs to start the ceremony.
+    /// This set keeps a request from being fetched twice.
+    pub related_origins_in_flight: std::collections::HashSet<String>,
+    /// The counter that names the next parked related-origins request.
+    pub next_related_origins_id: u64,
 }
 
 /// What kind of ceremony a page started.
@@ -113,6 +130,35 @@ pub struct AllowCredential {
     pub kind: String,
 }
 
+/// A page ceremony that is waiting for the related-origins well-known fetch.
+///
+/// The page called `navigator.credentials.get()` (or `create()`) with an RP
+/// ID that is not a suffix of the origin's host. The spec's related origins
+/// procedure has to fetch the relying party's `/.well-known/webauthn`
+/// document before the ceremony may start, and that fetch must not run on
+/// the UI thread. The FFI entry point parks the request here and returns a
+/// "pending" result to the page; the host picks it up, runs the fetch on a
+/// worker thread, and then starts the ceremony (or rejects it).
+#[derive(Clone, Debug)]
+pub struct PendingRelatedOrigins {
+    /// The id the host uses to correlate the fetch result with this request.
+    pub request_id: String,
+    /// The origin the page was actually served from.
+    pub origin: String,
+    /// The RP ID the relying party asked for.
+    pub rp_id: String,
+    /// The challenge, in the raw bytes the page handed over.
+    pub challenge: Vec<u8>,
+    /// The user name the page asked for, for a registration.
+    pub user_name: String,
+    /// Whether this is a registration (rather than an assertion).
+    pub is_create: bool,
+    /// The credentials the relying party named in `allowCredentials`.
+    pub allow_credentials: Vec<AllowCredential>,
+    /// When the request was parked, for the deadline.
+    pub started_at: std::time::Instant,
+}
+
 impl BlitzHostContext {
     pub fn new(doc: HtmlDocument) -> Self {
         Self::with_broker(doc, default_broker())
@@ -137,6 +183,9 @@ impl BlitzHostContext {
             allow_credentials: Vec::new(),
             broker,
             pending_page_ceremonies: std::collections::HashMap::new(),
+            pending_related_origins: std::collections::HashMap::new(),
+            related_origins_in_flight: std::collections::HashSet::new(),
+            next_related_origins_id: 1,
         }
     }
 
@@ -927,45 +976,57 @@ fn webauthn_error(message: &str) -> serde_json::Value {
     serde_json::json!({ "error": message })
 }
 
-/// `navigator.credentials.create(options)` -> runs a real NIST P-256 WebAuthn
-/// registration ceremony and writes the JSON credential response into
-/// `ctx.scratch_utf8`.
+/// Starts a registration ceremony in the broker and records it as pending.
 ///
-/// The ceremony is performed by the passkey broker, in Rust, with the private
-/// key in the macOS Keychain. The page never sees a private key and never
-/// signs anything itself.
-///
-/// The challenge arrives through the binary scratch buffer, because a
-/// challenge is arbitrary binary. The origin is the one the document was
-/// actually served from, never one derived from the relying party's own
-/// `rpId`: deriving it would make the origin check vacuous.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn blitz_dom_webauthn_create(
-    ctx: *mut c_void,
-    rp_id: *const c_char,
-    user_name: *const c_char,
-) -> c_int {
-    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
-        return -1;
-    };
-    let (rp_id, user_name) = unsafe { (as_str(rp_id), as_str(user_name)) };
-    let challenge = ctx.scratch_bytes.clone();
-    if challenge.is_empty() {
-        return write_json(ctx, &webauthn_error("the challenge is empty"));
-    }
-    let origin = if ctx.origin.trim().is_empty() {
-        format!("https://{}", rp_id.trim())
-    } else {
-        ctx.origin.clone()
-    };
-    let rp_id = if rp_id.trim().is_empty() {
-        crate::webauthn::origin::validate_origin_and_effective_rp_id(&origin, None, false, false)
-            .map(|v| v.effective_rp_id)
-            .unwrap_or_default()
-    } else {
-        rp_id.trim().to_string()
-    };
+/// This is the part of the registration path that does not touch the
+/// network, so it is shared by the FFI entry point and by the host's
+/// related-origins resolution, which reaches the same ceremony once the
+/// well-known fetch has said the relying party is related to the origin.
+fn begin_page_registration(
+    ctx: &mut BlitzHostContext,
+    origin: &str,
+    rp_id: &str,
+    user_name: &str,
+    challenge: &[u8],
+    related_origin_validated: bool,
+) -> serde_json::Value {
+    begin_page_registration_inner(
+        ctx,
+        origin,
+        rp_id,
+        user_name,
+        challenge,
+        related_origin_validated,
+    )
+}
 
+/// Starts a registration ceremony whose related origins check has already
+/// succeeded.
+///
+/// The host calls this once the relying party's well-known document has named
+/// the caller's origin (WebAuthn Level 3 §5.11.1). The ceremony then starts
+/// with the related origins check made, and the page's promise moves on to
+/// the human approval gate.
+pub fn begin_page_registration_with_related_origins(
+    ctx: &mut BlitzHostContext,
+    origin: &str,
+    rp_id: &str,
+    user_name: &str,
+    challenge: &[u8],
+) -> serde_json::Value {
+    begin_page_registration_inner(ctx, origin, rp_id, user_name, challenge, true)
+}
+
+/// The registration ceremony start, with the related origins check either
+/// made or not.
+fn begin_page_registration_inner(
+    ctx: &mut BlitzHostContext,
+    origin: &str,
+    rp_id: &str,
+    user_name: &str,
+    challenge: &[u8],
+    related_origin_validated: bool,
+) -> serde_json::Value {
     use crate::credentials::{PasskeyBroker, PasskeyStatus, RegistrationRequest};
     use crate::webauthn::types::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
 
@@ -976,23 +1037,24 @@ pub unsafe extern "C" fn blitz_dom_webauthn_create(
     };
     let request = RegistrationRequest {
         task_id: "page-webauthn-create".to_string(),
-        origin: origin.clone(),
+        origin: origin.to_string(),
         rp: PublicKeyCredentialRpEntity {
-            id: rp_id.clone(),
-            name: Some(rp_id.clone()),
+            id: rp_id.to_string(),
+            name: Some(rp_id.to_string()),
         },
         user: PublicKeyCredentialUserEntity {
             id: user_name.as_bytes().to_vec(),
             name: user_name.clone(),
             display_name: user_name.clone(),
         },
-        challenge: challenge.clone(),
+        challenge: challenge.to_vec(),
         pub_key_cred_params: Vec::new(),
         exclude_credentials: Vec::new(),
         authenticator_selection: None,
         attestation: None,
         extensions: None,
         cross_origin: false,
+        related_origin_validated,
     };
     // The ceremony is NOT approved here. A page may not register a
     // credential without a human saying so, so the ceremony stops here and
@@ -1014,10 +1076,7 @@ pub unsafe extern "C" fn blitz_dom_webauthn_create(
     };
     let (ceremony, prompt, account_hint) = match started {
         Ok(started) => started,
-        Err(error) => {
-            let message = error.to_string();
-            return write_json(ctx, &webauthn_error(&message));
-        }
+        Err(error) => return webauthn_error(&error.to_string()),
     };
     let ceremony_id = ceremony.0;
     ctx.pending_page_ceremonies.insert(
@@ -1026,73 +1085,74 @@ pub unsafe extern "C" fn blitz_dom_webauthn_create(
             ceremony_id: ceremony_id.clone(),
             kind: PageCeremonyKind::Registration,
             prompt: prompt.clone(),
-            origin: origin.clone(),
-            rp_id: rp_id.clone(),
+            origin: origin.to_string(),
+            rp_id: rp_id.to_string(),
             account_hint,
             started_at: std::time::Instant::now(),
         },
     );
-    write_json(
+    serde_json::json!({
+        "pending": true,
+        "ceremony_id": ceremony_id,
+        "prompt": prompt,
+        "origin": origin,
+        "rp_id": rp_id,
+    })
+}
+
+/// Starts an assertion ceremony in the broker and records it as pending.
+///
+/// The shared counterpart of [`begin_page_registration`].
+fn begin_page_assertion(
+    ctx: &mut BlitzHostContext,
+    origin: &str,
+    rp_id: &str,
+    challenge: &[u8],
+    allow_credentials: Vec<AllowCredential>,
+    related_origin_validated: bool,
+) -> serde_json::Value {
+    begin_page_assertion_inner(
         ctx,
-        &serde_json::json!({
-            "pending": true,
-            "ceremony_id": ceremony_id,
-            "prompt": prompt,
-            "origin": origin,
-            "rp_id": rp_id,
-        }),
+        origin,
+        rp_id,
+        challenge,
+        allow_credentials,
+        related_origin_validated,
     )
 }
 
-/// `navigator.credentials.get(options)` -> starts a real NIST P-256 WebAuthn
-/// assertion ceremony and writes the JSON result into `ctx.scratch_utf8`.
+/// Starts an assertion ceremony whose related origins check has already
+/// succeeded.
 ///
-/// The ceremony is performed by the passkey broker against the macOS
-/// Keychain. The challenge arrives as raw bytes, and the origin is the one
-/// the document was actually served from.
-///
-/// The ceremony is NOT approved here. The result is a *pending* result that
-/// names the ceremony; the host raises the approval prompt, and the page's
-/// promise is settled when the human answers. A page may not obtain a
-/// signature without a human having said yes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn blitz_dom_webauthn_get(ctx: *mut c_void, rp_id: *const c_char) -> c_int {
-    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
-        return -1;
-    };
-    let rp_id = unsafe { as_str(rp_id) };
-    let challenge = ctx.scratch_bytes.clone();
-    if challenge.is_empty() {
-        return write_json(ctx, &webauthn_error("the challenge is empty"));
-    }
-    let origin = if ctx.origin.trim().is_empty() {
-        format!("https://{}", rp_id.trim())
-    } else {
-        ctx.origin.clone()
-    };
-    let effective_rp = match crate::webauthn::origin::validate_origin_and_effective_rp_id(
-        &origin, None, false, false,
-    ) {
-        Ok(validated) => validated.effective_rp_id,
-        Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
-    };
-    // The relying party may name an RP ID. It must be the origin's host or a
-    // parent of it; the broker's own validation enforces that.
-    let requested_rp = if rp_id.trim().is_empty() {
-        None
-    } else {
-        Some(rp_id.trim().to_string())
-    };
+/// The host calls this once the relying party's well-known document has named
+/// the caller's origin (WebAuthn Level 3 §5.11.1).
+pub fn begin_page_assertion_with_related_origins(
+    ctx: &mut BlitzHostContext,
+    origin: &str,
+    rp_id: &str,
+    challenge: &[u8],
+    allow_credentials: Vec<AllowCredential>,
+) -> serde_json::Value {
+    begin_page_assertion_inner(ctx, origin, rp_id, challenge, allow_credentials, true)
+}
 
+/// The assertion ceremony start, with the related origins check either made
+/// or not.
+fn begin_page_assertion_inner(
+    ctx: &mut BlitzHostContext,
+    origin: &str,
+    rp_id: &str,
+    challenge: &[u8],
+    allow_credentials: Vec<AllowCredential>,
+    related_origin_validated: bool,
+) -> serde_json::Value {
     use crate::credentials::{PasskeyBroker, PasskeyRequest, PasskeyStatus};
 
     // The relying party may name the credentials it accepts. When it does,
     // the authenticator must use exactly those; when it does not, the
     // authenticator discovers the credential itself, which is how autofill
     // and conditional mediation work.
-    let allow_credentials = ctx
-        .allow_credentials
-        .clone()
+    let allow_credentials = allow_credentials
         .into_iter()
         .filter_map(|raw| {
             let id = raw.id?;
@@ -1113,14 +1173,15 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(ctx: *mut c_void, rp_id: *const 
 
     let request = PasskeyRequest {
         task_id: "page-webauthn-get".to_string(),
-        origin: origin.clone(),
-        rp_id: requested_rp,
-        challenge: challenge.clone(),
+        origin: origin.to_string(),
+        rp_id: Some(rp_id.to_string()),
+        challenge: challenge.to_vec(),
         allow_credentials,
         user_verification: None,
         extensions: None,
         cross_origin: false,
         top_origin: None,
+        related_origin_validated,
     };
 
     // The broker is shared with the host, so the ceremony this call starts
@@ -1141,10 +1202,7 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(ctx: *mut c_void, rp_id: *const 
     };
     let (ceremony, prompt, account_hint) = match started {
         Ok(started) => started,
-        Err(error) => {
-            let message = error.to_string();
-            return write_json(ctx, &webauthn_error(&message));
-        }
+        Err(error) => return webauthn_error(&error.to_string()),
     };
     let ceremony_id = ceremony.0;
 
@@ -1154,23 +1212,220 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(ctx: *mut c_void, rp_id: *const 
             ceremony_id: ceremony_id.clone(),
             kind: PageCeremonyKind::Assertion,
             prompt: prompt.clone(),
-            origin: origin.clone(),
-            rp_id: effective_rp.clone(),
+            origin: origin.to_string(),
+            rp_id: rp_id.to_string(),
             account_hint,
             started_at: std::time::Instant::now(),
         },
     );
 
-    write_json(
-        ctx,
-        &serde_json::json!({
-            "pending": true,
-            "ceremony_id": ceremony_id,
-            "prompt": prompt,
-            "origin": origin,
-            "rp_id": effective_rp,
-        }),
-    )
+    serde_json::json!({
+        "pending": true,
+        "ceremony_id": ceremony_id,
+        "prompt": prompt,
+        "origin": origin,
+        "rp_id": rp_id,
+    })
+}
+
+/// Parks a ceremony that needs the related-origins well-known fetch.
+///
+/// The FFI entry point is synchronous and the fetch is not, so the request
+/// waits here until the host runs it on a worker thread. The page's promise
+/// stays pending in the meantime, exactly as it does while a human is
+/// deciding.
+fn park_related_origins(
+    ctx: &mut BlitzHostContext,
+    origin: &str,
+    rp_id: &str,
+    challenge: &[u8],
+    user_name: &str,
+    is_create: bool,
+    allow_credentials: Vec<AllowCredential>,
+) -> serde_json::Value {
+    let request_id = format!("related-origins-{}", ctx.next_related_origins_id);
+    ctx.next_related_origins_id = ctx.next_related_origins_id.wrapping_add(1);
+    ctx.pending_related_origins.insert(
+        request_id.clone(),
+        PendingRelatedOrigins {
+            request_id: request_id.clone(),
+            origin: origin.to_string(),
+            rp_id: rp_id.to_string(),
+            challenge: challenge.to_vec(),
+            user_name: user_name.to_string(),
+            is_create,
+            allow_credentials,
+            started_at: std::time::Instant::now(),
+        },
+    );
+    serde_json::json!({
+        "pending": true,
+        "phase": "related-origins",
+        "request_id": request_id,
+        "origin": origin,
+        "rp_id": rp_id,
+    })
+}
+
+/// `navigator.credentials.create(options)` -> runs a real NIST P-256 WebAuthn
+/// registration ceremony and writes the JSON credential response into
+/// `ctx.scratch_utf8`.
+///
+/// The ceremony is performed by the passkey broker, in Rust, with the private
+/// key in the macOS Keychain. The page never sees a private key and never
+/// signs anything itself.
+///
+/// The challenge arrives through the binary scratch buffer, because a
+/// challenge is arbitrary binary. The origin is the one the document was
+/// actually served from, never one derived from the relying party's own
+/// `rpId`: deriving it would make the origin check vacuous.
+///
+/// When the relying party names an RP ID that is not a suffix of the origin's
+/// host, the spec's related origins procedure has to fetch the relying
+/// party's well-known document over the network. That fetch cannot run here,
+/// so the request is parked and the host resolves it; the page's promise
+/// stays pending until then.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_webauthn_create(
+    ctx: *mut c_void,
+    rp_id: *const c_char,
+    user_name: *const c_char,
+) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    let (rp_id, user_name) = unsafe { (as_str(rp_id), as_str(user_name)) };
+    let challenge = ctx.scratch_bytes.clone();
+    if challenge.is_empty() {
+        return write_json(ctx, &webauthn_error("the challenge is empty"));
+    }
+    let origin = if ctx.origin.trim().is_empty() {
+        format!("https://{}", rp_id.trim())
+    } else {
+        ctx.origin.clone()
+    };
+
+    // The origin has to be validated before the ceremony starts, so the
+    // human is never asked to approve a ceremony that cannot succeed.
+    let requested_rp = if rp_id.trim().is_empty() {
+        None
+    } else {
+        Some(rp_id.trim().to_string())
+    };
+    let outcome = match crate::webauthn::origin::validate_origin_and_effective_rp_id(
+        &origin,
+        requested_rp.as_deref(),
+        false,
+        false,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
+    };
+    let (effective_rp, related) = match outcome {
+        crate::webauthn::origin::OriginValidation::Suffix(validated) => {
+            (validated.effective_rp_id, None)
+        }
+        crate::webauthn::origin::OriginValidation::NeedsRelatedOrigins {
+            validated,
+            caller_origin,
+            rp_id,
+        } => (validated.effective_rp_id, Some((caller_origin, rp_id))),
+    };
+    if let Some((caller_origin, related_rp)) = related {
+        let payload = park_related_origins(
+            ctx,
+            &caller_origin,
+            &related_rp,
+            &challenge,
+            user_name,
+            true,
+            Vec::new(),
+        );
+        return write_json(ctx, &payload);
+    }
+
+    let payload =
+        begin_page_registration(ctx, &origin, &effective_rp, user_name, &challenge, false);
+    write_json(ctx, &payload)
+}
+
+/// `navigator.credentials.get(options)` -> starts a real NIST P-256 WebAuthn
+/// assertion ceremony and writes the JSON result into `ctx.scratch_utf8`.
+///
+/// The ceremony is performed by the passkey broker against the macOS
+/// Keychain. The challenge arrives as raw bytes, and the origin is the one
+/// the document was actually served from.
+///
+/// The ceremony is NOT approved here. The result is a *pending* result that
+/// names the ceremony; the host raises the approval prompt, and the page's
+/// promise is settled when the human answers. A page may not obtain a
+/// signature without a human having said yes.
+///
+/// When the relying party names an RP ID that is not a suffix of the origin's
+/// host, the spec's related origins procedure has to fetch the relying
+/// party's well-known document over the network. That fetch cannot run here,
+/// so the request is parked and the host resolves it; the page's promise
+/// stays pending until then.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_webauthn_get(ctx: *mut c_void, rp_id: *const c_char) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    let rp_id = unsafe { as_str(rp_id) };
+    let challenge = ctx.scratch_bytes.clone();
+    if challenge.is_empty() {
+        return write_json(ctx, &webauthn_error("the challenge is empty"));
+    }
+    let origin = if ctx.origin.trim().is_empty() {
+        format!("https://{}", rp_id.trim())
+    } else {
+        ctx.origin.clone()
+    };
+
+    // The relying party may name an RP ID. It must be the origin's host, a
+    // parent of it, or an origin the relying party declares related to the
+    // caller in its own well-known document.
+    let requested_rp = if rp_id.trim().is_empty() {
+        None
+    } else {
+        Some(rp_id.trim().to_string())
+    };
+    let outcome = match crate::webauthn::origin::validate_origin_and_effective_rp_id(
+        &origin,
+        requested_rp.as_deref(),
+        false,
+        false,
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
+    };
+    let (effective_rp, related) = match outcome {
+        crate::webauthn::origin::OriginValidation::Suffix(validated) => {
+            (validated.effective_rp_id, None)
+        }
+        crate::webauthn::origin::OriginValidation::NeedsRelatedOrigins {
+            validated,
+            caller_origin,
+            rp_id,
+        } => (validated.effective_rp_id, Some((caller_origin, rp_id))),
+    };
+    if let Some((caller_origin, related_rp)) = related {
+        let allow = ctx.allow_credentials.clone();
+        let payload = park_related_origins(
+            ctx,
+            &caller_origin,
+            &related_rp,
+            &challenge,
+            "",
+            false,
+            allow,
+        );
+        return write_json(ctx, &payload);
+    }
+
+    let allow = ctx.allow_credentials.clone();
+    let payload = begin_page_assertion(ctx, &origin, &effective_rp, &challenge, allow, false);
+    write_json(ctx, &payload)
 }
 
 /// Mark the document damaged without mutating it.

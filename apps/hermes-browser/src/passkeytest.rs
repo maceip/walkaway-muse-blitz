@@ -325,6 +325,7 @@ pub fn passkeytest() -> i32 {
                 attestation: Some("none".to_string()),
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
             })
             .map_err(|e| format!("begin_registration: {e}"))?;
 
@@ -416,6 +417,7 @@ pub fn passkeytest() -> i32 {
                 user_verification: Some("preferred".to_string()),
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             })
             .map_err(|e| format!("begin_assertion: {e}"))?;
@@ -498,6 +500,7 @@ pub fn passkeytest() -> i32 {
                 user_verification: Some("preferred".to_string()),
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             })
             .map_err(|e| format!("begin_assertion: {e}"))?;
@@ -540,6 +543,7 @@ pub fn passkeytest() -> i32 {
                 user_verification: None,
                 extensions: None,
                 cross_origin: false,
+                related_origin_validated: false,
                 top_origin: None,
             });
         if let Ok(prompt) = prompt {

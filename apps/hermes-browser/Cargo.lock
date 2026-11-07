@@ -1249,6 +1249,7 @@ dependencies = [
  "openssl",
  "png 0.17.16",
  "pollster",
+ "reqwest",
  "security-framework",
  "security-framework-sys",
  "serde",

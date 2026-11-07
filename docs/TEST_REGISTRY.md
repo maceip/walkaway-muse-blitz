@@ -208,6 +208,48 @@ hop works across devices.
   the physical tap comes back as a bus ack, and the bridge turns that into
   the `decision` frame the browser is waiting for.
 
+### T-HERMES-RELATED-ORIGINS
+
+- Command: `cargo test --release webauthn::origin` from
+  `apps/hermes-browser/` (28 tests), and `cargo test --release` for the
+  whole suite.
+- Real components: the Rust WebAuthn origin validator
+  (`src/webauthn/origin.rs`), the related-origins procedure
+  (`src/webauthn/related_origins.rs`), the passkey broker
+  (`src/credentials.rs`), and the authenticator
+  (`src/webauthn/authenticator.rs`). The tests run against a **real local
+  HTTPS server** (`src/webauthn/test_server.rs`): a real socket, a real TLS
+  handshake over a self-signed certificate, and real HTTP responses. Nothing
+  is mocked — the fetch goes over the network stack to a live server.
+- Asserts: the related origins validation procedure follows WebAuthn
+  Level 3 §5.11.1 step for step — the well-known fetch must be `https:`
+  without credentials or a referrer, the status after redirects must be 200,
+  the content type must be `application/json`, the body must be a JSON
+  object, and `origins` must be an array of strings, or the result is a
+  `SecurityError`; the caller's origin must be same-origin with one of the
+  listed origins, compared on scheme, host and port; the registrable-origin
+  label cap is honoured; and a non-suffix RP ID is deferred to the procedure
+  rather than refused outright.
+- Asserts: a suffix RP ID is decided with **no fetch at all** — the test
+  asserts the server's request log is empty.
+- Asserts: the broker refuses an origin that did not pass the related
+  origins check, so the flag that permits a cross-origin RP ID can only be
+  set by a caller that actually ran the procedure.
+- Last observed: **PASS** 2026-11-07 — `cargo test --release` 98/98, of
+  which 28 are in the origin module (was 78/78 in total, 17 in the module).
+- Note: the security properties are mutation-tested. Replacing the same-origin
+  comparison with an unconditional accept fails three tests, including
+  `refuses_an_origin_the_relying_party_does_not_list`. Removing the deferral
+  entirely — which restores the original defect, where a cross-origin RP ID
+  was refused outright — fails four, including
+  `the_broker_refuses_an_origin_without_the_related_origins_check` and
+  `the_whole_chain_lets_a_related_origin_through`.
+- Note: the registrable origin label uses the last two labels of the host,
+  which is exact only when the public suffix is a single label. It matches
+  the default labeler in the go-webauthn reference implementation. The
+  approximation can only make the label cap bite sooner; it never widens
+  what a relying party's document may claim.
+
 ### T-HERMES-SOCKET-E2E
 - Command: `python3 /tmp/socket_e2e.py` against the real Hermes GUI process.
 - Real components: Unix socket, host/agent token roles, session, observe,

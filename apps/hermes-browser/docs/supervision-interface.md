@@ -1111,6 +1111,26 @@ page ceremony carries no fingerprint or generation binding. Revalidating the
 agent-proposal fingerprint would cancel legitimate passkey requests, whose
 whole purpose is to be answered by a human at a human pace.
 
+**Related Origin Requests (2026-11-07).** A relying party may sit on a
+different domain from the page that asks for its credential. Facebook does
+exactly this: its passkey RP ID is `accounts.meta.com` while the management
+page is served from `accountscenter.facebook.com`. Without Related Origin
+Requests, that ceremony is refused.
+
+The related origins validation procedure follows WebAuthn Level 3 §5.11.1: the
+browser fetches `https://<rp-id>/.well-known/webauthn` over HTTPS without
+credentials or a referrer, and the caller's origin must be same-origin with
+one of the origins the relying party itself lists. A missing document, a
+wrong status, a wrong content type, a malformed body, or an origin that is not
+listed are all a `SecurityError`.
+
+Two properties matter and are enforced. The origin that is checked is the
+origin the document was actually served from, never anything the page
+supplies; the page may choose the RP ID, which is the relying party's
+choice, but it cannot choose who it is. And the broker refuses an origin that
+did not pass the check, so the permission to use a cross-origin RP ID cannot
+be granted without the procedure having actually run.
+
 The boundary is explicit: this is a **software authenticator**. The macOS
 platform authenticator (Secure Enclave) and hardware security keys are still
 `Unsupported`, because they need an Objective-C bridge to
