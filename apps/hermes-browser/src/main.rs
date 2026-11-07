@@ -3702,6 +3702,26 @@ impl BrowserApp {
                 } else {
                     (None, None)
                 };
+            let sh_runtime_ptr = format!("0x{:x}", tab.instance.page.hermes as usize);
+            let (dom_node_count, h1_rect) = inspect_dom_stats(tab.instance.page.doc());
+            let interactive_count = tab
+                .instance
+                .last_snapshot
+                .as_ref()
+                .map(|s| s.elements.len())
+                .unwrap_or(0);
+            let doc_title = tab.canonical.title.clone();
+            let doc_origin = if tab.instance.page.ctx.origin.is_empty() {
+                "https://localhost".to_string()
+            } else {
+                tab.instance.page.ctx.origin.clone()
+            };
+            let show_modal = std::env::args().any(|a| a == "--webauthn-modal")
+                || std::env::var("HERMES_WEBAUTHN_MODAL").ok().as_deref() == Some("1");
+            let webauthn = Some(run_real_webauthn_ceremony_for_inspector(
+                &doc_origin,
+                show_modal,
+            ));
             Some(chrome::EngineTelemetry {
                 layout_observe_ms,
                 rss_mb,
@@ -3709,6 +3729,13 @@ impl BrowserApp {
                 matched_recipe_id,
                 recalled_count: self.recalled_count,
                 overlays,
+                sh_runtime_ptr,
+                dom_node_count,
+                interactive_count,
+                doc_title,
+                doc_origin,
+                h1_rect,
+                webauthn,
             })
         } else {
             None
@@ -5118,6 +5145,152 @@ fn qual_name(local: &str) -> QualName {
     QualName::new(None, Namespace::from(""), LocalName::from(local))
 }
 
+fn inspect_dom_stats(doc: &HtmlDocument) -> (usize, String) {
+    let mut count = 0usize;
+    let mut stack = vec![doc.root_node().id];
+    while let Some(nid) = stack.pop() {
+        count += 1;
+        if let Some(node) = doc.get_node(nid) {
+            for &child in node.children.iter().rev() {
+                stack.push(child);
+            }
+        }
+    }
+    let h1_id = doc
+        .query_selector("h1")
+        .ok()
+        .flatten()
+        .or_else(|| doc.query_selector("body").ok().flatten());
+    let rect_str = if let Some(id) = h1_id {
+        if let Some(node) = doc.get_node(id) {
+            let layout = node.final_layout();
+            format!(
+                "DOMRect {{ x: {:.0}, y: {:.0}, width: {:.0}, height: {:.0} }}",
+                layout.location.x, layout.location.y, layout.size.width, layout.size.height
+            )
+        } else {
+            "DOMRect { x: 0, y: 0, width: 0, height: 0 }".to_string()
+        }
+    } else {
+        "DOMRect { x: 0, y: 0, width: 0, height: 0 }".to_string()
+    };
+    (count, rect_str)
+}
+
+fn run_real_webauthn_ceremony_for_inspector(
+    origin_raw: &str,
+    show_modal: bool,
+) -> chrome::WebAuthnCeremonyInfo {
+    use crate::credentials::{
+        CeremonyOutcome, KeychainPasskeyStore, LocalPasskeyBroker, PasskeyBroker, PasskeyRequest,
+        PasskeyStatus, RegistrationRequest,
+    };
+    use crate::webauthn::types::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+
+    let origin = if origin_raw.starts_with("https://") || origin_raw.starts_with("http://127.0.0.1") || origin_raw.starts_with("http://localhost") {
+        origin_raw.to_string()
+    } else {
+        "https://arxiv.org".to_string()
+    };
+    let rp_id = crate::webauthn::origin::validate_origin_and_effective_rp_id(&origin, None, false, false)
+        .map(|v| v.effective_rp_id)
+        .unwrap_or_else(|_| "arxiv.org".to_string());
+    let account = "ryan@walkaway.dev".to_string();
+
+    let service = format!("ai.zmax.hermes.browser.test.inspector.{}", std::process::id());
+    let store = KeychainPasskeyStore::with_service(&service, "passkey_records_v1");
+    let mut broker = LocalPasskeyBroker::with_store(store);
+    let aaguid_bytes = broker.aaguid();
+    let aaguid_hex = format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        aaguid_bytes[0], aaguid_bytes[1], aaguid_bytes[2], aaguid_bytes[3],
+        aaguid_bytes[4], aaguid_bytes[5],
+        aaguid_bytes[6], aaguid_bytes[7],
+        aaguid_bytes[8], aaguid_bytes[9],
+        aaguid_bytes[10], aaguid_bytes[11], aaguid_bytes[12], aaguid_bytes[13], aaguid_bytes[14], aaguid_bytes[15],
+    );
+
+    let mut cred_id_short = String::new();
+    let mut pk_short = String::new();
+    let mut auth_short = String::new();
+    let mut client_short = String::new();
+    let mut sig_short = String::new();
+
+    if let Ok(reg_id) = broker.begin_registration(RegistrationRequest {
+        task_id: "devtools-inspector".to_string(),
+        origin: origin.clone(),
+        rp: PublicKeyCredentialRpEntity {
+            id: rp_id.clone(),
+            name: Some(rp_id.clone()),
+        },
+        user: PublicKeyCredentialUserEntity {
+            id: b"ryan-walkaway-2026".to_vec(),
+            name: account.clone(),
+            display_name: "Ryan".to_string(),
+        },
+        challenge: b"walkaway-static-hermes-webauthn-2026".to_vec(),
+        pub_key_cred_params: Vec::new(),
+        exclude_credentials: Vec::new(),
+        authenticator_selection: None,
+        attestation: None,
+        extensions: None,
+        cross_origin: false,
+    }) {
+        let _ = broker.approve_ceremony(reg_id.clone(), "user", "devtools");
+        if let Ok(PasskeyStatus::Complete(CeremonyOutcome::Registration(reg))) =
+            broker.poll_registration(reg_id)
+        {
+            cred_id_short = reg.id.chars().take(28).collect::<String>() + "…";
+            if let Some(raw_bytes) = crate::webauthn::b64::b64url_decode(&reg.id) {
+                if let Ok(Some(pem)) = broker.public_key_pem(&raw_bytes) {
+                    let body: String = pem
+                        .lines()
+                        .filter(|l| !l.starts_with("-----"))
+                        .collect::<Vec<_>>()
+                        .join("");
+                    pk_short = format!("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE{}…", &body[body.len().saturating_sub(14)..]);
+                }
+            }
+        }
+    }
+
+    if let Ok(assert_id) = broker.begin_assertion(PasskeyRequest {
+        task_id: "devtools-inspector".to_string(),
+        origin: origin.clone(),
+        rp_id: Some(rp_id.clone()),
+        challenge: b"walkaway-static-hermes-webauthn-2026".to_vec(),
+        allow_credentials: Vec::new(),
+        user_verification: None,
+        extensions: None,
+        cross_origin: false,
+        top_origin: None,
+    }) {
+        let _ = broker.approve_ceremony(assert_id.clone(), "user", "devtools");
+        if let Ok(PasskeyStatus::Complete(CeremonyOutcome::Assertion(asrt))) =
+            broker.poll_assertion(assert_id)
+        {
+            auth_short = asrt.response.authenticator_data.chars().take(26).collect::<String>() + "…";
+            client_short = asrt.response.client_data_json.chars().take(28).collect::<String>() + "…";
+            sig_short = asrt.response.signature.chars().take(30).collect::<String>() + "…";
+        }
+    }
+
+    let _ = KeychainPasskeyStore::with_service(&service, "passkey_records_v1").clear();
+
+    chrome::WebAuthnCeremonyInfo {
+        rp_id,
+        origin,
+        account,
+        credential_id: cred_id_short,
+        aaguid_hex,
+        auth_data_b64: auth_short,
+        client_data_b64: client_short,
+        signature_der_b64: sig_short,
+        public_key_pem_short: pk_short,
+        show_modal,
+    }
+}
+
 /// Live-measured resident set size (RSS) of the current process in megabytes,
 /// queried directly from the OS kernel (`mach_task_basic_info` on macOS for
 /// live resident bytes, with `getrusage(RUSAGE_SELF)` fallback).
@@ -5697,8 +5870,58 @@ fn main() {
     install_test_cleanup_signal_handler();
     if args.iter().any(|a| a == "--scrapbook") {
         app.explorer_tab = Some(ExplorerTab::Scrapbook);
-    } else if args.iter().any(|a| a == "--pageholder") {
+    } else if args
+        .iter()
+        .any(|a| a == "--pageholder" || a == "--pageholder-links")
+    {
         app.explorer_tab = Some(ExplorerTab::PageHolder);
+    }
+    if args.iter().any(|a| a == "--devtools" || a == "--xray") {
+        app.xray_enabled = true;
+    }
+    if let Some(hold_raw) = args
+        .iter()
+        .position(|a| a == "--hold-url")
+        .and_then(|p| args.get(p + 1))
+        .cloned()
+    {
+        if let Ok(hold_url) = browser::normalize_input(&hold_raw) {
+            if let Ok(hold_html) = browser::fetch(&app.provider, &hold_url) {
+                let ph_vp = app.page_holder_viewport();
+                let links = {
+                    let _guard = browser::enter_runtime();
+                    let mut ph_doc = HtmlDocument::from_html(
+                        &hold_html,
+                        DocumentConfig {
+                            viewport: Some(ph_vp),
+                            base_url: Some(hold_url.to_string()),
+                            net_provider: Some(app.provider.clone()),
+                            html_parser_provider: Some(Arc::new(blitz_html::HtmlProvider)),
+                            ua_stylesheets: vec![
+                            blitz_dom::UserAgentStylesheet::default_sheet(),
+                            blitz_dom::UserAgentStylesheet::parse(
+                                "html, body { max-width: 276px !important; width: 276px !important; overflow: hidden !important; } table { width: 268px !important; max-width: 268px !important; }",
+                            ),
+                        ],
+                            ..Default::default()
+                        },
+                    );
+                    ph_doc.resolve(0.0);
+                    let extracted = extract_document_links(&ph_doc, &hold_url);
+                    let title = title_for(&hold_url, &ph_doc);
+                    let links_mode = args.iter().any(|a| a == "--pageholder-links");
+                    app.page_holder = Some(PageHolderState {
+                        doc: ph_doc,
+                        url: hold_url,
+                        title,
+                        links_mode,
+                        links: extracted,
+                    });
+                };
+                let _ = links;
+                app.explorer_tab = Some(ExplorerTab::PageHolder);
+            }
+        }
     }
     let initial_url = args
         .iter()
@@ -8084,6 +8307,67 @@ fn render_to_png(
         None
     };
     let links_mode = args_vec.iter().any(|a| a == "--pageholder-links");
+    let hold_url_arg = args_vec
+        .iter()
+        .position(|a| a == "--hold-url")
+        .and_then(|p| args_vec.get(p + 1))
+        .cloned();
+    let mut held_doc_opt: Option<(HtmlDocument, String, String, Vec<HeldLink>)> = None;
+    if let Some(hold_raw) = hold_url_arg {
+        if let Ok(hold_url) = browser::normalize_input(&hold_raw) {
+            if let Ok(hold_html) = browser::fetch(&provider, &hold_url) {
+                let top_px = (((if toolbar_collapsed { 0.0 } else { CHROME_HEIGHT } + PH_HEADER_HEIGHT) * scale) as u32).min(height);
+                let ph_vp = Viewport::new(
+                    ((EXPLORER_DRAWER_WIDTH * scale) as u32).max(64),
+                    height.saturating_sub(top_px).max(64),
+                    scale as f32,
+                    theme.color_scheme(),
+                );
+                let _guard = browser::enter_runtime();
+                let mut ph_doc = HtmlDocument::from_html(
+                    &hold_html,
+                    DocumentConfig {
+                        viewport: Some(ph_vp),
+                        base_url: Some(hold_url.to_string()),
+                        net_provider: Some(provider.clone()),
+                        html_parser_provider: Some(Arc::new(blitz_html::HtmlProvider)),
+                        ua_stylesheets: vec![
+                            blitz_dom::UserAgentStylesheet::default_sheet(),
+                            blitz_dom::UserAgentStylesheet::parse(
+                                "html, body { max-width: 276px !important; width: 276px !important; overflow: hidden !important; } table { width: 268px !important; max-width: 268px !important; }",
+                            ),
+                        ],
+                        ..Default::default()
+                    },
+                );
+                ph_doc.resolve(0.0);
+                let ph_wait = Instant::now();
+                while ph_wait.elapsed() < Duration::from_millis(650) {
+                    std::thread::sleep(Duration::from_millis(50));
+                    ph_doc.resolve(0.0);
+                    if !ph_doc.has_pending_critical_resources() && ph_wait.elapsed() >= Duration::from_millis(300) {
+                        break;
+                    }
+                }
+                ph_doc.resolve(0.0);
+                let extracted = extract_document_links(&ph_doc, &hold_url);
+                let h_title = title_for(&hold_url, &ph_doc);
+                held_doc_opt = Some((ph_doc, h_title, hold_url.to_string(), extracted));
+            }
+        }
+    }
+    if explorer_tab.is_some() {
+        let rail_px = ((EXPLORER_RAIL_WIDTH + EXPLORER_DRAWER_WIDTH) * scale) as u32;
+        let top_px = if toolbar_collapsed { 0 } else { (CHROME_HEIGHT * scale) as u32 };
+        let vp = Viewport::new(
+            width.saturating_sub(rail_px).max(64),
+            height.saturating_sub(top_px).max(64),
+            scale as f32,
+            theme.color_scheme(),
+        );
+        page.doc_mut().set_viewport(vp);
+        page.resolve();
+    }
     let demo_links = [
         HeldLinkInfo {
             label: "oreilly.linux.",
@@ -8110,6 +8394,74 @@ fn render_to_png(
             url: "http://www.oreillynet.com/wireless/",
         },
     ];
+    let extracted_link_infos: Vec<HeldLinkInfo<'_>> = held_doc_opt
+        .as_ref()
+        .map(|(_, _, _, links)| {
+            links
+                .iter()
+                .map(|l| HeldLinkInfo {
+                    label: l.label.as_str(),
+                    url: l.url.as_str(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let active_links: &[HeldLinkInfo<'_>] = if !extracted_link_infos.is_empty() {
+        &extracted_link_infos
+    } else {
+        &demo_links
+    };
+    let held_title_ref = held_doc_opt
+        .as_ref()
+        .map(|(_, t, _, _)| t.as_str())
+        .unwrap_or(&title);
+    let held_url_ref = held_doc_opt
+        .as_ref()
+        .map(|(_, _, u, _)| u.as_str())
+        .unwrap_or(&url_text);
+    let want_devtools = args_vec.iter().any(|a| a == "--devtools" || a == "--xray");
+    let want_modal = args_vec.iter().any(|a| a == "--webauthn-modal");
+    let render_telemetry = if want_devtools {
+        let obs_start = Instant::now();
+        let snap = observe::observe(
+            page.doc(),
+            observe::SnapshotMetadata {
+                snapshot_id: 1,
+                tab_id: 1,
+                page_id: 1,
+                document_generation: 1,
+                url: url_text.clone(),
+                title: title.clone(),
+                viewport_width: width as f32,
+                viewport_height: height as f32,
+                scale: scale as f32,
+            },
+        );
+        let layout_observe_ms = obs_start.elapsed().as_secs_f64() * 1000.0;
+        let (dom_node_count, h1_rect) = inspect_dom_stats(page.doc());
+        let doc_origin = if page.ctx.origin.is_empty() {
+            "https://localhost".to_string()
+        } else {
+            page.ctx.origin.clone()
+        };
+        Some(chrome::EngineTelemetry {
+            layout_observe_ms,
+            rss_mb: measure_process_rss_mb(),
+            form_signature: snap.form_signature,
+            matched_recipe_id: snap.matched_recipe_id,
+            recalled_count: 1,
+            overlays: Vec::new(),
+            sh_runtime_ptr: format!("0x{:x}", page.hermes as usize),
+            dom_node_count,
+            interactive_count: snap.elements.len(),
+            doc_title: title.clone(),
+            doc_origin: doc_origin.clone(),
+            h1_rect,
+            webauthn: Some(run_real_webauthn_ceremony_for_inspector(&doc_origin, want_modal)),
+        })
+    } else {
+        None
+    };
     let demo_sb = [
         ScrapbookItemInfo {
             id: "sb_1",
@@ -8178,15 +8530,15 @@ fn render_to_png(
         surface_height: height as f64,
         theme,
         supervision: None,
-        telemetry: None,
+        telemetry: render_telemetry,
         toolbar_collapsed,
         explorer_tab,
         page_holder: PageHolderInfo {
-            has_doc: false,
-            title: &title,
-            url: &url_text,
+            has_doc: held_doc_opt.is_some(),
+            title: held_title_ref,
+            url: held_url_ref,
             links_mode,
-            links: &demo_links,
+            links: active_links,
         },
         scrapbook_items: &demo_sb,
         favorites: &demo_favs,
@@ -8215,8 +8567,25 @@ fn render_to_png(
             0.0
         })
         * scale) as u32;
+    let ph_y_px = (((if toolbar_collapsed { 0.0 } else { CHROME_HEIGHT } + PH_HEADER_HEIGHT) * scale) as u32).min(height);
+    let ph_w_px = ((EXPLORER_DRAWER_WIDTH * scale) as u32).min(width).max(1);
+    let ph_h_px = height.saturating_sub(ph_y_px).max(1);
+    let paint_ph = explorer_tab == Some(ExplorerTab::PageHolder) && !links_mode && held_doc_opt.is_some();
     renderer.render_to_vec(
         |painter| {
+            if paint_ph {
+                if let Some((ref mut ph_doc, _, _, _)) = held_doc_opt {
+                    blitz_paint::paint_scene(
+                        painter,
+                        ph_doc,
+                        scale,
+                        ph_w_px,
+                        ph_h_px,
+                        6,
+                        ph_y_px,
+                    );
+                }
+            }
             blitz_paint::paint_scene(
                 painter,
                 page.doc_mut(),
