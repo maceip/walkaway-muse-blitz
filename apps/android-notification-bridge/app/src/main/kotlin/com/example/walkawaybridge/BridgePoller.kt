@@ -198,7 +198,7 @@ object BridgePoller {
       price = message.price,
       detail = message.detail,
       iconBitmap = iconBitmap,
-      autoApproveSeconds = 3,
+      autoApproveSeconds = 5,
       onAction = { action ->
         if (decidedDedupe?.mark(message.id) == true) {
           _state.update {
