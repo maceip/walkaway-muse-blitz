@@ -4746,6 +4746,13 @@ impl BrowserApp {
             blitz_paint::paint_scene(painter, chrome_doc, scale_f, width, height, 0, 0);
         });
         self.frame_seq = self.frame_seq.wrapping_add(1);
+        if let Ok(path) = std::env::var("HERMES_LIVE_SCREENSHOT_PATH") {
+            if !path.is_empty() {
+                if let Some((bytes, _, _)) = self.capture_png() {
+                    let _ = std::fs::write(&path, bytes);
+                }
+            }
+        }
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -4848,6 +4855,7 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
         );
 
         self.window = Some(window);
+        self.request_redraw();
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
