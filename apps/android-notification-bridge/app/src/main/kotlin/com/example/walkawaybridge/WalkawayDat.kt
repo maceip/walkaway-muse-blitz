@@ -269,13 +269,13 @@ class WalkawayDat(private val appContext: Context) {
       textAlign = Paint.Align.CENTER
     }
 
-    // Clear button strip region to pure black
-    fillPaint.color = Color.BLACK
-    canvas.drawRect(10f * densityScale, (by0 - 4f * densityScale), w - 10f * densityScale, h - 8f * densityScale, fillPaint)
+    // Clear button strip region to the solid inner modal dark-gray (#24242B) so zero room background bleeds through
+    fillPaint.color = Color.rgb(36, 36, 43)
+    canvas.drawRect(18f * densityScale, (by0 - 4f * densityScale), w - 18f * densityScale, (by0 + bh + 4f * densityScale), fillPaint)
 
     // 1. Left button: Yes (Ns)
-    val yesRect = RectF(18f * densityScale, by0, 198f * densityScale, by0 + bh)
-    fillPaint.color = if (approvedFlash) Color.rgb(46, 160, 67) else Color.rgb(10, 132, 255)
+    val yesRect = RectF(22f * densityScale, by0, 198f * densityScale, by0 + bh)
+    fillPaint.color = if (approvedFlash) Color.rgb(46, 170, 70) else Color.rgb(10, 132, 255)
     canvas.drawRoundRect(yesRect, radius, radius, fillPaint)
     strokePaint.color = if (approvedFlash) Color.rgb(120, 240, 140) else Color.rgb(120, 195, 255)
     strokePaint.strokeWidth = 2.5f * densityScale
@@ -285,17 +285,17 @@ class WalkawayDat(private val appContext: Context) {
 
     // 2. Center button: No (pulsating red)
     val noRect = RectF(212f * densityScale, by0, 352f * densityScale, by0 + bh)
-    fillPaint.color = if (pulseRedHigh) Color.rgb(230, 36, 36) else Color.rgb(75, 16, 16)
+    fillPaint.color = if (pulseRedHigh) Color.rgb(230, 36, 36) else Color.rgb(95, 24, 24)
     canvas.drawRoundRect(noRect, radius, radius, fillPaint)
-    strokePaint.color = if (pulseRedHigh) Color.rgb(255, 145, 145) else Color.rgb(165, 48, 48)
+    strokePaint.color = if (pulseRedHigh) Color.rgb(255, 145, 145) else Color.rgb(175, 58, 58)
     strokePaint.strokeWidth = (if (pulseRedHigh) 3.2f else 1.5f) * densityScale
     canvas.drawRoundRect(noRect, radius, radius, strokePaint)
-    textPaint.color = if (pulseRedHigh) Color.WHITE else Color.rgb(235, 180, 180)
+    textPaint.color = if (pulseRedHigh) Color.WHITE else Color.rgb(235, 185, 185)
     canvas.drawText("No", noRect.centerX(), textY, textPaint)
 
-    // 3. Right button: ✦ Watch (golden fairy star)
-    val watchRect = RectF(366f * densityScale, by0, w - 18f * densityScale, by0 + bh)
-    fillPaint.color = Color.BLACK
+    // 3. Right button: ✦ Watch (solid #3A3A46 inlay surface + golden fairy star)
+    val watchRect = RectF(366f * densityScale, by0, w - 22f * densityScale, by0 + bh)
+    fillPaint.color = Color.rgb(58, 58, 70)
     canvas.drawRoundRect(watchRect, radius, radius, fillPaint)
     strokePaint.color = Color.rgb(245, 194, 66)
     strokePaint.strokeWidth = 2f * densityScale
