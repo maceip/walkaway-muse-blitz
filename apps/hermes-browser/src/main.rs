@@ -5549,6 +5549,28 @@ fn main() {
         .and_then(|p| args.get(p + 1))
         .cloned();
     let mut app = BrowserApp::new(proxy.clone(), net_dirty, provider);
+    if args.iter().any(|a| a == "--collapsed") {
+        app.toolbar_collapsed = true;
+    }
+    if args.iter().any(|a| a == "--scrapbook") {
+        app.explorer_tab = Some(ExplorerTab::Scrapbook);
+    } else if args.iter().any(|a| a == "--pageholder") {
+        app.explorer_tab = Some(ExplorerTab::PageHolder);
+    }
+    let initial_url = args
+        .iter()
+        .position(|a| a == "--url")
+        .and_then(|p| args.get(p + 1))
+        .cloned()
+        .or_else(|| {
+            args.iter()
+                .skip(1)
+                .find(|a| a.starts_with("http://") || a.starts_with("https://"))
+                .cloned()
+        });
+    if let Some(u) = initial_url {
+        app.navigate(&u);
+    }
     if let Some(socket_path) = control_socket {
         let read_token = |flag: &str, env: &str| -> Option<String> {
             if let Some(path) = args
