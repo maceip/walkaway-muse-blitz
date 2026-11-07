@@ -183,6 +183,31 @@ hop works across devices.
   each needs its own answer. The test drives both, because a page must not
   be able to slip a registration past the gate and then reuse it.
 
+### T-HERMES-PAGE-PASSKEY-GLASSES-E2E
+
+- Command: `python3 services/hermes-host/test_decision_bridge_e2e.py
+  PagePasskeyGlassesE2ETest` from the repo root.
+- Real components: the release Hermes binary (`--control-socket`), a live
+  HTTP server serving a page that really calls
+  `navigator.credentials.create()`, `services/hermes-host/message_bus.py`,
+  and `services/hermes-host/decision_bridge.py`. The glasses tap is
+  represented exactly as the Android bridge emits it: a bus ack with
+  `source="glasses_dat"`.
+- Asserts: a page-initiated ceremony is announced as a `proposal.pending`
+  with a `page-passkey-` proposal id, the bridge turns it into a bus card of
+  kind `passkey`, **nothing is decided before the glasses answer** (the
+  browser does not approve a page's own ceremony by itself), the glasses tap
+  decides it once with `decision: approve` and `surface: glasses`, and a
+  replayed tap decides nothing a second time.
+- Last observed: **PASS** 2026-11-06 22:2x PT — 1 test, plus the four
+  pre-existing bridge tests in the same file.
+- Note: this is the proof that the glasses DAT card really is the primary
+  surface for a page's passkey prompt. The chain is the whole way round:
+  the page calls the API, the browser announces the ceremony, the bridge
+  cards it, the Android bridge sends a two-button DAT card to the glasses,
+  the physical tap comes back as a bus ack, and the bridge turns that into
+  the `decision` frame the browser is waiting for.
+
 ### T-HERMES-SOCKET-E2E
 - Command: `python3 /tmp/socket_e2e.py` against the real Hermes GUI process.
 - Real components: Unix socket, host/agent token roles, session, observe,

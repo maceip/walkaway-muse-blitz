@@ -84,7 +84,8 @@ def wait_until(fn, timeout=15.0, interval=0.1):
 class Harness:
     """Fixture server + bus + N Hermes processes + one bridge."""
 
-    def __init__(self, test, tmp, hermes_count, card_mode, dynamic=False, allow_android=True):
+    def __init__(self, test, tmp, hermes_count, card_mode, dynamic=False, allow_android=True,
+                 start_url=None):
         self.test = test
         self.tmp = Path(tmp)
         self.db = self.tmp / "db.sqlite3"
@@ -134,7 +135,7 @@ class Harness:
         if not dynamic:
             for sock in socks:
                 cmd += ["--socket", str(sock)]
-            cmd += ["--start-url", f"{self.origin}/signup"]
+            cmd += ["--start-url", start_url or f"{self.origin}/signup"]
         self.procs.append(
             subprocess.Popen(cmd, env=benv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         )
@@ -480,6 +481,125 @@ class BridgeDualSurfaceE2ETest(unittest.TestCase):
                 self.assertEqual(surfaces.get("d-submit"), "glasses")
             finally:
                 h.stop()
+
+
+class PasskeyPageServer:
+    """A tiny HTTP server that serves one page which asks for a passkey.
+
+    The demo fixture's own pages carry no script, so a page that really
+    calls `navigator.credentials.create()` is served from here. The page is
+    the point: it makes the browser start a *page-initiated* ceremony, which
+    the browser must then card on the glasses rather than approve by itself.
+    """
+
+    PAGE = """<!DOCTYPE html><html><head><title>Passkey page</title></head><body>
+      <div id="host">waiting</div>
+      <script>
+        navigator.credentials.create({
+          publicKey: {
+            rp: { id: "127.0.0.1", name: "Example" },
+            user: { name: "ryan@example.com", displayName: "Ryan" },
+            challenge: new Uint8Array([1, 2, 3, 4])
+          }
+        }).then(function(cred) {
+          document.getElementById("host").setAttribute("data-result", "created:" + String(cred.id.byteLength));
+        }).catch(function(err) {
+          document.getElementById("host").setAttribute("data-result", "error:" + String(err && err.message ? err.message : err));
+        });
+      </script>
+    </body></html>"""
+
+    def __init__(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        page = self.PAGE
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                body = page.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_port
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.port}/passkey"
+
+    def stop(self):
+        self.server.shutdown()
+
+
+class PagePasskeyGlassesE2ETest(unittest.TestCase):
+    """A page-initiated passkey ceremony goes to the glasses as a card.
+
+    The glasses DAT card is the primary surface for a passkey prompt, and
+    the browser must not approve a page's own ceremony by itself. This
+    drives the real chain: the page calls `navigator.credentials.create()`,
+    the browser announces the ceremony as `proposal.pending`, the bridge
+    cards it, and the glasses tap (a bus ack with `source="glasses_dat"`)
+    decides it.
+    """
+
+    def test_page_passkey_ceremony_is_carded_and_decided_on_glasses(self):
+        self.assertTrue(HERMES_BIN.exists())
+        page_server = PasskeyPageServer()
+        try:
+            with tempfile.TemporaryDirectory(prefix="walkaway-passkey-") as tmp:
+                h = Harness(self, tmp, hermes_count=1, card_mode="immediate",
+                            allow_android=False, start_url=page_server.url)
+                try:
+                    h.agent(0)
+
+                    # 1. The page's ceremony becomes a card, not an automatic
+                    #    approval. The browser has no agent proposal here; the
+                    #    ceremony is the page's own.
+                    card = wait_card(h, 0)
+                    entry = card["batch_proposals"][0]
+                    self.assertTrue(
+                        str(entry.get("proposal_id", "")).startswith("page-passkey-"),
+                        f"expected a page-passkey proposal, got {entry.get('proposal_id')}",
+                    )
+                    self.assertEqual(card.get("kind"), "passkey")
+
+                    # 2. Before the glasses answer, nothing is decided.
+                    time.sleep(1.2)
+                    decided = [d for d in h.decisions()
+                               if str(d.get("proposal_id", "")).startswith("page-passkey-")]
+                    self.assertEqual(decided, [],
+                                     "the page's ceremony must not be decided before the glasses answer")
+
+                    # 3. The glasses tap decides it.
+                    h.bus_ack(card["id"], "approve", "glasses_dat")
+                    decided = wait_until(
+                        lambda: [d for d in h.decisions()
+                                 if str(d.get("proposal_id", "")).startswith("page-passkey-")]
+                        or None
+                    )
+                    self.assertEqual(len(decided), 1)
+                    self.assertEqual(decided[0]["decision"], "approve")
+                    self.assertEqual(decided[0]["surface"], "glasses")
+
+                    # 4. The decision is consumed exactly once. A replayed tap
+                    #    must not decide anything a second time.
+                    h.bus_ack(card["id"], "approve", "glasses_dat")
+                    time.sleep(1.6)
+                    decided_after = [d for d in h.decisions()
+                                     if str(d.get("proposal_id", "")).startswith("page-passkey-")]
+                    self.assertEqual(len(decided_after), 1,
+                                     "a replayed glasses tap must not decide twice")
+                finally:
+                    h.stop()
+        finally:
+            page_server.stop()
 
 
 if __name__ == "__main__":
