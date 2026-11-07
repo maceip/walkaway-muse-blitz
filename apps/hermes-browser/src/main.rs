@@ -556,17 +556,6 @@ impl Page {
             return;
         }
 
-        let total_external = script_nodes
-            .iter()
-            .filter(|&&nid| {
-                self.ctx
-                    .doc
-                    .get_node(nid)
-                    .and_then(|n| n.attr(LocalName::from("src")))
-                    .is_some_and(|s| !s.trim().is_empty())
-            })
-            .count();
-
         let is_local_base = base
             .as_ref()
             .and_then(|u| u.host_str())
@@ -608,8 +597,8 @@ impl Page {
             }
 
             if let Some(src_raw) = src_attr {
-                if !is_local_base && total_external > 6 {
-                    // Skip bulk external third-party ad/tracker bundles on large portal pages.
+                if !is_local_base {
+                    // Skip blocking main-thread fetches of third-party external script bundles on remote pages.
                     continue;
                 }
                 let (Some(base_url), Some(prov)) = (base.as_ref(), provider.as_ref()) else {
@@ -5037,6 +5026,13 @@ impl BrowserApp {
                 self.go_forward();
                 return;
             }
+            if id_is("menu-xray") {
+                self.xray_enabled = !self.xray_enabled;
+                self.menu_open = false;
+                self.sync_chrome();
+                self.request_redraw();
+                return;
+            }
             if id_is("menu-close-tab") {
                 let index = self.active;
                 self.close_tab(index);
@@ -5187,10 +5183,22 @@ impl BrowserApp {
         if self.session_blocks_input() {
             return;
         }
+        if matches!(event.logical_key, Key::Named(NamedKey::F12)) {
+            self.xray_enabled = !self.xray_enabled;
+            self.sync_chrome();
+            self.request_redraw();
+            return;
+        }
         let cmd = self.modifiers.super_key();
 
         if cmd {
             match &event.logical_key {
+                Key::Character(c) if c.eq_ignore_ascii_case("i") => {
+                    self.xray_enabled = !self.xray_enabled;
+                    self.sync_chrome();
+                    self.request_redraw();
+                    return;
+                }
                 Key::Character(c) if c.eq_ignore_ascii_case("l") => {
                     let url = self.tab().canonical.browser.display_url();
                     let tab = self.tab_mut();

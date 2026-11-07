@@ -780,11 +780,17 @@ pub fn render(state: &ChromeState<'_>) -> String {
                 "drawer-frame"
             };
 
+            let ph_rib_bg = if !state.page_holder.links_mode && state.page_holder.has_doc {
+                ribbed_rect_svg(286, 52, p.rib_base, p.rib_hi, p.rib_lo)
+            } else {
+                drawer_rib_bg.clone()
+            };
+
             let ph_url_attr = escape_html(state.page_holder.url);
             let ph_title_attr = escape_html(state.page_holder.title);
             format!(
                 r#"<div class="{drawer_bg_cls}" id="exp-drawer" style="top:{top_chrome_h:.1}px;">
-                     {drawer_rib_bg}
+                     {ph_rib_bg}
                      <div class="{frame_cls}">
                        <div class="drawer-inner">
                          <div class="drawer-header" id="ph-header" data-held-url="{ph_url_attr}" data-held-title="{ph_title_attr}">
@@ -1090,6 +1096,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
                  <div class="menu-sep"></div>
                  <div class="menu-item" id="menu-back">{at_swirl_svg}<span>Back</span></div>
                  <div class="menu-item" id="menu-forward">{at_swirl_svg}<span>Forward</span></div>
+                 <div class="menu-sep"></div>
+                 <div class="menu-item" id="menu-xray">{at_swirl_svg}<span>Toggle X-Ray HUD (F12)</span></div>
                  <div class="menu-sep"></div>
                  <div class="menu-item" id="menu-close-tab">{at_swirl_svg}<span>Close tab</span></div>
                </div>"#,
