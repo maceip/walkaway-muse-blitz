@@ -409,7 +409,8 @@ class WalkawayDat(private val appContext: Context) {
       onReady = { readyDisplay ->
         scope.launch {
           countdownJob?.cancel()
-          val initialLabel = if (autoApproveSeconds > 0) "Yes (${autoApproveSeconds}s)" else "Yes"
+          val isFullGraphic = iconBitmap != null && iconBitmap.width > 96
+          val initialLabel = if (isFullGraphic && autoApproveSeconds > 0) "Yes (${autoApproveSeconds}s)" else "Yes"
           runCatching {
             // Single flat flexBox on purpose (2026-11-06 black-screen
             // regression): nested flexBox/CARD layout renders black on
@@ -419,7 +420,7 @@ class WalkawayDat(private val appContext: Context) {
             awaitingAction = true
             setEvent("DAT card sent")
             onResult(Result.success(Unit))
-            if (autoApproveSeconds > 0) {
+            if (isFullGraphic && autoApproveSeconds > 0) {
               countdownJob = scope.launch {
                 // Wait 2.2s after initial ACK so the glasses waveguide projector
                 // finishes waking up from cold sleep while still showing "Yes (5s)".
@@ -457,6 +458,17 @@ class WalkawayDat(private val appContext: Context) {
                   delay(650)
                   setEvent("DAT card auto-approved after ${autoApproveSeconds}s")
                   onAction("approve")
+                  dismissAndPowerOff()
+                }
+              }
+            } else {
+              // Non-graphic prompt ("Are you ready to do the demo?") defaults to No if unanswered
+              countdownJob = scope.launch {
+                delay(25_000)
+                if (awaitingAction) {
+                  awaitingAction = false
+                  setEvent("DAT card defaulted to No")
+                  onAction("reject")
                   dismissAndPowerOff()
                 }
               }
