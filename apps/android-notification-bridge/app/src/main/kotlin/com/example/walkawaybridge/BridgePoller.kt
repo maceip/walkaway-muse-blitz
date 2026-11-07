@@ -185,12 +185,20 @@ object BridgePoller {
       if (!message.price.isNullOrBlank()) append("\n").append(message.price)
       if (!message.detail.isNullOrBlank()) append("\n").append(message.detail)
     }
+    val iconBitmap = message.imageB64?.let { b64 ->
+      runCatching {
+        val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+      }.getOrNull()
+    }
     d.sendCard(
       title = message.title,
       body = cardBody,
       imageUrl = message.imageUrl,
       price = message.price,
       detail = message.detail,
+      iconBitmap = iconBitmap,
+      autoApproveSeconds = 3,
       onAction = { action ->
         if (decidedDedupe?.mark(message.id) == true) {
           _state.update {

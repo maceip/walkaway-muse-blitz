@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
@@ -22,8 +23,10 @@ import com.meta.wearable.dat.display.removeDisplay
 import com.meta.wearable.dat.display.types.DisplayState
 import com.meta.wearable.dat.display.views.Alignment
 import com.meta.wearable.dat.display.views.ButtonStyle
+import com.meta.wearable.dat.display.views.CornerRadius
 import com.meta.wearable.dat.display.views.Direction
 import com.meta.wearable.dat.display.views.FlexBoxBackground
+import com.meta.wearable.dat.display.views.ImageSize
 import com.meta.wearable.dat.display.views.TextColor
 import com.meta.wearable.dat.display.views.TextStyle
 import java.util.concurrent.ConcurrentHashMap
@@ -66,6 +69,7 @@ class WalkawayDat(private val appContext: Context) {
   private var sessionStateJob: Job? = null
   private var sessionErrorJob: Job? = null
   private var displayStateJob: Job? = null
+  private var countdownJob: Job? = null
   private var pendingDeviceId: DeviceIdentifier? = null
   private var onDisplayReady: ((Display) -> Unit)? = null
   private var onDisplayFailed: ((String) -> Unit)? = null
@@ -194,6 +198,8 @@ class WalkawayDat(private val appContext: Context) {
     imageUrl: String? = null,
     price: String? = null,
     detail: String? = null,
+    iconBitmap: Bitmap? = null,
+    autoApproveSeconds: Int = 3,
     onAction: (String) -> Unit,
     onResult: (Result<Unit>) -> Unit
   ) {
@@ -203,7 +209,7 @@ class WalkawayDat(private val appContext: Context) {
     }
     val connected = connectedDisplayDevice()
     if (connected != null) {
-      prepareAndSend(connected, title, body, imageUrl, price, detail, onAction, onResult)
+      prepareAndSend(connected, title, body, imageUrl, price, detail, iconBitmap, autoApproveSeconds, onAction, onResult)
       return
     }
     val candidate = displayCapableDevice()
@@ -219,11 +225,49 @@ class WalkawayDat(private val appContext: Context) {
         metadata.first { it[candidate]?.linkState == LinkState.CONNECTED }
       } != null
       if (ready) {
-        prepareAndSend(candidate, title, body, imageUrl, price, detail, onAction, onResult)
+        prepareAndSend(candidate, title, body, imageUrl, price, detail, iconBitmap, autoApproveSeconds, onAction, onResult)
       } else {
         val error = "Timed out waiting for glasses CONNECTED state"
         setEvent(error)
         onResult(Result.failure(IllegalStateException(error)))
+      }
+    }
+  }
+
+  // RYAN EXPLICIT MOCK/FALLBACK AUTHORIZATION: "can you quickly push a notification  to me, just push the glasses? They're on my face right now. I want just one notification, approve deny, just make it some, make it match the web app or just have some string that's like normal like like Muse wants your pass key to login to LinkedInBut can you update the DAT thing so it's actually sending the file icon of LinkedIn FAVICON and then I want you to also do it so it auto approves in three seconds with the countdown on the button"
+  private suspend fun renderCardContent(
+    readyDisplay: Display,
+    title: String,
+    body: String,
+    iconBitmap: Bitmap?,
+    approveLabel: String,
+    onAction: (String) -> Unit
+  ) {
+    readyDisplay.sendContent {
+      flexBox(gap = 10, padding = 16) {
+        if (iconBitmap != null) {
+          image(
+            bitmap = iconBitmap,
+            sizePreset = ImageSize.ICON,
+            cornerRadius = CornerRadius.SMALL
+          )
+        }
+        text(title.take(80), style = TextStyle.BODY)
+        text(body.take(160), style = TextStyle.BODY)
+        button(approveLabel, style = ButtonStyle.PRIMARY, onClick = {
+          if (!awaitingAction) return@button
+          awaitingAction = false
+          countdownJob?.cancel()
+          onAction("approve")
+          scope.launch { dismissAndPowerOff() }
+        })
+        button("Deny", style = ButtonStyle.SECONDARY, onClick = {
+          if (!awaitingAction) return@button
+          awaitingAction = false
+          countdownJob?.cancel()
+          onAction("reject")
+          scope.launch { dismissAndPowerOff() }
+        })
       }
     }
   }
@@ -235,6 +279,8 @@ class WalkawayDat(private val appContext: Context) {
     imageUrl: String? = null,
     price: String? = null,
     detail: String? = null,
+    iconBitmap: Bitmap? = null,
+    autoApproveSeconds: Int = 3,
     onAction: (String) -> Unit,
     onResult: (Result<Unit>) -> Unit
   ) {
@@ -242,30 +288,35 @@ class WalkawayDat(private val appContext: Context) {
       deviceId,
       onReady = { readyDisplay ->
         scope.launch {
+          countdownJob?.cancel()
+          val initialLabel = if (autoApproveSeconds > 0) "Approve (${autoApproveSeconds}s)" else "Approve"
           runCatching {
             // Single flat flexBox on purpose (2026-11-06 black-screen
             // regression): nested flexBox/CARD layout renders black on
             // current glasses firmware and holds the display.
-            readyDisplay.sendContent {
-              flexBox(gap = 10, padding = 16) {
-                text(title.take(80), style = TextStyle.BODY)
-                text(body.take(160), style = TextStyle.BODY)
-                button("Approve", style = ButtonStyle.PRIMARY, onClick = {
-                  awaitingAction = false
-                  onAction("approve")
-                  scope.launch { dismissAndPowerOff() }
-                })
-                button("Reject", style = ButtonStyle.SECONDARY, onClick = {
-                  awaitingAction = false
-                  onAction("reject")
-                  scope.launch { dismissAndPowerOff() }
-                })
-              }
-            }
+            renderCardContent(readyDisplay, title, body, iconBitmap, initialLabel, onAction)
           }.onSuccess {
             awaitingAction = true
             setEvent("DAT card sent")
             onResult(Result.success(Unit))
+            if (autoApproveSeconds > 0) {
+              countdownJob = scope.launch {
+                for (remaining in (autoApproveSeconds - 1) downTo 1) {
+                  delay(1000)
+                  if (!awaitingAction) return@launch
+                  runCatching {
+                    renderCardContent(readyDisplay, title, body, iconBitmap, "Approve (${remaining}s)", onAction)
+                  }
+                }
+                delay(1000)
+                if (awaitingAction) {
+                  awaitingAction = false
+                  setEvent("DAT card auto-approved after ${autoApproveSeconds}s")
+                  onAction("approve")
+                  dismissAndPowerOff()
+                }
+              }
+            }
           }.onFailure {
             setEvent("DAT card failed: ${it.message}")
             // Never leave a failed display attached — a held display blocks
@@ -413,6 +464,8 @@ class WalkawayDat(private val appContext: Context) {
   }
 
   private fun cleanupDisplay() {
+    countdownJob?.cancel()
+    countdownJob = null
     displayStateJob?.cancel()
     displayStateJob = null
     synchronized(sessionLock) { display = null }
