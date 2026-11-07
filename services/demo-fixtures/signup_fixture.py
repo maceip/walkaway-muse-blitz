@@ -687,26 +687,37 @@ def render_campaign_receipt_html(receipt: dict[str, object]) -> str:
 </html>"""
 
 
-SIGNIN_HTML = """<!DOCTYPE html>
+def render_signin_html(
+    challenge: str,
+    rp_id: str,
+    origin: str,
+    status_banner_html: str = "",
+    auto_passkey: str = "",
+) -> str:
+    return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
   <title>DeepSec 2026 Speaker Portal — Sign In</title>
   <style>
-    body { font-family: sans-serif; background: #0f141c; color: #e6edf3; padding: 24px; }
-    .card { max-width: 520px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
-    h1 { font-size: 20px; margin-top: 0; }
-    .field { margin-bottom: 14px; }
-    label { display: block; font-size: 13px; margin-bottom: 4px; color: #8b949e; }
-    input[type="email"], input[type="password"] {
+    body {{ font-family: sans-serif; background: #0f141c; color: #e6edf3; padding: 24px; }}
+    .card {{ max-width: 520px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }}
+    h1 {{ font-size: 20px; margin-top: 0; }}
+    h2 {{ font-size: 16px; margin-top: 0; color: #58a6ff; }}
+    .field {{ margin-bottom: 14px; }}
+    label {{ display: block; font-size: 13px; margin-bottom: 4px; color: #8b949e; }}
+    input[type="email"], input[type="password"] {{
       width: 100%; padding: 8px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px;
-    }
-    .btn { padding: 10px 16px; background: #238636; color: #ffffff; border: none; border-radius: 6px; font-weight: bold; }
+    }}
+    .btn {{ padding: 10px 16px; background: #238636; color: #ffffff; border: none; border-radius: 6px; font-weight: bold; margin-right: 8px; }}
+    .btn-passkey {{ padding: 10px 16px; background: #1f6feb; color: #ffffff; border: none; border-radius: 6px; font-weight: bold; margin-right: 8px; }}
+    .status-box {{ margin-top: 12px; padding: 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; font-family: monospace; font-size: 12px; color: #79c0ff; }}
   </style>
 </head>
 <body>
   <div class="card">
     <h1>DeepSec 2026 Speaker Sign-In</h1>
+    {status_banner_html}
     <form id="signin-form" method="POST" action="/signin">
       <div class="field">
         <label for="email">Speaker Email</label>
@@ -719,6 +730,131 @@ SIGNIN_HTML = """<!DOCTYPE html>
       <button id="signin-btn" type="submit" class="btn">Sign In to Speaker Portal</button>
     </form>
   </div>
+
+  <div class="card" id="passkey-card">
+    <h2>FIDO2 / WebAuthn Hardware Passkey (ES256 P-256)</h2>
+    <p style="font-size: 13px; color: #8b949e; margin-top: 4px;">
+      Authenticate or register a hardware-bound P-256 passkey with human verification on Meta Ray-Ban Display glasses or Supervisor Bar.
+    </p>
+    <div>
+      <button id="passkey-register-btn" type="button" class="btn-passkey">Create Passkey (P-256)</button>
+      <button id="passkey-signin-btn" type="button" class="btn">Sign In with Passkey</button>
+    </div>
+    <div id="passkey-status" class="status-box">WebAuthn Ready — RP: {html.escape(rp_id)} | Challenge: {html.escape(challenge[:16])}...</div>
+    <form id="webauthn-form" method="POST" action="/signin" style="display:none;">
+      <input type="hidden" id="webauthn_action" name="webauthn_action" value="" />
+      <input type="hidden" id="webauthn_credential_id" name="credential_id" value="" />
+      <input type="hidden" id="webauthn_rp_id" name="rp_id" value="{html.escape(rp_id)}" />
+      <input type="hidden" id="webauthn_origin" name="origin" value="{html.escape(origin)}" />
+      <input type="hidden" id="webauthn_email" name="user_email" value="" />
+      <input type="hidden" id="webauthn_client_data" name="client_data_json_b64" value="" />
+      <input type="hidden" id="webauthn_auth_data" name="authenticator_data_b64" value="" />
+      <input type="hidden" id="webauthn_signature" name="signature_der_b64" value="" />
+      <input type="hidden" id="webauthn_attestation" name="attestation_object_b64" value="" />
+    </form>
+  </div>
+
+  <script>
+    (function() {{
+      var CHALLENGE_B64 = {json.dumps(challenge)};
+      var RP_ID = {json.dumps(rp_id)};
+      var AUTO_ACTION = {json.dumps(auto_passkey)};
+
+      function b64urlToBytes(b64url) {{
+        var b64 = String(b64url).replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4 !== 0) b64 += '=';
+        var bin = atob(b64);
+        var out = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+      }}
+
+      function bufferToB64url(buf) {{
+        if (!buf) return '';
+        var bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+        var bin = '';
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');
+      }}
+
+      function getEmailValue() {{
+        var emailEl = document.getElementById('email');
+        var v = emailEl && emailEl.value ? String(emailEl.value).trim() : '';
+        return v || 'ryan@zunftmax.secure.build';
+      }}
+
+      function startPasskeyRegister() {{
+        var statusEl = document.getElementById('passkey-status');
+        var emailVal = getEmailValue();
+        if (statusEl) statusEl.textContent = 'Awaiting human approval for Passkey Registration (' + emailVal + ')...';
+        navigator.credentials.create({{
+          publicKey: {{
+            rp: {{ id: RP_ID, name: 'DeepSec 2026 Speaker Portal' }},
+            user: {{
+              id: b64urlToBytes('dXNlci1yeWFuLWRlZXBzZWM'),
+              name: emailVal,
+              displayName: emailVal
+            }},
+            challenge: b64urlToBytes(CHALLENGE_B64),
+            pubKeyCredParams: [{{ type: 'public-key', alg: -7 }}],
+            authenticatorSelection: {{ userVerification: 'required' }}
+          }}
+        }}).then(function(cred) {{
+          if (statusEl) statusEl.textContent = 'Passkey created: ' + cred.id + ' — submitting to Relying Party...';
+          document.getElementById('webauthn_action').value = 'register';
+          document.getElementById('webauthn_credential_id').value = cred.id;
+          document.getElementById('webauthn_email').value = emailVal;
+          document.getElementById('webauthn_client_data').value =
+            cred.client_data_json_b64 || bufferToB64url(cred.response.clientDataJSON);
+          document.getElementById('webauthn_auth_data').value =
+            cred.authenticator_data_b64 || '';
+          document.getElementById('webauthn_attestation').value =
+            cred.attestation_object_b64 || bufferToB64url(cred.response.attestationObject);
+          document.getElementById('webauthn-form').submit();
+        }}).catch(function(err) {{
+          if (statusEl) statusEl.textContent = 'Passkey registration rejected: ' + (err && err.message ? err.message : String(err));
+        }});
+      }}
+
+      function startPasskeySignIn() {{
+        var statusEl = document.getElementById('passkey-status');
+        var emailVal = getEmailValue();
+        if (statusEl) statusEl.textContent = 'Awaiting human approval for Passkey Sign-In (' + RP_ID + ')...';
+        navigator.credentials.get({{
+          publicKey: {{
+            rpId: RP_ID,
+            challenge: b64urlToBytes(CHALLENGE_B64),
+            userVerification: 'required'
+          }}
+        }}).then(function(cred) {{
+          if (statusEl) statusEl.textContent = 'Assertion signed: ' + cred.id + ' — verifying on Relying Party...';
+          document.getElementById('webauthn_action').value = 'assert';
+          document.getElementById('webauthn_credential_id').value = cred.id;
+          document.getElementById('webauthn_email').value = emailVal;
+          document.getElementById('webauthn_client_data').value =
+            cred.client_data_json_b64 || bufferToB64url(cred.response.clientDataJSON);
+          document.getElementById('webauthn_auth_data').value =
+            cred.authenticator_data_b64 || bufferToB64url(cred.response.authenticatorData);
+          document.getElementById('webauthn_signature').value =
+            cred.signature_der_b64 || bufferToB64url(cred.response.signature);
+          document.getElementById('webauthn-form').submit();
+        }}).catch(function(err) {{
+          if (statusEl) statusEl.textContent = 'Passkey assertion rejected: ' + (err && err.message ? err.message : String(err));
+        }});
+      }}
+
+      var regBtn = document.getElementById('passkey-register-btn');
+      if (regBtn) regBtn.addEventListener('click', startPasskeyRegister);
+      var signBtn = document.getElementById('passkey-signin-btn');
+      if (signBtn) signBtn.addEventListener('click', startPasskeySignIn);
+
+      if (AUTO_ACTION === 'register') {{
+        startPasskeyRegister();
+      }} else if (AUTO_ACTION === 'assert') {{
+        startPasskeySignIn();
+      }}
+    }})();
+  </script>
 </body>
 </html>
 """
@@ -916,6 +1052,150 @@ def _apply_campaign_update(conn: sqlite3.Connection, campaign_data: dict[str, ob
             _now_iso(),
         ),
     )
+
+
+def extract_p256_pem_from_attestation_object(
+    attestation_b64: str,
+    expected_rp_id: str,
+) -> tuple[str, str]:
+    raw = _b64decode_any(attestation_b64)
+    marker = b"authData"
+    idx = raw.find(marker)
+    if idx < 0:
+        raise ValueError("authData key not found in attestationObject")
+    pos = idx + len(marker)
+    if pos >= len(raw):
+        raise ValueError("truncated attestationObject after authData key")
+    hdr = raw[pos]
+    pos += 1
+    major = hdr >> 5
+    addl = hdr & 0x1F
+    if major != 2:
+        raise ValueError(f"authData CBOR major type {major} != 2 (byte string)")
+    if addl < 24:
+        auth_len = addl
+    elif addl == 24:
+        auth_len = raw[pos]
+        pos += 1
+    elif addl == 25:
+        auth_len = int.from_bytes(raw[pos : pos + 2], "big")
+        pos += 2
+    else:
+        raise ValueError(f"unsupported CBOR byte string length info {addl}")
+    auth_data = raw[pos : pos + auth_len]
+    if len(auth_data) < 55:
+        raise ValueError("authData too short for attestedCredentialData")
+
+    expected_rp_hash = hashlib.sha256(expected_rp_id.encode("utf-8")).digest()
+    if auth_data[:32] != expected_rp_hash:
+        raise ValueError("attestationObject authData rpIdHash mismatch")
+
+    flags = auth_data[32]
+    if (flags & 0x45) != 0x45:
+        raise ValueError(f"attestationObject authData missing UP/UV/AT flags (0x{flags:02x})")
+
+    cred_id_len = int.from_bytes(auth_data[53:55], "big")
+    cred_end = 55 + cred_id_len
+    if len(auth_data) < cred_end + 77:
+        raise ValueError("authData too short for COSE_Key")
+    cred_id_bytes = auth_data[55:cred_end]
+    cose_key = auth_data[cred_end:]
+    cose_prefix = bytes([0xA5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20])
+    if not cose_key.startswith(cose_prefix):
+        raise ValueError("unexpected COSE_Key header for ES256 P-256")
+    x = cose_key[10:42]
+    if cose_key[42:45] != bytes([0x22, 0x58, 0x20]):
+        raise ValueError("unexpected COSE_Key Y-coordinate header")
+    y = cose_key[45:77]
+    if len(x) != 32 or len(y) != 32:
+        raise ValueError("invalid P-256 coordinate length in COSE_Key")
+
+    spki_der = (
+        bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d03010703420004")
+        + x
+        + y
+    )
+    b64_lines = [
+        base64.b64encode(spki_der).decode("ascii")[i : i + 64]
+        for i in range(0, len(base64.b64encode(spki_der)), 64)
+    ]
+    pem = "-----BEGIN PUBLIC KEY-----\n" + "\n".join(b64_lines) + "\n-----END PUBLIC KEY-----\n"
+    cred_id_b64 = base64.urlsafe_b64encode(cred_id_bytes).rstrip(b"=").decode("ascii")
+    return cred_id_b64, pem
+
+
+def register_webauthn_attestation(
+    conn: sqlite3.Connection,
+    payload: dict[str, object],
+) -> tuple[int, dict[str, object]]:
+    rp_id = str(payload.get("rp_id") or "").strip()
+    origin = str(payload.get("origin") or "").strip()
+    user_email = str(payload.get("user_email") or "ryan@zunftmax.secure.build").strip()
+    credential_id = str(payload.get("credential_id") or "").strip()
+    public_key_pem = str(payload.get("public_key_pem") or "").strip()
+    attestation_b64 = str(payload.get("attestation_object_b64") or "").strip()
+    client_data_b64 = str(payload.get("client_data_json_b64") or "").strip()
+
+    if not rp_id:
+        return 400, {"ok": False, "error": "rp_id is required"}
+
+    conn.row_factory = sqlite3.Row
+    if client_data_b64:
+        try:
+            client_data_bytes = _b64decode_any(client_data_b64)
+            client_data = json.loads(client_data_bytes.decode("utf-8"))
+        except Exception as exc:
+            return 400, {"ok": False, "error": f"clientDataJSON decode error: {exc}"}
+        if client_data.get("type") != "webauthn.create":
+            return 400, {"ok": False, "error": "clientDataJSON.type must be webauthn.create"}
+        if origin and client_data.get("origin") != origin:
+            return 400, {"ok": False, "error": "clientDataJSON.origin mismatch"}
+        challenge = str(client_data.get("challenge") or "").strip()
+        if challenge:
+            chal_row = conn.execute(
+                "SELECT * FROM webauthn_challenges WHERE challenge = ? AND rp_id = ?",
+                (challenge, rp_id),
+            ).fetchone()
+            if chal_row is None:
+                return 400, {"ok": False, "error": "registration challenge not found for rp_id"}
+            if int(chal_row["used"]) != 0:
+                return 400, {"ok": False, "error": "registration challenge already used"}
+            conn.execute(
+                "UPDATE webauthn_challenges SET used = 1 WHERE id = ?",
+                (int(chal_row["id"]),),
+            )
+
+    if not public_key_pem and attestation_b64:
+        try:
+            extracted_cred_id, public_key_pem = extract_p256_pem_from_attestation_object(
+                attestation_b64, rp_id
+            )
+            if not credential_id:
+                credential_id = extracted_cred_id
+        except Exception as exc:
+            return 400, {"ok": False, "error": f"attestationObject parse error: {exc}"}
+
+    if not credential_id or not public_key_pem:
+        return 400, {
+            "ok": False,
+            "error": "credential_id and (public_key_pem or attestation_object_b64) are required",
+        }
+
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO webauthn_credentials (
+            credential_id, public_key_pem, rp_id, user_email, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (credential_id, public_key_pem, rp_id, user_email, _now_iso()),
+    )
+    conn.commit()
+    return 200, {
+        "ok": True,
+        "credential_id": credential_id,
+        "rp_id": rp_id,
+        "user_email": user_email,
+    }
 
 
 def verify_webauthn_assertion(
@@ -1161,8 +1441,31 @@ def make_handler(db_path: Path):
                 return self.send_json(
                     200, {"webauthn_assertions": rows, "count": len(rows)}
                 )
-            if parsed.path == "/signin":
-                return self.send_html(200, SIGNIN_HTML)
+            if parsed.path in {"/signin", "/passkey"}:
+                qs = parse_qs(parsed.query)
+                host_hdr = str(self.headers.get("Host") or "127.0.0.1:8795").strip()
+                host_only = host_hdr.split(":")[0].strip() or "127.0.0.1"
+                rp_id = (qs.get("rp_id") or [host_only])[0].strip() or host_only
+                origin = f"http://{host_hdr}"
+                auto_passkey = (qs.get("auto_passkey") or [""])[0].strip()
+                challenge = (
+                    base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode("ascii")
+                )
+                with lock, contextlib.closing(sqlite3.connect(db_path)) as conn:
+                    conn.execute(
+                        "INSERT INTO webauthn_challenges (challenge, rp_id, used, created_at) VALUES (?, ?, 0, ?)",
+                        (challenge, rp_id, _now_iso()),
+                    )
+                    conn.commit()
+                return self.send_html(
+                    200,
+                    render_signin_html(
+                        challenge=challenge,
+                        rp_id=rp_id,
+                        origin=origin,
+                        auto_passkey=auto_passkey,
+                    ),
+                )
             if parsed.path == "/weather":
                 qs = parse_qs(parsed.query)
                 place = (qs.get("place") or ["San Francisco"])[0].strip() or "San Francisco"
@@ -1258,29 +1561,9 @@ def make_handler(db_path: Path):
                     payload = json.loads(raw) if raw.strip() else {}
                 except Exception as exc:
                     return self.send_json(400, {"ok": False, "error": f"invalid json: {exc}"})
-                credential_id = str(payload.get("credential_id") or "").strip()
-                public_key_pem = str(payload.get("public_key_pem") or "").strip()
-                rp_id = str(payload.get("rp_id") or "").strip()
-                user_email = str(payload.get("user_email") or "").strip()
-                if not credential_id or not public_key_pem or not rp_id:
-                    return self.send_json(
-                        400,
-                        {"ok": False, "error": "credential_id, public_key_pem, and rp_id are required"},
-                    )
                 with lock, contextlib.closing(sqlite3.connect(db_path)) as conn:
-                    conn.execute(
-                        """
-                        INSERT OR REPLACE INTO webauthn_credentials (
-                            credential_id, public_key_pem, rp_id, user_email, created_at
-                        ) VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (credential_id, public_key_pem, rp_id, user_email, _now_iso()),
-                    )
-                    conn.commit()
-                return self.send_json(
-                    200,
-                    {"ok": True, "credential_id": credential_id, "rp_id": rp_id},
-                )
+                    status, result = register_webauthn_attestation(conn, payload)
+                return self.send_json(status, result)
 
             if parsed.path == "/api/webauthn/verify":
                 try:
@@ -1550,7 +1833,123 @@ def make_handler(db_path: Path):
 </html>""",
                 )
 
-            if parsed.path == "/signin":
+            if parsed.path in {"/signin", "/passkey"}:
+                webauthn_action = fields.get("webauthn_action", "").strip()
+                if webauthn_action == "register":
+                    host_hdr = str(self.headers.get("Host") or "127.0.0.1:8795").strip()
+                    host_only = host_hdr.split(":")[0].strip() or "127.0.0.1"
+                    rp_id = fields.get("rp_id", "").strip() or host_only
+                    origin = fields.get("origin", "").strip() or f"http://{host_hdr}"
+                    with lock, contextlib.closing(sqlite3.connect(db_path)) as conn:
+                        status, reg_res = register_webauthn_attestation(
+                            conn,
+                            {
+                                "credential_id": fields.get("credential_id", ""),
+                                "rp_id": rp_id,
+                                "origin": origin,
+                                "user_email": fields.get("user_email", "ryan@zunftmax.secure.build"),
+                                "client_data_json_b64": fields.get("client_data_json_b64", ""),
+                                "attestation_object_b64": fields.get("attestation_object_b64", ""),
+                            },
+                        )
+                        next_challenge = (
+                            base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode("ascii")
+                        )
+                        conn.execute(
+                            "INSERT INTO webauthn_challenges (challenge, rp_id, used, created_at) VALUES (?, ?, 0, ?)",
+                            (next_challenge, rp_id, _now_iso()),
+                        )
+                        conn.commit()
+                    if status != 200 or not reg_res.get("ok"):
+                        err_msg = html.escape(str(reg_res.get("error") or "registration failed"))
+                        banner = (
+                            f'<div id="passkey-error" style="background:#3d161b;border:1px solid #f85149;color:#ffa198;padding:10px;border-radius:6px;margin-bottom:14px;">'
+                            f"Passkey Registration Failed: {err_msg}</div>"
+                        )
+                    else:
+                        cred_id_esc = html.escape(str(reg_res.get("credential_id") or ""))
+                        email_esc = html.escape(str(reg_res.get("user_email") or ""))
+                        banner = (
+                            f'<div id="passkey-registered-banner" style="background:#122d1f;border:1px solid #2ea043;color:#7ee787;padding:10px;border-radius:6px;margin-bottom:14px;">'
+                            f"Passkey Registered (ES256 P-256): <code id='registered-cred-id'>{cred_id_esc}</code> for <span id='registered-user-email'>{email_esc}</span></div>"
+                        )
+                    return self.send_html(
+                        200,
+                        render_signin_html(
+                            challenge=next_challenge,
+                            rp_id=rp_id,
+                            origin=origin,
+                            status_banner_html=banner,
+                        ),
+                    )
+
+                if webauthn_action == "assert":
+                    host_hdr = str(self.headers.get("Host") or "127.0.0.1:8795").strip()
+                    host_only = host_hdr.split(":")[0].strip() or "127.0.0.1"
+                    rp_id = fields.get("rp_id", "").strip() or host_only
+                    origin = fields.get("origin", "").strip() or f"http://{host_hdr}"
+                    with lock, contextlib.closing(sqlite3.connect(db_path)) as conn:
+                        conn.row_factory = sqlite3.Row
+                        status, ver_res = verify_webauthn_assertion(
+                            conn,
+                            {
+                                "credential_id": fields.get("credential_id", ""),
+                                "rp_id": rp_id,
+                                "origin": origin,
+                                "authenticator_data_b64": fields.get("authenticator_data_b64", ""),
+                                "client_data_json_b64": fields.get("client_data_json_b64", ""),
+                                "signature_der_b64": fields.get("signature_der_b64", ""),
+                            },
+                        )
+                        if status != 200 or not ver_res.get("verified"):
+                            err_msg = html.escape(str(ver_res.get("error") or "verification failed"))
+                            return self.send_html(
+                                200,
+                                f"<!DOCTYPE html><html><head><title>Passkey Verification Failed</title></head>"
+                                f"<body><h1 id='signin-error'>Passkey Assertion Failed</h1><p id='signin-error-detail'>{err_msg}</p></body></html>",
+                            )
+                        cred_id_val = str(ver_res.get("credential_id") or "")
+                        cred_row = conn.execute(
+                            "SELECT user_email FROM webauthn_credentials WHERE credential_id = ?",
+                            (cred_id_val,),
+                        ).fetchone()
+                        user_email = (
+                            str(cred_row["user_email"])
+                            if cred_row and cred_row["user_email"]
+                            else (fields.get("user_email", "").strip() or "ryan@zunftmax.secure.build")
+                        )
+                        acct = conn.execute(
+                            "SELECT id, speaker_name, email FROM accounts WHERE email = ?",
+                            (user_email,),
+                        ).fetchone()
+                        if acct is None:
+                            acct = conn.execute(
+                                "SELECT id, speaker_name, email FROM accounts ORDER BY id DESC LIMIT 1"
+                            ).fetchone()
+                        speaker_name = str(acct["speaker_name"]) if acct else "Ryan MacArthur"
+                        acct_email = str(acct["email"]) if acct else user_email
+                        acct_id = int(acct["id"]) if acct else 1
+                        conn.execute(
+                            "INSERT INTO logins (email, account_id, created_at) VALUES (?, ?, ?)",
+                            (acct_email, acct_id, _now_iso()),
+                        )
+                        conn.commit()
+                    sign_count_val = int(ver_res.get("sign_count") or 0)
+                    return self.send_html(
+                        200,
+                        f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>DeepSec 2026 — Speaker Dashboard</title></head>
+<body style="font-family:sans-serif;background:#0f141c;color:#e6edf3;padding:24px;">
+  <div class="card" style="max-width:560px;background:#161b22;border:2px solid #2ea043;border-radius:8px;padding:20px;">
+    <h1 id="signin-confirm">Speaker Session Authenticated</h1>
+    <p id="signin-user">Welcome back, {html.escape(speaker_name)} ({html.escape(acct_email)})</p>
+    <p id="signin-passkey-receipt">Verified via FIDO2 Passkey (ES256 P-256) • Credential: <code id="signin-cred-id">{html.escape(cred_id_val)}</code> •RP: <code id="signin-rp-id">{html.escape(rp_id)}</code> • SignCount: <span id="signin-sign-count">{sign_count_val}</span></p>
+  </div>
+</body>
+</html>""",
+                    )
+
                 email = fields.get("email", "").strip()
                 password = fields.get("password", "")
                 pw_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()

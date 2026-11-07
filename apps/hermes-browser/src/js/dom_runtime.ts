@@ -133,6 +133,9 @@
   const _set_allow_credentials = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_set_allow_credentials(
     json: c_ptr
   ): void {});
+  const _submit_form = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_submit_form(
+    node: c_size_t
+  ): void {});
 
   /* Allocate a NUL-terminated UTF-8 copy of `s`. Caller frees.
    * Supports full Unicode (1-, 2-, 3-, and 4-byte UTF-8 sequences including
@@ -574,6 +577,10 @@
       _remove_node(id);
       _mark_dirty();
     };
+    el.submit = function (): void {
+      _submit_form(id);
+      _mark_dirty();
+    };
     el.addEventListener = function (type: string, listener: any): void {
       if (!listener) return;
       let t: string = String(type);
@@ -637,6 +644,17 @@
       parentDesc.configurable = true;
       defineProp(el, "parentNode", parentDesc);
       defineProp(el, "parentElement", parentDesc);
+
+      let valueDesc: any = new ObjectCtor();
+      valueDesc.get = function (): string {
+        let v: any = el.getAttribute("value");
+        return v === null || v === undefined ? "" : String(v);
+      };
+      valueDesc.set = function (v: any): void {
+        el.setAttribute("value", String(v));
+      };
+      valueDesc.configurable = true;
+      defineProp(el, "value", valueDesc);
     }
     return el;
   }
@@ -754,12 +772,16 @@
    * method. */
   function buildCredentialResponse(json: any, isAssertion: boolean): any {
     let resp: any = new ObjectCtor();
-    let idBuf: any = b64urlToBuffer(json.credential_id || json.id || "");
+    let idStr: string = String(json.credential_id || json.id || "");
+    let idBuf: any = b64urlToBuffer(idStr);
     let clientDataBuf: any = b64urlToBuffer(json.client_data_json_b64 || "");
     let authDataBuf: any = b64urlToBuffer(json.authenticator_data_b64 || "");
+    let attObjB64: string = String(json.attestation_object_b64 || json.authenticator_data_b64 || "");
+    let attObjBuf: any = b64urlToBuffer(attObjB64);
     let sigBuf: any = b64urlToBuffer(json.signature_der_b64 || "");
     resp.id = idBuf;
     resp.rawId = idBuf;
+    resp.id_b64 = idStr;
     resp.type = "public-key";
     resp.authenticatorAttachment = "platform";
     resp.response = new ObjectCtor();
@@ -769,9 +791,20 @@
       resp.response.signature = sigBuf;
       resp.response.userHandle = null;
     } else {
-      resp.response.attestationObject = authDataBuf;
+      resp.response.attestationObject = attObjBuf;
       resp.response.clientDataJSON = clientDataBuf;
       resp.response.transports = ["internal"];
+      resp.response.getTransports = function (): any {
+        let arr: any = new ArrayCtor();
+        arr[0] = "internal";
+        return arr;
+      };
+      resp.response.getAuthenticatorData = function (): any {
+        return attObjBuf;
+      };
+      resp.response.getPublicKeyAlgorithm = function (): number {
+        return -7;
+      };
     }
     resp.getClientExtensionResults = function (): any {
       return new ObjectCtor();
@@ -780,8 +813,8 @@
      * read off the credential. */
     resp.toJSON = function (): any {
       let out: any = new ObjectCtor();
-      out.id = json.credential_id || json.id || "";
-      out.rawId = json.credential_id || json.id || "";
+      out.id = idStr;
+      out.rawId = idStr;
       out.type = "public-key";
       out.authenticatorAttachment = "platform";
       out.response = new ObjectCtor();
@@ -791,7 +824,7 @@
         out.response.signature = json.signature_der_b64 || "";
         out.response.userHandle = null;
       } else {
-        out.response.attestationObject = json.authenticator_data_b64 || "";
+        out.response.attestationObject = attObjB64;
         out.response.clientDataJSON = json.client_data_json_b64 || "";
         out.response.transports = ["internal"];
       }
@@ -841,7 +874,7 @@
           );
         }
         return new PromiseCtor(function (resolve: any, reject: any): void {
-          pendingRelatedOrigins[requestId] = { resolve: resolve, reject: reject };
+          pendingRelatedOrigins[requestId] = { resolve: resolve, reject: reject, isAssertion: false };
         });
       }
       let ceremonyId: string = String(parsed.ceremony_id || "");
@@ -849,7 +882,7 @@
         return PromiseCtor.reject(new Error("WebAuthn create: the host did not name the ceremony"));
       }
       return new PromiseCtor(function (resolve: any, reject: any): void {
-        pendingCeremonies[ceremonyId] = { resolve: resolve, reject: reject };
+        pendingCeremonies[ceremonyId] = { resolve: resolve, reject: reject, isAssertion: false };
       });
     }
     return PromiseCtor.resolve(buildCredentialResponse(parsed, false));
@@ -896,7 +929,7 @@
           );
         }
         return new PromiseCtor(function (resolve: any, reject: any): void {
-          pendingRelatedOrigins[requestId] = { resolve: resolve, reject: reject };
+          pendingRelatedOrigins[requestId] = { resolve: resolve, reject: reject, isAssertion: true };
         });
       }
       let ceremonyId: string = String(parsed.ceremony_id || "");
@@ -904,14 +937,14 @@
         return PromiseCtor.reject(new Error("WebAuthn get: the host did not name the ceremony"));
       }
       return new PromiseCtor(function (resolve: any, reject: any): void {
-        pendingCeremonies[ceremonyId] = { resolve: resolve, reject: reject };
+        pendingCeremonies[ceremonyId] = { resolve: resolve, reject: reject, isAssertion: true };
       });
     }
     return PromiseCtor.resolve(buildCredentialResponse(parsed, true));
   };
   /* Called by the host when the human has answered a pending ceremony.
-   * `ok` is true when the ceremony was approved and produced an assertion,
-   * false when it was denied or expired. */
+   * `ok` is true when the ceremony was approved and produced an assertion or
+   * registration credential, false when it was denied or expired. */
   (globalThis as any).__settleWebAuthn = function (ceremonyId: string, ok: boolean, payload: string): void {
     let entry: any = pendingCeremonies[ceremonyId];
     if (!entry) {
@@ -925,10 +958,16 @@
     }
     let parsed: any = (globalThis as any).JSON.parse(payload);
     if (!parsed || parsed.error) {
-      entry.reject(new Error((parsed && parsed.error) || "WebAuthn get failed"));
+      entry.reject(new Error((parsed && parsed.error) || "WebAuthn ceremony failed"));
       return;
     }
-    entry.resolve(buildCredentialResponse(parsed, true));
+    let isAssertion: boolean =
+      parsed.ceremony_kind === "registration"
+        ? false
+        : parsed.ceremony_kind === "assertion"
+        ? true
+        : entry.isAssertion !== false;
+    entry.resolve(buildCredentialResponse(parsed, isAssertion));
   };
   /* Called by the host when the related origins well-known fetch has answered
    * (WebAuthn Level 3 §5.11.1). `ok` is true when the relying party's own
@@ -963,9 +1002,14 @@
       entry.reject(new Error("WebAuthn: the host did not name the ceremony"));
       return;
     }
+    let isAssertion: boolean = entry.isAssertion !== false;
     entry.resolve(
       new (globalThis as any).Promise(function (innerResolve: any, innerReject: any): void {
-        pendingCeremonies[ceremonyId] = { resolve: innerResolve, reject: innerReject };
+        pendingCeremonies[ceremonyId] = {
+          resolve: innerResolve,
+          reject: innerReject,
+          isAssertion: isAssertion,
+        };
       })
     );
   };
@@ -977,6 +1021,58 @@
   navObj.credentials = credsObj;
   navObj.userAgent = "Walkaway-Hermes-Blitz/0.1";
   (globalThis as any).navigator = navObj;
+
+  /* Expose `window.PublicKeyCredential` static capabilities and JSON helpers
+   * per W3C WebAuthn Level 3 so relying parties can feature-detect platform
+   * passkey support and parse JSON options. */
+  let pkCredCtor: any = function PublicKeyCredential(): void {};
+  pkCredCtor.isUserVerifyingPlatformAuthenticatorAvailable = function (): any {
+    return (globalThis as any).Promise.resolve(true);
+  };
+  pkCredCtor.isConditionalMediationAvailable = function (): any {
+    return (globalThis as any).Promise.resolve(true);
+  };
+  pkCredCtor.getClientCapabilities = function (): any {
+    let caps: any = new ObjectCtor();
+    caps.conditionalCreate = true;
+    caps.conditionalGet = true;
+    caps.hybridTransport = false;
+    caps.passkeyPlatformAuthenticator = true;
+    caps.userVerifyingPlatformAuthenticator = true;
+    caps.relatedOrigins = true;
+    return (globalThis as any).Promise.resolve(caps);
+  };
+  pkCredCtor.parseCreationOptionsFromJSON = function (optionsJSON: any): any {
+    let out: any = new ObjectCtor();
+    out.rp = (optionsJSON && optionsJSON.rp) || new ObjectCtor();
+    out.user = new ObjectCtor();
+    if (optionsJSON && optionsJSON.user) {
+      out.user.id = b64urlToBuffer(String(optionsJSON.user.id || ""));
+      out.user.name = optionsJSON.user.name || "";
+      out.user.displayName = optionsJSON.user.displayName || optionsJSON.user.name || "";
+    }
+    out.challenge = b64urlToBuffer(String((optionsJSON && optionsJSON.challenge) || ""));
+    out.pubKeyCredParams = (optionsJSON && optionsJSON.pubKeyCredParams) || new ArrayCtor();
+    return out;
+  };
+  pkCredCtor.parseRequestOptionsFromJSON = function (optionsJSON: any): any {
+    let out: any = new ObjectCtor();
+    out.challenge = b64urlToBuffer(String((optionsJSON && optionsJSON.challenge) || ""));
+    out.rpId = (optionsJSON && optionsJSON.rpId) || "";
+    out.allowCredentials = (optionsJSON && optionsJSON.allowCredentials) || new ArrayCtor();
+    out.userVerification = (optionsJSON && optionsJSON.userVerification) || "preferred";
+    return out;
+  };
+  pkCredCtor.signalUnknownCredential = function (_opts: any): any {
+    return (globalThis as any).Promise.resolve(undefined);
+  };
+  pkCredCtor.signalAllAcceptedCredentials = function (_opts: any): any {
+    return (globalThis as any).Promise.resolve(undefined);
+  };
+  pkCredCtor.signalCurrentUserDetails = function (_opts: any): any {
+    return (globalThis as any).Promise.resolve(undefined);
+  };
+  (globalThis as any).PublicKeyCredential = pkCredCtor;
 
   (globalThis as any).__registerClickHandler = function (id: string, fn: any): void {
     let nid: c_size_t = getElementById(id);

@@ -1320,6 +1320,9 @@ impl BrowserApp {
                 last_seq: None,
             },
         );
+        if role == Role::Host && self.passkey_prompt.is_some() {
+            self.announce_page_passkey_on_glasses();
+        }
     }
 
     fn control_disconnect(&mut self, conn_id: u64) {
@@ -3335,6 +3338,9 @@ impl BrowserApp {
                     tab.instance.page.ctx.dirty = false;
                 }
                 tab.bump_generation();
+                if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
+                    self.submit_page_form(form_node);
+                }
             }
             PageCommand::Type {
                 target_id,
@@ -3964,8 +3970,19 @@ impl BrowserApp {
                 .cloned()
         };
         let Some(pending) = pending else {
+            if self.passkey_prompt.take().is_some() {
+                self.sync_chrome();
+                self.request_redraw();
+            }
             return;
         };
+        if self
+            .passkey_prompt
+            .as_ref()
+            .is_some_and(|current| current.ceremony_id == pending.ceremony_id)
+        {
+            return;
+        }
         self.passkey_prompt = Some(pending);
         self.announce_page_passkey_on_glasses();
         self.sync_chrome();
@@ -4004,6 +4021,10 @@ impl BrowserApp {
             .as_ref()
             .map(|session| session.id.clone())
             .unwrap_or_default();
+        let op_kind = match pending.kind {
+            dom_ffi::PageCeremonyKind::Registration => "passkey.page_register",
+            dom_ffi::PageCeremonyKind::Assertion => "passkey.page_assert",
+        };
         let frame = json!({
             "v": 1,
             "type": "proposal.pending",
@@ -4011,7 +4032,7 @@ impl BrowserApp {
             "proposal_id": format!("page-passkey-{}", pending.ceremony_id),
             "surface": "page",
             "operation": {
-                "kind": "passkey.page_assert",
+                "kind": op_kind,
                 "rp_id": pending.rp_id,
                 "origin": pending.origin,
                 "account_hint": pending.account_hint,
@@ -4060,6 +4081,12 @@ impl BrowserApp {
                 hermes_app_eval_script(hermes, code.as_ptr(), c"<passkey-decision>".as_ptr());
             }
         }
+        if self.tab().instance.page.ctx.dirty {
+            let tab = self.tab_mut();
+            tab.instance.page.resolve();
+            tab.instance.page.ctx.dirty = false;
+            tab.bump_generation();
+        }
 
         // Cancel the ceremony in the broker, so a decision that arrived after
         // the deadline cannot still produce a signature.
@@ -4067,9 +4094,40 @@ impl BrowserApp {
         {
             let mut broker = self.passkey_broker.borrow_mut();
             let _ = broker.cancel_assertion(ceremony_id.clone());
+            let _ = broker.cancel_registration(ceremony_id.clone());
         }
 
+        let proposal_id = format!("page-passkey-{}", ceremony.ceremony_id);
+        let op_kind = match ceremony.kind {
+            dom_ffi::PageCeremonyKind::Registration => "passkey.page_register",
+            dom_ffi::PageCeremonyKind::Assertion => "passkey.page_assert",
+        };
+        let receipt = match &result {
+            Ok(_) => json!({
+                "v": 1,
+                "type": "executed",
+                "proposal_id": proposal_id,
+                "operation": op_kind,
+                "operation_detail": {
+                    "ceremony_id": ceremony.ceremony_id,
+                    "rp_id": ceremony.rp_id,
+                    "origin": ceremony.origin,
+                },
+            }),
+            Err(reason) => json!({
+                "v": 1,
+                "type": "proposal.invalidated",
+                "proposal_id": proposal_id,
+                "reason": reason,
+            }),
+        };
+        self.emit(OutTarget::Host, receipt);
+        self.flush_control_out();
+
         self.passkey_prompt = None;
+        if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
+            self.submit_page_form(form_node);
+        }
         self.sync_chrome();
         self.request_redraw();
     }
@@ -4117,6 +4175,8 @@ impl BrowserApp {
                 credentials::CeremonyOutcome::Assertion(credential),
             )) => {
                 let json = serde_json::json!({
+                    "ceremony_kind": "assertion",
+                    "credential_id": credential.id,
                     "id": credential.id,
                     "rawId": credential.raw_id,
                     "type": credential.kind,
@@ -4132,12 +4192,15 @@ impl BrowserApp {
                 credentials::CeremonyOutcome::Registration(credential),
             )) => {
                 let json = serde_json::json!({
+                    "ceremony_kind": "registration",
+                    "credential_id": credential.id,
                     "id": credential.id,
                     "rawId": credential.raw_id,
                     "type": credential.kind,
                     "authenticatorAttachment": "platform",
                     "rpId": pending.rp_id,
                     "client_data_json_b64": credential.response.client_data_json,
+                    "attestation_object_b64": credential.response.attestation_object,
                     "authenticator_data_b64": credential.response.attestation_object,
                 });
                 self.finish_page_passkey_ceremony(&pending, Ok(json.to_string()));
@@ -5267,6 +5330,10 @@ impl BrowserApp {
             tab.instance.page.resolve();
             tab.instance.page.ctx.dirty = false;
             tab.bump_generation();
+        }
+        if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
+            self.submit_page_form(form_node);
+            return;
         }
 
         if let Some((control_id, tag, input_type, clicked_option_id)) =
@@ -8372,7 +8439,9 @@ fn passkeyinterstitialtest() -> i32 {
             challenge: new Uint8Array([1, 2, 3, 4])
           }
         }).then(function(cred) {
-          window.__result = "created:" + String(cred.id.byteLength);
+          var hasPk = typeof window.PublicKeyCredential === "function";
+          var attLen = cred.response && cred.response.attestationObject ? cred.response.attestationObject.byteLength : 0;
+          window.__result = "created:" + String(cred.id.byteLength) + ":att:" + String(attLen) + ":pk:" + String(hasPk);
           document.getElementById("box-host").setAttribute("data-result", window.__result);
           return navigator.credentials.get({
             publicKey: { rpId: "example.com", challenge: new Uint8Array([5, 6, 7, 8]) }
@@ -8482,8 +8551,8 @@ fn passkeyinterstitialtest() -> i32 {
     );
     let result = page_result(&app);
     check(
-        result.starts_with("created:"),
-        &format!("Allow registers the credential the page asked for ({result})"),
+        result.starts_with("created:") && result.contains(":pk:true") && !result.contains(":att:0:"),
+        &format!("Allow registers the credential with attestationObject and PublicKeyCredential ({result})"),
     );
     // The registration succeeded, so the page now asks for an assertion.
     // That is a second ceremony, and it needs a second answer.

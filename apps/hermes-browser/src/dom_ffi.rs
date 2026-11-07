@@ -73,6 +73,8 @@ pub struct BlitzHostContext {
     pub related_origins_in_flight: std::collections::HashSet<String>,
     /// The counter that names the next parked related-origins request.
     pub next_related_origins_id: u64,
+    /// A `<form>` element (or submitter) that page JS requested to submit via `form.submit()`.
+    pub pending_form_submit: Option<NodeId>,
 }
 
 /// What kind of ceremony a page started.
@@ -186,6 +188,7 @@ impl BlitzHostContext {
             pending_related_origins: std::collections::HashMap::new(),
             related_origins_in_flight: std::collections::HashSet::new(),
             next_related_origins_id: 1,
+            pending_form_submit: None,
         }
     }
 
@@ -1426,6 +1429,17 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(ctx: *mut c_void, rp_id: *const 
     let allow = ctx.allow_credentials.clone();
     let payload = begin_page_assertion(ctx, &origin, &effective_rp, &challenge, allow, false);
     write_json(ctx, &payload)
+}
+
+/// Request the host to submit a `<form>` element (or the form enclosing `node`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_submit_form(ctx: *mut c_void, node: u64) {
+    if let Some(ctx) = unsafe { as_ctx(ctx) } {
+        if node != 0 {
+            ctx.pending_form_submit = Some(NodeId::from_u64(node));
+            ctx.dirty = true;
+        }
+    }
 }
 
 /// Mark the document damaged without mutating it.

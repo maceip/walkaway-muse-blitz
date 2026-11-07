@@ -56,6 +56,9 @@ int blitz_scratch_bytes_get(size_t index);
 /* The credentials the relying party named in allowCredentials, as JSON. */
 void blitz_set_allow_credentials(const char *json);
 
+/* Request the host to submit a <form> element (or the form enclosing `node`). */
+void blitz_submit_form(uint64_t node);
+
 /* Mark the document as damaged so the host re-resolves layout and repaints. */
 void blitz_mark_dirty(void);
 

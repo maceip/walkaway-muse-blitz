@@ -157,7 +157,12 @@ def format_card(binding):
     """Domain-first card text within DAT limits (title <=80, body <=160)."""
     domain = binding.get("domain") or ""
     kind = binding.get("operation_kind") or "act"
-    title = f"{domain}: {kind}" if domain else f"Approve {kind}"
+    if kind == "passkey.page_register":
+        title = f"{domain}: Register Passkey" if domain else "Register Passkey"
+    elif kind == "passkey.page_assert":
+        title = f"{domain}: Passkey Sign-In" if domain else "Passkey Sign-In"
+    else:
+        title = f"{domain}: {kind}" if domain else f"Approve {kind}"
     return title[:80], str(binding.get("rationale") or "Approve action")[:160]
 
 

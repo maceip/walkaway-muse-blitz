@@ -593,13 +593,73 @@ class PagePasskeyGlassesE2ETest(unittest.TestCase):
                     h.bus_ack(card["id"], "approve", "glasses_dat")
                     time.sleep(1.6)
                     decided_after = [d for d in h.decisions()
-                                     if str(d.get("proposal_id", "")).startswith("page-passkey-")]
+                                     if str(d.get("proposal_id", "")).startswith("page-passkey-")
+                                     and d.get("via") == "glasses_dat"]
                     self.assertEqual(len(decided_after), 1,
                                      "a replayed glasses tap must not decide twice")
                 finally:
                     h.stop()
         finally:
             page_server.stop()
+
+    def test_full_signup_fixture_webauthn_register_and_assert_on_glasses(self):
+        self.assertTrue(HERMES_BIN.exists())
+        with tempfile.TemporaryDirectory(prefix="walkaway-webauthn-full-") as tmp:
+            h = Harness(self, tmp, hermes_count=1, card_mode="immediate",
+                        allow_android=False)
+            try:
+                agent = h.agent(0)
+                session = h.session_id(0)
+
+                # Navigate to /signin?auto_passkey=register -> page runs navigator.credentials.create()
+                # -> glasses card -> glasses approve -> form.submit() POSTs attestationObject to /signin
+                # -> signup_fixture extracts P-256 public key from CBOR attestationObject and stores in DB!
+                snap = observe_until(agent, session, "speaker_name", "w-init")
+                propose(agent, session, snap, "w-nav-reg",
+                        {"kind": "navigate", "url": f"{h.origin}/signin?auto_passkey=register"},
+                        "Navigate to /signin to register hardware passkey")
+                wait_until(lambda: h.receipts("w-nav-reg"))
+
+                reg_card = wait_card(h, 0)
+                self.assertEqual(reg_card.get("kind"), "passkey")
+                self.assertIn("Register Passkey", reg_card.get("title", ""))
+                h.bus_ack(reg_card["id"], "approve", "glasses_dat")
+
+                def _cred_stored():
+                    with sqlite3.connect(h.db) as c:
+                        row = c.execute("SELECT credential_id, public_key_pem FROM webauthn_credentials").fetchone()
+                        return row if row and "BEGIN PUBLIC KEY" in row[1] else None
+
+                cred_row = wait_until(_cred_stored)
+                self.assertTrue(cred_row[0])
+
+                # Navigate to /signin?auto_passkey=assert -> page runs navigator.credentials.get()
+                # -> glasses card -> glasses approve -> form.submit() POSTs signed assertion to /signin
+                # -> signup_fixture verifies ECDSA P-256 signature via openssl and authenticates session!
+                snap2 = observe_until(agent, session, "email", "w-reg-done")
+                propose(agent, session, snap2, "w-nav-assert",
+                        {"kind": "navigate", "url": f"{h.origin}/signin?auto_passkey=assert"},
+                        "Navigate to /signin to sign in with hardware passkey")
+                wait_until(lambda: h.receipts("w-nav-assert"))
+
+                assert_card = wait_card(h, reg_card["id"])
+                self.assertEqual(assert_card.get("kind"), "passkey")
+                self.assertIn("Passkey Sign-In", assert_card.get("title", ""))
+                h.bus_ack(assert_card["id"], "approve", "glasses_dat")
+
+                def _assertion_verified():
+                    with sqlite3.connect(h.db) as c:
+                        a = c.execute("SELECT credential_id, verified, sign_count FROM webauthn_assertions WHERE verified = 1").fetchone()
+                        l = c.execute("SELECT COUNT(*) FROM logins").fetchone()[0]
+                        return (a, l) if a and l >= 1 else None
+
+                verified_row, login_count = wait_until(_assertion_verified)
+                self.assertEqual(verified_row[0], cred_row[0])
+                self.assertEqual(verified_row[1], 1)
+                self.assertGreaterEqual(verified_row[2], 1)
+                self.assertEqual(login_count, 1)
+            finally:
+                h.stop()
 
 
 if __name__ == "__main__":
