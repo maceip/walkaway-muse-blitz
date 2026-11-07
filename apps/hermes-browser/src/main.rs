@@ -6327,14 +6327,48 @@ fn runtimetest() -> i32 {
             challenge: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])
           }
         }).then(function(cred) {
+          host.setAttribute("data-webauthn-step", "created");
           host.setAttribute("data-webauthn-id", String(cred.id.byteLength));
+          /* The relying party may name the credential it accepts. The
+           * authenticator must then use exactly that credential, not a
+           * discovered one. */
           return navigator.credentials.get({
-            publicKey: { rpId: "example.com", challenge: new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2]) }
+            publicKey: {
+              rpId: "example.com",
+              challenge: new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2]),
+              allowCredentials: [{ type: "public-key", id: cred.rawId }]
+            }
           });
         }).then(function(assertion) {
+          host.setAttribute("data-webauthn-step", "asserted");
           host.setAttribute("data-webauthn-sig-len", String(assertion.response.signature.byteLength));
+          /* A credential the relying party did not name must not be used.
+           * The authenticator may not silently fall back to discovering some
+           * other credential; the ceremony has to fail. */
+          return navigator.credentials.get({
+            publicKey: {
+              rpId: "example.com",
+              challenge: new Uint8Array([5, 5, 5, 5]),
+              allowCredentials: [{ type: "public-key", id: new Uint8Array([0xde, 0xad, 0xbe, 0xef]) }]
+            }
+          }).then(function(unexpected) {
+            host.setAttribute("data-webauthn-allow-unexpected", "resolved");
+          }, function(err) {
+            host.setAttribute("data-webauthn-allow-rejected", "yes");
+            host.setAttribute("data-webauthn-allow-error", String(err && err.message ? err.message : err));
+          });
+        }).then(function() {
+          /* With no allowCredentials the authenticator discovers the
+           * credential itself, which is how autofill works. */
+          return navigator.credentials.get({
+            publicKey: { rpId: "example.com", challenge: new Uint8Array([4, 3, 2, 1]) }
+          });
+        }).then(function(discovered) {
+          host.setAttribute("data-webauthn-step", "discovered");
+          host.setAttribute("data-webauthn-discovered-len", String(discovered.response.signature.byteLength));
         }).catch(function(err) {
           host.setAttribute("data-webauthn-error", String(err && err.message ? err.message : err));
+          host.setAttribute("data-webauthn-stack", String(err && err.stack ? err.stack : "no stack"));
         });
       </script>
     </body>
@@ -6430,6 +6464,18 @@ fn runtimetest() -> i32 {
         .and_then(|n| n.attr(LocalName::from("data-webauthn-error")))
         .unwrap_or_default()
         .to_string();
+    let webauthn_stack: String = dom_page
+        .doc()
+        .get_element_by_id("box-host")
+        .and_then(|id| dom_page.doc().get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-webauthn-stack")))
+        .unwrap_or_default()
+        .to_string();
+    let webauthn_stack_suffix: String = if webauthn_stack.trim().is_empty() {
+        String::new()
+    } else {
+        format!("; stack: {webauthn_stack}")
+    };
     check(
         !webauthn_id.is_empty() && webauthn_sig_len >= 64,
         &format!(
@@ -6437,7 +6483,56 @@ fn runtimetest() -> i32 {
             if webauthn_error.is_empty() {
                 String::new()
             } else {
+                format!(" (page reported: {webauthn_error}{webauthn_stack_suffix})")
+            }
+        ),
+    );
+    // With no `allowCredentials` the authenticator discovers the credential
+    // for the relying party itself, which is what autofill and conditional
+    // mediation need.
+    let webauthn_discovered_len: usize = dom_page
+        .doc()
+        .get_element_by_id("box-host")
+        .and_then(|id| dom_page.doc().get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-webauthn-discovered-len")))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    check(
+        webauthn_discovered_len >= 64,
+        &format!(
+            "navigator.credentials.get() without allowCredentials discovers the relying party's credential{}",
+            if webauthn_error.is_empty() {
+                String::new()
+            } else {
                 format!(" (page reported: {webauthn_error})")
+            }
+        ),
+    );
+    // A credential the relying party did not name must not be used. The
+    // authenticator may not silently fall back to discovering some other
+    // credential of the same relying party.
+    let webauthn_allow_rejected: String = dom_page
+        .doc()
+        .get_element_by_id("box-host")
+        .and_then(|id| dom_page.doc().get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-webauthn-allow-rejected")))
+        .unwrap_or_default()
+        .to_string();
+    let webauthn_allow_unexpected: String = dom_page
+        .doc()
+        .get_element_by_id("box-host")
+        .and_then(|id| dom_page.doc().get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-webauthn-allow-unexpected")))
+        .unwrap_or_default()
+        .to_string();
+    check(
+        webauthn_allow_rejected == "yes" && webauthn_allow_unexpected.is_empty(),
+        &format!(
+            "navigator.credentials.get() rejects a credential outside allowCredentials instead of using another one{}",
+            if webauthn_allow_unexpected.is_empty() {
+                String::new()
+            } else {
+                format!(" (the page saw the ceremony resolve: {webauthn_allow_unexpected})")
             }
         ),
     );

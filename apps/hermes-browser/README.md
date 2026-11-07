@@ -68,7 +68,7 @@ arrive.
 | Docked width | `--render out.png --dark --menu --size 560x760` | Chrome fits the ~560px desktop panel without overflow |
 | Static Hermes embed | `_sh_init` → unit → JSI call | Verified |
 | Passkey end-to-end | `--passkeytest` | PASS — 12 assertions: real registration and assertion ceremonies, macOS Keychain storage, the demo fixture's independent `openssl` verifier accepts the assertion and rejects replay / unknown credential / mismatched challenge |
-| Credential + passkey unit suite | `cargo test --release` | PASS — 71 assertions, including 11 against the real login keychain |
+| Credential + passkey unit suite | `cargo test --release` | PASS — 74 assertions, including 11 against the real login keychain |
 | Keychain cleanup | `--keychain-cleanup` | Removes the Keychain items earlier test runs left behind and reports what it could not remove; confirms first that keychain user interaction is disabled, so it cannot ask for a password |
 
 The click path was verified by rendering before/after through the real paint
@@ -274,6 +274,15 @@ A WebAuthn assertion is never a DOM fill. `fill_form` fills a password and
 nothing else: it will not sign an assertion and write it into a form field.
 A passkey assertion comes from the broker, in Rust, against the Keychain,
 behind the human approval gate.
+
+A site's own `navigator.credentials.create()` / `.get()` calls reach that same
+broker, so there is one WebAuthn implementation rather than two. The page
+never signs anything: the ceremony runs host-side in Rust, the challenge
+crosses as raw bytes, and the origin the ceremony is bound to is the origin
+the document was actually served from, not one the page gets to choose. An
+`allowCredentials` list selects exactly the credential the relying party
+named, and a ceremony naming a credential that does not exist fails instead of
+falling back to some other credential of the same site.
 
 Remote JavaScript remains unimplemented and is reported as an unsupported
 capability. An unimplemented protocol in the tree is worse than a written one,

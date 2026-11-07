@@ -46,6 +46,7 @@ int blitz_dom_webauthn_get(void *ctx, const char *rp_id);
 int blitz_dom_write_scratch_bytes(void *ctx, const uint8_t *bytes, size_t len);
 int blitz_dom_scratch_bytes_len(void *ctx);
 int blitz_dom_scratch_bytes_get(void *ctx, size_t index);
+void blitz_dom_set_allow_credentials(void *ctx, const char *json);
 void blitz_dom_mark_dirty(void *ctx);
 }
 
@@ -181,6 +182,11 @@ extern "C" int blitz_scratch_bytes_len(void) {
 extern "C" int blitz_scratch_bytes_get(size_t index) {
   if (!g_app) return -1;
   return blitz_dom_scratch_bytes_get(g_app->blitz_ctx, index);
+}
+
+extern "C" void blitz_set_allow_credentials(const char *json) {
+  if (!g_app) return;
+  blitz_dom_set_allow_credentials(g_app->blitz_ctx, json);
 }
 
 extern "C" void blitz_mark_dirty(void) {

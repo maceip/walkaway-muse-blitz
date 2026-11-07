@@ -1054,13 +1054,34 @@ fill fills a password and nothing else. The `--supervisortest` passkey checks
 now drive the broker rather than the legacy vault signer, so the supervisor
 suite exercises the implementation that ships.
 
-The page-facing `navigator.credentials` path is still separate work and is
-recorded as open in `docs/STATUS.md`. A site's `navigator.credentials.get()`
-must end at the broker — real ceremony, RP-ID binding, Keychain, human
-approval — and not at the legacy file-based vault. The broker already does
-RP-ID binding and resident keys; what the page path still lacks is credential
-*discovery*, without which the conditional-mediation (autofill) passkey UX
-that real sites depend on cannot work.
+**Landed 2026-11-06 (third pass).** The page-facing `navigator.credentials`
+path now ends at the broker. A site's `navigator.credentials.create()` and
+`.get()` run the real ceremony — Keychain-backed, RP-ID bound to the origin
+the document was actually served from, behind the human approval gate — and
+the legacy file-based vault signer is deleted, so there is exactly one
+WebAuthn implementation in the tree.
+
+The ceremony is *not* simulated in page JS, and the page never signs
+anything: the page hands the broker the challenge bytes and receives the
+finished assertion. The challenge crosses as raw bytes over a binary scratch
+buffer, because string-encoding it corrupts binary challenges. The origin is
+taken from the document, not from the page, and an RP ID that is not the
+origin's host or a parent of it is rejected.
+
+Credential *discovery* works: `navigator.credentials.get()` with an
+`allowCredentials` list uses exactly the credential the relying party named,
+and with no list it discovers the relying party's resident credential, which
+is what autofill and conditional mediation need. A ceremony that names a
+credential which does not exist fails; it never falls back to some other
+credential of the same relying party.
+
+The browser exposing `navigator.credentials` is not the same as simulating the
+ceremony in page JS, and only the latter is forbidden.
+
+What remains an open design decision is the **approval UX** for a
+page-initiated ceremony: how the host surfaces such a ceremony to the human
+is not yet settled. That does not affect the correctness of the ceremony
+itself, which runs through the same gate as every other broker request.
 
 The boundary is explicit: this is a **software authenticator**. The macOS
 platform authenticator (Secure Enclave) and hardware security keys are still

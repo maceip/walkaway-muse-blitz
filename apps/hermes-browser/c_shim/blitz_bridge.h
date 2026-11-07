@@ -53,6 +53,9 @@ int blitz_write_scratch_bytes(const uint8_t *bytes, size_t len);
 int blitz_scratch_bytes_len(void);
 int blitz_scratch_bytes_get(size_t index);
 
+/* The credentials the relying party named in allowCredentials, as JSON. */
+void blitz_set_allow_credentials(const char *json);
+
 /* Mark the document as damaged so the host re-resolves layout and repaints. */
 void blitz_mark_dirty(void);
 

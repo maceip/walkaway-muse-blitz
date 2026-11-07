@@ -108,6 +108,48 @@ hop works across devices.
   did not happen. Removing such an item needs a one-time approval in Keychain
   Access.
 
+### T-HERMES-PAGE-WEBAUTHN-BROKER
+
+- Command: `./target/release/hermes-blitz-browser --runtimetest` from
+  `apps/hermes-browser/` (the WebAuthn checks in that suite), plus
+  `cargo test --release credentials::tests` for the broker-level tests.
+- Real components: the AOT-compiled Static Hermes runtime
+  (`apps/hermes-browser/src/js/dom_runtime.ts`), the C bridge
+  (`c_shim/hermes_shim.cpp` + `c_shim/blitz_bridge.h`), the Rust host bindings
+  (`apps/hermes-browser/src/dom_ffi.rs`), the passkey broker
+  (`apps/hermes-browser/src/credentials.rs`), the WebAuthn authenticator
+  (`apps/hermes-browser/src/webauthn/authenticator.rs`), and the macOS Keychain
+  (`apps/hermes-browser/src/keychain.rs`). No mock and no stub stands in for
+  any of them.
+- Asserts: a page calling `navigator.credentials.create()` runs a real P-256
+  registration ceremony against the Keychain-backed broker and gets back a
+  credential with real `id`/`rawId`/`authenticatorData`/`clientDataJSON`/
+  `signature` buffers; a page calling `navigator.credentials.get()` with an
+  `allowCredentials` list gets an assertion for the credential it named; a page
+  calling `navigator.credentials.get()` with no list discovers the relying
+  party's resident credential, which is what autofill and conditional mediation
+  need; and a page naming a credential outside the list has its ceremony
+  **rejected**, so the authenticator cannot silently substitute a different
+  credential of the same relying party.
+- Last observed: **PASS** 2026-11-06 23:0x PT — `--runtimetest` reports all
+  three page-path checks ok and `cargo test --release` is 74/74.
+- Note: the negative check is a real regression test, not a restatement of
+  intent. With the authenticator's allow-list condition reduced to the
+  relying-party match alone, the check fails with "the page saw the ceremony
+  resolve"; it passes only when the credential must be one the relying party
+  named.
+- Note: the broker-level test `an_allow_list_selects_exactly_the_named_credential`
+  registers **two** credentials for one relying party, because with only one
+  credential "used the named one" and "used some credential of this relying
+  party" are indistinguishable and a broken implementation would pass by
+  accident.
+- Note: the runtime's binary buffers have sharp edges that the implementation
+  has to respect. An array *literal* in this AOT Hermes is sealed — it has no
+  `push` and takes no new index properties — so code that builds a list must use
+  the `Array` constructor. A bare `ArrayBuffer` is not indexable, so copying
+  its bytes one index at a time yields zeros; it must be wrapped in a
+  `Uint8Array` view first.
+
 ### T-HERMES-SOCKET-E2E
 - Command: `python3 /tmp/socket_e2e.py` against the real Hermes GUI process.
 - Real components: Unix socket, host/agent token roles, session, observe,

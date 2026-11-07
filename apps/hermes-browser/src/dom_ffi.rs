@@ -40,6 +40,25 @@ pub struct BlitzHostContext {
     /// `rpId` would make the binding meaningless, so the host states the real
     /// origin here and the authenticator checks it.
     pub origin: String,
+    /// The credentials the relying party named in `allowCredentials`.
+    ///
+    /// When a relying party names the credentials it accepts, the
+    /// authenticator must use exactly those. When it names none, the
+    /// authenticator discovers the credential itself.
+    pub allow_credentials: Vec<AllowCredential>,
+}
+
+/// A credential the relying party named in `allowCredentials`.
+#[derive(Clone, Debug, Default)]
+pub struct AllowCredential {
+    /// The credential id, base64url.
+    pub id: Option<String>,
+    /// The transports the relying party supports.
+    pub transports: Vec<String>,
+    /// Whether the credential must be discoverable.
+    pub rk: Option<bool>,
+    /// The credential type.
+    pub kind: String,
 }
 
 impl BlitzHostContext {
@@ -51,6 +70,7 @@ impl BlitzHostContext {
             scratch_utf8: Vec::new(),
             scratch_bytes: Vec::new(),
             origin: String::new(),
+            allow_credentials: Vec::new(),
         }
     }
 
@@ -733,6 +753,56 @@ pub unsafe extern "C" fn blitz_dom_scratch_bytes_get(ctx: *mut c_void, index: us
     }
 }
 
+/// Sets the credentials the relying party named in `allowCredentials`.
+///
+/// The list arrives as JSON, because the page sends credential descriptors,
+/// not a flat byte array. An empty list means the relying party named none,
+/// and the authenticator discovers the credential itself.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_set_allow_credentials(ctx: *mut c_void, json: *const c_char) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    let raw = unsafe { as_str(json) };
+    if raw.trim().is_empty() {
+        ctx.allow_credentials.clear();
+        return;
+    }
+    let parsed: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(_) => {
+            ctx.allow_credentials.clear();
+            return;
+        }
+    };
+    let Some(items) = parsed.as_array() else {
+        ctx.allow_credentials.clear();
+        return;
+    };
+    ctx.allow_credentials = items
+        .iter()
+        .map(|item| AllowCredential {
+            id: item.get("id").and_then(serde_json::Value::as_str).map(str::to_string),
+            transports: item
+                .get("transports")
+                .and_then(serde_json::Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            rk: item.get("rk").and_then(serde_json::Value::as_bool),
+            kind: item
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("public-key")
+                .to_string(),
+        })
+        .collect();
+}
+
 /// `node.getBoundingClientRect()` field accessor (0=x, 1=y, 2=width, 3=height).
 /// Re-resolves Stylo/Taffy layout synchronously if the DOM has pending mutations.
 #[unsafe(no_mangle)]
@@ -928,13 +998,34 @@ pub unsafe extern "C" fn blitz_dom_webauthn_get(
         CeremonyOutcome, LocalPasskeyBroker, PasskeyBroker, PasskeyRequest, PasskeyStatus,
     };
 
+    // The relying party may name the credentials it accepts. When it does,
+    // the authenticator must use exactly those; when it does not, the
+    // authenticator discovers the credential itself, which is how autofill
+    // and conditional mediation work.
+    let allow_credentials = ctx
+        .allow_credentials
+        .clone()
+        .into_iter()
+        .filter_map(|raw| {
+            let id = raw.id?;
+            let bytes = crate::webauthn::b64::b64url_decode(&id)
+                .or_else(|| crate::control::b64_decode(&id))?;
+            Some(crate::webauthn::types::PublicKeyCredentialDescriptor {
+                id: bytes,
+                transports: raw.transports,
+                rk: raw.rk,
+                kind: if raw.kind.is_empty() { "public-key".to_string() } else { raw.kind },
+            })
+        })
+        .collect();
+
     let mut broker = LocalPasskeyBroker::new();
     let request = PasskeyRequest {
         task_id: "page-webauthn-get".to_string(),
         origin: origin.clone(),
         rp_id: requested_rp,
         challenge: challenge.clone(),
-        allow_credentials: Vec::new(),
+        allow_credentials,
         user_verification: None,
         extensions: None,
         cross_origin: false,

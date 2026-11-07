@@ -243,6 +243,14 @@ pub fn b64_encode(bytes: &[u8]) -> String {
     out
 }
 
+/// Decodes standard base64 (`+/`), with or without `=` padding.
+///
+/// The final group carries fewer than four characters when the input is
+/// unpadded, and then it encodes fewer than three bytes: a group of three
+/// characters holds two bytes, and a group of two characters holds one. The
+/// count has to come from the group's actual length. Counting only explicit
+/// `=` padding would decode an unpadded 43-character string as 33 bytes
+/// instead of 32, silently appending a byte and corrupting the payload.
 pub fn b64_decode(text: &str) -> Option<Vec<u8>> {
     let mut values = Vec::with_capacity(text.len());
     for ch in text.bytes() {
@@ -257,23 +265,76 @@ pub fn b64_decode(text: &str) -> Option<Vec<u8>> {
             _ => return None,
         });
     }
-    let mut out = Vec::new();
+    // Explicit padding is a terminator, not data.
+    while values.last() == Some(&64) {
+        values.pop();
+    }
+    let mut out = Vec::with_capacity(values.len() / 4 * 3);
     for chunk in values.chunks(4) {
         if chunk.len() < 2 {
             return None;
         }
-        let pad = chunk.iter().filter(|v| **v == 64).count();
         let n = ((chunk[0] as u32) << 18)
             | ((chunk[1] as u32) << 12)
             | ((*chunk.get(2).unwrap_or(&0) as u32) << 6)
             | (*chunk.get(3).unwrap_or(&0) as u32);
         out.push((n >> 16) as u8);
-        if pad < 2 {
+        if chunk.len() > 2 {
             out.push((n >> 8) as u8);
         }
-        if pad < 1 {
+        if chunk.len() > 3 {
             out.push(n as u8);
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn b64_round_trips_arbitrary_bytes() {
+        for len in 0..64usize {
+            let bytes: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
+            let encoded = b64_encode(&bytes);
+            assert_eq!(
+                b64_decode(&encoded),
+                Some(bytes.clone()),
+                "length {len} did not round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn b64_decodes_unpadded_input_to_the_right_number_of_bytes() {
+        // 32 bytes is 43 base64 characters. The final group holds three
+        // characters, which carry two bytes, not three. Decoding it as three
+        // bytes would append a spurious byte and corrupt the payload.
+        let bytes: Vec<u8> = (0..32u8).collect();
+        let encoded = b64_encode(&bytes);
+        assert_eq!(encoded.len(), 44);
+        let unpadded = encoded.trim_end_matches('=');
+        assert_eq!(unpadded.len(), 43);
+        assert_eq!(
+            b64_decode(unpadded),
+            Some(bytes),
+            "an unpadded 43-character string must decode to 32 bytes"
+        );
+    }
+
+    #[test]
+    fn b64_decodes_a_two_character_final_group_to_one_byte() {
+        // "QQ" is one byte. "QUJD" is three bytes; "QUI" is two.
+        assert_eq!(b64_decode("QQ"), Some(vec![0x41]));
+        assert_eq!(b64_decode("QUI"), Some(vec![0x41, 0x42]));
+        assert_eq!(b64_decode("QUJD"), Some(vec![0x41, 0x42, 0x43]));
+    }
+
+    #[test]
+    fn b64_accepts_explicit_padding() {
+        assert_eq!(b64_decode("QQ=="), Some(vec![0x41]));
+        assert_eq!(b64_decode("QUI="), Some(vec![0x41, 0x42]));
+        assert_eq!(b64_decode("QUJD"), Some(vec![0x41, 0x42, 0x43]));
+    }
 }

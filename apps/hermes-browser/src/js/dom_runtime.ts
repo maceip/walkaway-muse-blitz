@@ -130,6 +130,9 @@
   ): c_int {
     throw 0;
   });
+  const _set_allow_credentials = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_set_allow_credentials(
+    json: c_ptr
+  ): void {});
 
   /* Allocate a NUL-terminated UTF-8 copy of `s`. Caller frees.
    * Supports full Unicode (1-, 2-, 3-, and 4-byte UTF-8 sequences including
@@ -276,6 +279,69 @@
       out[i] = _scratch_bytes_get(i) & 0xff;
     }
     return out;
+  }
+
+  /* Encode bytes as base64url, the form a credential id travels in. */
+  function bytesToB64url(bytes: any): string {
+    let alphabet: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let out: string = "";
+    let acc: number = 0;
+    let bits: number = 0;
+    for (let i: number = 0; i < bytes.length; i = i + 1) {
+      acc = (acc << 8) | (bytes[i] & 0xff);
+      bits = bits + 8;
+      while (bits >= 6) {
+        bits = bits - 6;
+        out = out + alphabet.charAt((acc >> bits) & 63);
+      }
+    }
+    if (bits > 0) {
+      out = out + alphabet.charAt((acc << (6 - bits)) & 63);
+    }
+    return out;
+  }
+
+  /* Serialize the relying party's `allowCredentials` for the host.
+   *
+   * An empty list means the relying party named none, and the authenticator
+   * discovers the credential itself. */
+  function allowCredentialsToJson(allow: any): string {
+    if (!allow) return "[]";
+    let length: number = 0;
+    try {
+      length = allow.length;
+    } catch (e) {
+      return "[]";
+    }
+    if (typeof length !== "number" || length <= 0) return "[]";
+    /* An array *literal* in this AOT Hermes is sealed: it has no `push` and
+     * cannot take new index properties. The constructor form yields a real
+     * mutable array. */
+    let items: any = new (globalThis as any).Array();
+    for (let i: number = 0; i < length; i = i + 1) {
+      let entry: any = allow[i];
+      if (!entry) continue;
+      let rawId: any = entry.id;
+      let id: string = "";
+      /* Duck-typed rather than `instanceof`: a relying party may hand over an
+       * ArrayBuffer, a typed array over one, or a base64url string. */
+      if (typeof rawId === "string") {
+        id = rawId;
+      } else if (rawId && typeof rawId.byteLength === "number" && rawId.buffer) {
+        /* A typed array view. */
+        id = bytesToB64url(new Uint8Array(rawId.buffer, rawId.byteOffset || 0, rawId.byteLength));
+      } else if (rawId && typeof rawId.byteLength === "number") {
+        /* A bare ArrayBuffer. */
+        id = bytesToB64url(new Uint8Array(rawId));
+      }
+      if (!id) continue;
+      let item: any = new (globalThis as any).Object();
+      item.id = id;
+      item.type = entry.type || "public-key";
+      item.transports = new (globalThis as any).Array();
+      items.push(item);
+    }
+    return (globalThis as any).JSON.stringify(items);
   }
 
   class BlitzStyleDeclaration {
@@ -741,12 +807,11 @@
     let len: number = _webauthn_create(cRp, cUser);
     _free(cRp);
     _free(cUser);
-    let JSONObj: any = (globalThis as any).JSON;
     if (len < 0) {
       return PromiseCtor.reject(new Error("WebAuthn create failed"));
     }
     let jsonStr: string = readScratchUtf8(len);
-    let parsed: any = JSONObj.parse(jsonStr);
+    let parsed: any = (globalThis as any).JSON.parse(jsonStr);
     if (!parsed || parsed.error) {
       return PromiseCtor.reject(new Error((parsed && parsed.error) || "WebAuthn create failed"));
     }
@@ -762,14 +827,20 @@
     }
     let cRp: c_ptr = toUtf8z(rpIdStr);
     writeChallengeBytes(chalBytes);
+    // The relying party may name the credentials it accepts. When it does,
+    // the authenticator must use exactly those; when it does not, the
+    // authenticator discovers the credential itself.
+    let allowJson: string = allowCredentialsToJson(pk.allowCredentials);
+    let cAllow: c_ptr = toUtf8z(allowJson);
+    _set_allow_credentials(cAllow);
+    _free(cAllow);
     let len: number = _webauthn_get(cRp);
     _free(cRp);
-    let JSONObj: any = (globalThis as any).JSON;
     if (len < 0) {
       return PromiseCtor.reject(new Error("WebAuthn get failed"));
     }
     let jsonStr: string = readScratchUtf8(len);
-    let parsed: any = JSONObj.parse(jsonStr);
+    let parsed: any = (globalThis as any).JSON.parse(jsonStr);
     if (!parsed || parsed.error) {
       return PromiseCtor.reject(new Error((parsed && parsed.error) || "WebAuthn get failed"));
     }

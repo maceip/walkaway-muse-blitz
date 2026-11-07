@@ -1634,6 +1634,222 @@ mod tests {
         let _ = cleanup.clear();
     }
 
+    /// Credential discovery must be scoped to the relying party.
+    ///
+    /// With no `allowCredentials` — which is how a relying party asks for
+    /// autofill, and how conditional mediation works — the authenticator
+    /// discovers the credential itself. That is only safe if the credential
+    /// is scoped to the relying party, so a credential registered for one site
+    /// must never satisfy a request from another.
+    #[test]
+    fn discovery_finds_a_credential_only_for_its_own_relying_party() {
+        no_prompt();
+        let store = test_passkey_service("discovery");
+        let cleanup = store.clone();
+        let mut broker = LocalPasskeyBroker::with_store(store);
+
+        // Register for example.com.
+        let register_id = broker
+            .begin_registration(RegistrationRequest {
+                task_id: "t1".to_string(),
+                origin: "https://example.com".to_string(),
+                rp: PublicKeyCredentialRpEntity {
+                    id: "example.com".to_string(),
+                    name: Some("Example".to_string()),
+                },
+                user: PublicKeyCredentialUserEntity {
+                    id: b"user-1".to_vec(),
+                    name: "ada@example.com".to_string(),
+                    display_name: "Ada".to_string(),
+                },
+                challenge: b"challenge-1".to_vec(),
+                pub_key_cred_params: Vec::new(),
+                exclude_credentials: Vec::new(),
+                authenticator_selection: None,
+                attestation: None,
+                extensions: None,
+                cross_origin: false,
+            })
+            .unwrap();
+        broker
+            .approve_ceremony(register_id.clone(), "user", "socket")
+            .unwrap();
+        assert!(matches!(
+            broker.poll_registration(register_id).unwrap(),
+            PasskeyStatus::Complete(CeremonyOutcome::Registration(_))
+        ));
+
+        // The same relying party discovers it.
+        let found = broker
+            .begin_assertion(PasskeyRequest {
+                task_id: "t2".to_string(),
+                origin: "https://example.com".to_string(),
+                rp_id: Some("example.com".to_string()),
+                challenge: b"challenge-2".to_vec(),
+                allow_credentials: Vec::new(),
+                user_verification: None,
+                extensions: None,
+                cross_origin: false,
+                top_origin: None,
+            })
+            .expect("the credential must be discoverable for its own relying party");
+        broker
+            .approve_ceremony(found.clone(), "user", "socket")
+            .unwrap();
+        assert!(matches!(
+            broker.poll_assertion(found).unwrap(),
+            PasskeyStatus::Complete(CeremonyOutcome::Assertion(_))
+        ));
+
+        // A different relying party must not find it, even though the
+        // credential is discoverable.
+        let other = broker.begin_assertion(PasskeyRequest {
+            task_id: "t3".to_string(),
+            origin: "https://other.test".to_string(),
+            rp_id: Some("other.test".to_string()),
+            challenge: b"challenge-3".to_vec(),
+            allow_credentials: Vec::new(),
+            user_verification: None,
+            extensions: None,
+            cross_origin: false,
+            top_origin: None,
+        });
+        assert!(
+            matches!(other, Err(BrokerError::NotFound(_))),
+            "a credential for one relying party must not satisfy another relying party's request"
+        );
+
+        let _ = cleanup.clear();
+    }
+
+    /// An explicit `allowCredentials` list selects exactly the credential it
+    /// names.
+    ///
+    /// With only one credential for a relying party, "used the named
+    /// credential" and "used some credential of this relying party" look the
+    /// same. This test registers two credentials for the same relying party
+    /// and names only the second one, so an authenticator that ignored the
+    /// list could still pass by accident.
+    #[test]
+    fn an_allow_list_selects_exactly_the_named_credential() {
+        no_prompt();
+        let store = test_passkey_service("allow-list");
+        let cleanup = store.clone();
+        let mut broker = LocalPasskeyBroker::with_store(store);
+
+        let register = |broker: &mut LocalPasskeyBroker, user: &str, challenge: &[u8]| {
+            let id = broker
+                .begin_registration(RegistrationRequest {
+                    task_id: format!("reg-{user}"),
+                    origin: "https://example.com".to_string(),
+                    rp: PublicKeyCredentialRpEntity {
+                        id: "example.com".to_string(),
+                        name: Some("Example".to_string()),
+                    },
+                    user: PublicKeyCredentialUserEntity {
+                        id: user.as_bytes().to_vec(),
+                        name: format!("{user}@example.com"),
+                        display_name: user.to_string(),
+                    },
+                    challenge: challenge.to_vec(),
+                    pub_key_cred_params: Vec::new(),
+                    exclude_credentials: Vec::new(),
+                    authenticator_selection: None,
+                    attestation: None,
+                    extensions: None,
+                    cross_origin: false,
+                })
+                .unwrap();
+            broker
+                .approve_ceremony(id.clone(), "user", "socket")
+                .unwrap();
+            match broker.poll_registration(id).unwrap() {
+                PasskeyStatus::Complete(CeremonyOutcome::Registration(credential)) => {
+                    // The credential id is base64url; the allow list carries raw
+                    // bytes, so decode it back for the descriptor.
+                    let raw = crate::webauthn::b64::b64url_decode(&credential.id)
+                        .expect("the credential id must be base64url");
+                    (credential.id, raw)
+                }
+                other => panic!("registration did not complete: {other:?}"),
+            }
+        };
+
+        let (first_b64, _first_raw) = register(&mut broker, "ada", b"challenge-1");
+        let (second_b64, second_raw) = register(&mut broker, "grace", b"challenge-2");
+        assert_ne!(
+            first_b64, second_b64,
+            "the two registrations must produce distinct credentials"
+        );
+
+        // Name only the second credential.
+        let ceremony = broker
+            .begin_assertion(PasskeyRequest {
+                task_id: "t-allowed".to_string(),
+                origin: "https://example.com".to_string(),
+                rp_id: Some("example.com".to_string()),
+                challenge: b"challenge-3".to_vec(),
+                allow_credentials: vec![PublicKeyCredentialDescriptor {
+                    id: second_raw.clone(),
+                    transports: Vec::new(),
+                    rk: None,
+                    kind: "public-key".to_string(),
+                }],
+                user_verification: None,
+                extensions: None,
+                cross_origin: false,
+                top_origin: None,
+            })
+            .expect("the named credential must be usable");
+        broker
+            .approve_ceremony(ceremony.clone(), "user", "socket")
+            .unwrap();
+        let assertion = match broker.poll_assertion(ceremony).unwrap() {
+            PasskeyStatus::Complete(CeremonyOutcome::Assertion(credential)) => credential,
+            other => panic!("assertion did not complete: {other:?}"),
+        };
+        assert_eq!(
+            assertion.id, second_b64,
+            "the assertion must use the credential the relying party named"
+        );
+        assert_ne!(
+            assertion.id, first_b64,
+            "the assertion must not use the other credential of the same relying party"
+        );
+
+        // Name a credential that does not exist for this relying party.
+        let ceremony = broker
+            .begin_assertion(PasskeyRequest {
+                task_id: "t-unknown".to_string(),
+                origin: "https://example.com".to_string(),
+                rp_id: Some("example.com".to_string()),
+                challenge: b"challenge-4".to_vec(),
+                allow_credentials: vec![PublicKeyCredentialDescriptor {
+                    id: vec![0xde, 0xad, 0xbe, 0xef],
+                    transports: Vec::new(),
+                    rk: None,
+                    kind: "public-key".to_string(),
+                }],
+                user_verification: None,
+                extensions: None,
+                cross_origin: false,
+                top_origin: None,
+            })
+            .expect("the ceremony starts; the failure comes when it runs");
+        broker
+            .approve_ceremony(ceremony.clone(), "user", "socket")
+            .unwrap();
+        assert!(
+            matches!(
+                broker.poll_assertion(ceremony).unwrap(),
+                PasskeyStatus::Failed(_)
+            ),
+            "a credential outside the allow list must not be used, and the ceremony must fail"
+        );
+
+        let _ = cleanup.clear();
+    }
+
     #[test]
     fn a_cancelled_ceremony_cannot_be_approved() {
         no_prompt();
