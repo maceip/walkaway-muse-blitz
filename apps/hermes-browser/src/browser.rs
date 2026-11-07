@@ -22,6 +22,10 @@ pub struct Browser {
     /// user's edit buffer, not the committed URL.
     pub address: String,
     pub focused: bool,
+    /// When true, the first character typed or pasted into the focused address
+    /// bar replaces the entire buffer (like clicking an address bar or pressing
+    /// Cmd+L / Cmd+A in a desktop browser).
+    pub address_select_all: bool,
     pub loading: bool,
     pub error: Option<String>,
     /// Monotonic counter used to discard results from superseded navigations.
@@ -35,10 +39,18 @@ impl Browser {
             index: 0,
             address: String::new(),
             focused: false,
+            address_select_all: false,
             loading: false,
             error: None,
             generation: 0,
         }
+    }
+
+    pub fn focus_address_bar(&mut self) {
+        let url = self.display_url();
+        self.focused = true;
+        self.address = url;
+        self.address_select_all = true;
     }
 
     pub fn can_go_back(&self) -> bool {
@@ -72,6 +84,7 @@ impl Browser {
         self.loading = true;
         self.error = None;
         self.focused = false;
+        self.address_select_all = false;
         self.address = url.to_string();
         Ok(url)
     }
@@ -94,6 +107,7 @@ impl Browser {
         }
         self.loading = false;
         self.error = None;
+        self.address_select_all = false;
         self.address = self
             .history
             .get(self.index)
@@ -125,6 +139,7 @@ impl Browser {
     }
 
     pub fn sync_address(&mut self) {
+        self.address_select_all = false;
         self.address = self
             .history
             .get(self.index)

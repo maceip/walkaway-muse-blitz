@@ -108,18 +108,21 @@ class HostClient:
             frame = {"v": 1, "seq": self.seq, **payload}
             self.sock.sendall((json.dumps(frame) + "\n").encode())
 
-    def open_session(self, title, start_url):
+    def open_session(self, title, start_url, reuse_active_tab=False, force_replace=False):
         self.start_url = start_url
-        self.send(
-            {
-                "type": "session.open",
-                "request_id": "bridge-open",
-                "title": title,
-                "start_url": start_url,
-                "capabilities": {"protocol": 1},
-                "policy": {"decision": "human_per_action"},
-            }
-        )
+        payload = {
+            "type": "session.open",
+            "request_id": "bridge-open",
+            "title": title,
+            "start_url": start_url,
+            "capabilities": {"protocol": 1},
+            "policy": {"decision": "human_per_action"},
+        }
+        if reuse_active_tab:
+            payload["reuse_active_tab"] = True
+        if force_replace:
+            payload["force_replace"] = True
+        self.send(payload)
 
     def decide(self, binding, decision, decided_by, surface):
         self.send(
@@ -319,17 +322,39 @@ class Bridge:
                 log(f"ack poll failed: {e}")
             time.sleep(0.5)
 
-    def attach_socket(self, sock_path, token, start_url=None, session_title="Walkaway Hermes Host Bridge"):
+    def attach_socket(
+        self,
+        sock_path,
+        token,
+        start_url=None,
+        session_title="Walkaway Hermes Host Bridge",
+        reuse_active_tab=False,
+        force_replace=False,
+    ):
         """Attach a Hermes host channel at runtime (WS1 worker sockets)."""
+        existing_client = None
         with self.lock:
-            if any(str(c.sock_path) == str(sock_path) for c in self.clients):
+            for c in self.clients:
+                if str(c.sock_path) == str(sock_path):
+                    existing_client = c
+                    break
+            if existing_client is not None and not (reuse_active_tab or force_replace):
                 raise ValueError(f"socket already attached: {sock_path}")
-        client = HostClient(self, sock_path, token)
-        with self.lock:
-            self.clients.append(client)
-        threading.Thread(target=client.run, daemon=True).start()
-        if start_url:
-            client.open_session(session_title, start_url)
+        if existing_client is not None:
+            client = existing_client
+            client.session_id = None
+        else:
+            client = HostClient(self, sock_path, token)
+            with self.lock:
+                self.clients.append(client)
+            threading.Thread(target=client.run, daemon=True).start()
+        if start_url or reuse_active_tab:
+            client.open_session(
+                session_title,
+                start_url or "",
+                reuse_active_tab=reuse_active_tab,
+                force_replace=force_replace,
+            )
             deadline = time.monotonic() + 10
             while client.session_id is None and time.monotonic() < deadline:
                 time.sleep(0.05)
@@ -411,6 +436,8 @@ def make_handler(bridge):
                         token,
                         start_url=payload.get("start_url"),
                         session_title=str(payload.get("session_title") or "Walkaway Hermes Host Bridge"),
+                        reuse_active_tab=bool(payload.get("reuse_active_tab", False)),
+                        force_replace=bool(payload.get("force_replace", False)),
                     )
                 except ValueError as e:
                     return self.send_json(409, {"error": str(e)})

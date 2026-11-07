@@ -462,7 +462,10 @@ impl Page {
             blitz_dom::UserAgentStylesheet::parse(
                 r#"
                 html { background-color: #FFFFFF; color: #000000; }
-                select { display: inline-block; min-width: 80px; min-height: 24px; }
+                select { display: inline-block; min-width: 80px; min-height: 24px; border: 1px solid #999; padding: 2px 4px; background-color: #FFFFFF; color: #000000; }
+                select:focus { outline: 2px solid #4D90FE; }
+                option { padding: 1px 4px; }
+                option[selected] { background-color: #1B74E4; color: #FFFFFF; font-weight: 600; }
                 button, input, select, textarea { box-sizing: border-box; }
                 .grid-cols-subgrid, .sm\:grid-cols-subgrid {
                     grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1058,6 +1061,7 @@ struct BrowserApp {
     control_conns: HashMap<u64, ControlConn>,
     control_out: Vec<(OutTarget, Value)>,
     control_hub: Option<Arc<ControlHub>>,
+    live_socket_info: Option<(String, String, String)>,
     next_session_id: u64,
     input_queue: VecDeque<QueuedInput>,
     next_input_event_id: u64,
@@ -1142,6 +1146,7 @@ impl BrowserApp {
             control_conns: HashMap::new(),
             control_out: Vec::new(),
             control_hub: None,
+            live_socket_info: None,
             next_session_id: 1,
             input_queue: VecDeque::new(),
             next_input_event_id: 1,
@@ -1951,10 +1956,15 @@ impl BrowserApp {
     }
 
     fn do_session_open(&mut self, conn_id: u64, frame: &Value) {
-        if self
-            .control
-            .as_ref()
-            .is_some_and(|s| !s.state.is_terminal())
+        let force_replace = frame
+            .get("force_replace")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !force_replace
+            && self
+                .control
+                .as_ref()
+                .is_some_and(|s| !s.state.is_terminal())
         {
             self.refused(conn_id, frame, "wrong_state");
             return;
@@ -1978,10 +1988,19 @@ impl BrowserApp {
                 return;
             }
         }
-        let tab = self.create_start_tab();
-        let tab_id = tab.canonical.id;
-        self.tabs.push(tab);
-        self.active = self.tabs.len() - 1;
+        let reuse_active_tab = frame
+            .get("reuse_active_tab")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let tab_id = if reuse_active_tab && !self.tabs.is_empty() {
+            self.tab().canonical.id
+        } else {
+            let tab = self.create_start_tab();
+            let id = tab.canonical.id;
+            self.tabs.push(tab);
+            self.active = self.tabs.len() - 1;
+            id
+        };
         let session_id = format!("s_{}", self.next_session_id);
         self.next_session_id = self.next_session_id.wrapping_add(1);
         self.control = Some(ControlSession {
@@ -2010,9 +2029,16 @@ impl BrowserApp {
             Some("socket"),
             None,
         );
-        if let Some(start_url) = frame.get("start_url").and_then(Value::as_str) {
-            // The host's act of opening authorizes exactly this navigation.
-            self.navigate(start_url);
+        if let Some(start_url) = frame
+            .get("start_url")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
+            let current_url = self.tab().canonical.browser.display_url();
+            if !reuse_active_tab || current_url != start_url {
+                // The host's act of opening authorizes exactly this navigation.
+                self.navigate(start_url);
+            }
         }
         let generation = self.tab().instance.document_generation;
         let body = json!({
@@ -4471,6 +4497,26 @@ impl BrowserApp {
     }
 
     fn navigate(&mut self, input: &str) {
+        let trimmed_input = input.trim();
+        let agent_goal = trimmed_input
+            .strip_prefix("agent:")
+            .or_else(|| trimmed_input.strip_prefix("AGENT:"))
+            .or_else(|| trimmed_input.strip_prefix("/agent"))
+            .map(str::trim)
+            .filter(|g| !g.is_empty());
+        if let Some(goal) = agent_goal {
+            let goal_owned = goal.to_string();
+            let tab = self.tab_mut();
+            tab.canonical.browser.focused = false;
+            tab.canonical.browser.address_select_all = false;
+            tab.canonical.browser.sync_address();
+            self.menu_open = false;
+            self.sync_chrome();
+            self.request_redraw();
+            self.trigger_in_browser_agent(&goal_owned);
+            return;
+        }
+
         let url = match self.tab_mut().canonical.browser.begin_navigation(input) {
             Ok(u) => u,
             Err(e) => {
@@ -4983,6 +5029,20 @@ impl BrowserApp {
                 self.recalled_count = self.recalled_count.wrapping_add(1);
                 self.sync_chrome();
                 self.request_redraw();
+            } else if snapshot
+                .elements
+                .iter()
+                .any(|e| matches!(e.tag.as_str(), "input" | "select" | "textarea"))
+            {
+                let goal = format!(
+                    "Complete and submit the form on {}",
+                    if snapshot.title.is_empty() {
+                        &snapshot.url
+                    } else {
+                        &snapshot.title
+                    }
+                );
+                self.trigger_in_browser_agent(&goal);
             }
             return;
         }
@@ -5010,10 +5070,7 @@ impl BrowserApp {
         // Search drawer controls.
         if id_is("exp-search-focus") {
             self.toolbar_collapsed = false;
-            let url = self.tab().canonical.browser.display_url();
-            let tab = self.tab_mut();
-            tab.canonical.browser.focused = true;
-            tab.canonical.browser.address = url;
+            self.tab_mut().canonical.browser.focus_address_bar();
             self.reflow_active_tab();
             self.sync_chrome();
             self.request_redraw();
@@ -5104,10 +5161,7 @@ impl BrowserApp {
             return;
         }
         if id_is("address") {
-            let url = self.tab().canonical.browser.display_url();
-            let tab = self.tab_mut();
-            tab.canonical.browser.focused = true;
-            tab.canonical.browser.address = url;
+            self.tab_mut().canonical.browser.focus_address_bar();
             self.menu_open = false;
             self.sync_chrome();
             self.request_redraw();
@@ -5141,13 +5195,47 @@ impl BrowserApp {
     }
 
     fn do_page_click(&mut self, x: f32, y: f32) {
+        {
+            let tab = self.tab_mut();
+            if tab.canonical.browser.focused {
+                tab.canonical.browser.focused = false;
+                tab.canonical.browser.address_select_all = false;
+                tab.canonical.browser.sync_address();
+            }
+        }
         let local_x = (x - self.left_chrome_width() as f32).max(0.0);
         let local_y = (y - self.top_chrome_height() as f32).max(0.0);
         let Some(hit) = self.tab().instance.page.doc().hit(local_x, local_y) else {
+            self.sync_chrome();
+            self.request_redraw();
             return;
         };
 
         if let Some(href) = link_target(self.tab().instance.page.doc(), hit.node_id) {
+            let trimmed_href = href.trim();
+            if trimmed_href.starts_with('#') {
+                let frag = trimmed_href.trim_start_matches('#');
+                let target_y = if frag.is_empty() {
+                    Some(0.0)
+                } else {
+                    let doc = self.tab().instance.page.doc();
+                    doc.get_element_by_id(frag)
+                        .and_then(|nid| doc.get_client_bounding_rect(nid))
+                        .map(|rect| (doc.viewport_scroll().y + rect.y).max(0.0))
+                };
+                if let Some(new_y) = target_y {
+                    let cur = self.tab().instance.page.doc().viewport_scroll();
+                    let tab = self.tab_mut();
+                    tab.instance
+                        .page
+                        .doc_mut()
+                        .set_viewport_scroll(Point { x: cur.x, y: new_y });
+                    tab.instance.page.resolve();
+                    self.sync_chrome();
+                    self.request_redraw();
+                }
+                return;
+            }
             if let Some(base) = self
                 .tab()
                 .canonical
@@ -5173,12 +5261,219 @@ impl BrowserApp {
                 local_y,
             );
         }
-        if self.tab().instance.page.ctx.dirty {
+        let js_dirtied = self.tab().instance.page.ctx.dirty;
+        if js_dirtied {
             let tab = self.tab_mut();
             tab.instance.page.resolve();
             tab.instance.page.ctx.dirty = false;
-            self.request_redraw();
+            tab.bump_generation();
         }
+
+        if let Some((control_id, tag, input_type, clicked_option_id)) =
+            find_interactive_form_control(self.tab().instance.page.doc(), hit.node_id)
+        {
+            let is_disabled = self
+                .tab()
+                .instance
+                .page
+                .doc()
+                .get_node(control_id)
+                .and_then(|n| n.element_data())
+                .is_some_and(|d| d.attr(local_name!("disabled")).is_some());
+            if !is_disabled {
+                self.tab_mut()
+                    .instance
+                    .page
+                    .doc_mut()
+                    .set_focus_to(control_id);
+                match (tag.as_str(), input_type.as_str()) {
+                    ("input", "checkbox") => {
+                        let cur_checked = self
+                            .tab()
+                            .instance
+                            .page
+                            .doc()
+                            .get_node(control_id)
+                            .and_then(|n| n.element_data())
+                            .map(|d| {
+                                d.checkbox_input_checked()
+                                    .unwrap_or_else(|| d.attr(local_name!("checked")).is_some())
+                            })
+                            .unwrap_or(false);
+                        let next_val = if cur_checked { "false" } else { "true" };
+                        let tab = self.tab_mut();
+                        apply_dom_field_action(
+                            tab.instance.page.doc_mut(),
+                            control_id,
+                            "input",
+                            "check",
+                            Some(next_val),
+                            None,
+                            None,
+                        );
+                        tab.instance.page.resolve();
+                        tab.bump_generation();
+                    }
+                    ("input", "radio") => {
+                        let tab = self.tab_mut();
+                        check_radio_group(tab.instance.page.doc_mut(), control_id);
+                        tab.instance.page.resolve();
+                        tab.bump_generation();
+                    }
+                    ("select", _) => {
+                        let tab = self.tab_mut();
+                        if let Some(opt_id) = clicked_option_id {
+                            select_specific_option(
+                                tab.instance.page.doc_mut(),
+                                control_id,
+                                opt_id,
+                            );
+                        } else {
+                            cycle_select_option(tab.instance.page.doc_mut(), control_id, 1);
+                        }
+                        tab.instance.page.resolve();
+                        tab.bump_generation();
+                    }
+                    ("input", "submit" | "image") => {
+                        if !js_dirtied {
+                            self.submit_page_form(control_id);
+                            return;
+                        }
+                    }
+                    ("button", "submit" | "") => {
+                        if !js_dirtied
+                            && has_enclosing_form_or_submit_attr(
+                                self.tab().instance.page.doc(),
+                                control_id,
+                            )
+                        {
+                            self.submit_page_form(control_id);
+                            return;
+                        }
+                    }
+                    _ => {
+                        let tab = self.tab_mut();
+                        blitz_dom::Document::handle_ui_event(
+                            tab.instance.page.doc_mut(),
+                            blitz_traits::events::UiEvent::AppleStandardKeybinding(
+                                "moveToEndOfDocument:".into(),
+                            ),
+                        );
+                        tab.instance.page.resolve();
+                    }
+                }
+            }
+        } else {
+            self.tab_mut().instance.page.doc_mut().clear_focus();
+            self.tab_mut().instance.page.resolve();
+        }
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
+    fn submit_page_form(&mut self, submitter_id: NodeId) {
+        let tab_id = self.tab().canonical.id;
+        let base_url = self
+            .tab()
+            .canonical
+            .browser
+            .current()
+            .map(|e| e.url.clone())
+            .unwrap_or_else(|| Url::parse(START_URL).expect("start url"));
+        let (action_url, method, entries) = collect_form_submission(
+            self.tab().instance.page.doc(),
+            &base_url,
+            submitter_id,
+        );
+        self.session_event(
+            OutTarget::Both,
+            "nav.started",
+            json!({"url": action_url.to_string()}),
+        );
+        let provider = self.provider.clone();
+        let viewport = self.content_viewport();
+        let theme = self.theme;
+        match browser::submit_form(&provider, &action_url, &method, &entries) {
+            Ok((final_url, html)) => {
+                let broker = self.passkey_broker.clone();
+                let tab = self.tab_mut();
+                tab.canonical
+                    .browser
+                    .commit(final_url.clone(), html.clone());
+                tab.replace_page(Page::load_with_broker(
+                    &html,
+                    Some(final_url.clone()),
+                    Some(provider),
+                    viewport,
+                    theme,
+                    broker,
+                ));
+                tab.canonical.browser.error = None;
+                tab.canonical.title = title_for(&final_url, tab.instance.page.doc());
+                self.session_event(
+                    OutTarget::Both,
+                    "nav.committed",
+                    json!({"tab_id": tab_id.0, "url": final_url.to_string()}),
+                );
+            }
+            Err(e) => {
+                let broker = self.passkey_broker.clone();
+                let tab = self.tab_mut();
+                tab.canonical.browser.fail(e.clone());
+                let html = error_page(&e);
+                tab.replace_page(Page::load_with_broker(
+                    &html, None, None, viewport, theme, broker,
+                ));
+                tab.canonical.title = "Error".to_string();
+                self.session_event(OutTarget::Both, "nav.failed", json!({"error": e}));
+            }
+        }
+        self.sync_chrome();
+        self.request_redraw();
+        self.flush_control_out();
+    }
+
+    fn trigger_in_browser_agent(&mut self, goal: &str) {
+        let Some((sock_path, host_token, agent_token)) = self.live_socket_info.clone() else {
+            eprintln!("[walkaway] no live control socket active for in-browser agent trigger");
+            return;
+        };
+        let current_url = self.tab().canonical.browser.display_url();
+        let target_url = if current_url.starts_with("http://") || current_url.starts_with("https://")
+        {
+            Some(current_url)
+        } else {
+            None
+        };
+        let goal_owned = goal.to_string();
+        std::thread::spawn(move || {
+            let repo_candidates = [
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.join("walkaway")),
+                Some(std::path::PathBuf::from("/Users/mac/walkaway-monorepo/walkaway")),
+                Some(std::path::PathBuf::from("/Users/mac/walkaway-hackathon/walkaway")),
+            ];
+            let Some(walkaway_cli) = repo_candidates
+                .into_iter()
+                .flatten()
+                .find(|p| p.exists())
+            else {
+                eprintln!("[walkaway] could not locate ./walkaway CLI script");
+                return;
+            };
+            let mut cmd = std::process::Command::new("python3");
+            cmd.arg(&walkaway_cli);
+            if let Some(u) = target_url {
+                cmd.arg(u);
+            }
+            cmd.arg("--goal").arg(&goal_owned);
+            cmd.env("WALKAWAY_ATTACH_SOCK_PATH", &sock_path);
+            cmd.env("HERMES_HOST_TOKEN", &host_token);
+            cmd.env("HERMES_AGENT_TOKEN", &agent_token);
+            let _ = cmd.status();
+        });
     }
 
     fn scroll_page(&mut self, dy: f64) {
@@ -5186,7 +5481,7 @@ impl BrowserApp {
         let tab = self.tab_mut();
         tab.instance.page.doc_mut().set_viewport_scroll(Point {
             x: current.x,
-            y: current.y + dy,
+            y: (current.y + dy).max(0.0),
         });
         tab.instance.page.resolve();
         self.request_redraw();
@@ -5214,10 +5509,14 @@ impl BrowserApp {
 
     /// The keyboard handling that runs when no passkey prompt is up.
     fn handle_key_while_no_passkey_prompt(&mut self, event: &KeyEvent) {
+        self.handle_logical_key(&event.logical_key, event.text.as_deref());
+    }
+
+    fn handle_logical_key(&mut self, logical_key: &Key, text: Option<&str>) {
         if self.session_blocks_input() {
             return;
         }
-        if matches!(event.logical_key, Key::Named(NamedKey::F12)) {
+        if matches!(logical_key, Key::Named(NamedKey::F12)) {
             self.xray_enabled = !self.xray_enabled;
             self.sync_chrome();
             self.request_redraw();
@@ -5226,7 +5525,7 @@ impl BrowserApp {
         let cmd = self.modifiers.super_key();
 
         if cmd {
-            match &event.logical_key {
+            match logical_key {
                 Key::Character(c) if c.eq_ignore_ascii_case("i") => {
                     self.xray_enabled = !self.xray_enabled;
                     self.sync_chrome();
@@ -5234,10 +5533,7 @@ impl BrowserApp {
                     return;
                 }
                 Key::Character(c) if c.eq_ignore_ascii_case("l") => {
-                    let url = self.tab().canonical.browser.display_url();
-                    let tab = self.tab_mut();
-                    tab.canonical.browser.focused = true;
-                    tab.canonical.browser.address = url;
+                    self.tab_mut().canonical.browser.focus_address_bar();
                     self.sync_chrome();
                     self.request_redraw();
                     return;
@@ -5267,42 +5563,330 @@ impl BrowserApp {
             }
         }
 
-        if !self.tab().canonical.browser.focused {
-            return;
-        }
-
-        match &event.logical_key {
-            Key::Named(NamedKey::Enter) => {
-                let input = self.tab().canonical.browser.address.clone();
-                self.navigate(&input);
-            }
-            Key::Named(NamedKey::Escape) => {
-                let tab = self.tab_mut();
-                tab.canonical.browser.focused = false;
-                tab.canonical.browser.sync_address();
-                self.sync_chrome();
-                self.request_redraw();
-            }
-            Key::Named(NamedKey::Backspace) => {
-                self.tab_mut().canonical.browser.address.pop();
-                self.sync_chrome();
-                self.request_redraw();
-            }
-            Key::Named(NamedKey::Space) => {
-                self.tab_mut().canonical.browser.address.push(' ');
-                self.sync_chrome();
-                self.request_redraw();
-            }
-            _ => {
-                if let Some(text) = &event.text {
-                    let filtered: String = text.chars().filter(|c| !c.is_control()).collect();
-                    if !filtered.is_empty() {
-                        self.tab_mut().canonical.browser.address.push_str(&filtered);
+        if self.tab().canonical.browser.focused {
+            if cmd {
+                match logical_key {
+                    Key::Character(c) if c.eq_ignore_ascii_case("a") => {
+                        self.tab_mut().canonical.browser.address_select_all = true;
+                        return;
+                    }
+                    Key::Character(c) if c.eq_ignore_ascii_case("c") => {
+                        let addr = self.tab().canonical.browser.address.clone();
+                        write_macos_clipboard(&addr);
+                        return;
+                    }
+                    Key::Character(c) if c.eq_ignore_ascii_case("v") => {
+                        let pasted: String = read_macos_clipboard()
+                            .chars()
+                            .filter(|ch| !ch.is_control())
+                            .collect();
+                        let tab = self.tab_mut();
+                        if tab.canonical.browser.address_select_all {
+                            tab.canonical.browser.address.clear();
+                            tab.canonical.browser.address_select_all = false;
+                        }
+                        tab.canonical.browser.address.push_str(&pasted);
                         self.sync_chrome();
                         self.request_redraw();
+                        return;
+                    }
+                    Key::Named(NamedKey::Backspace) => {
+                        let tab = self.tab_mut();
+                        tab.canonical.browser.address.clear();
+                        tab.canonical.browser.address_select_all = false;
+                        self.sync_chrome();
+                        self.request_redraw();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
+            match logical_key {
+                Key::Named(NamedKey::Enter) => {
+                    let input = self.tab().canonical.browser.address.clone();
+                    self.navigate(&input);
+                }
+                Key::Named(NamedKey::Escape) => {
+                    let tab = self.tab_mut();
+                    tab.canonical.browser.focused = false;
+                    tab.canonical.browser.address_select_all = false;
+                    tab.canonical.browser.sync_address();
+                    self.sync_chrome();
+                    self.request_redraw();
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    let tab = self.tab_mut();
+                    if tab.canonical.browser.address_select_all {
+                        tab.canonical.browser.address.clear();
+                        tab.canonical.browser.address_select_all = false;
+                    } else {
+                        tab.canonical.browser.address.pop();
+                    }
+                    self.sync_chrome();
+                    self.request_redraw();
+                }
+                Key::Named(NamedKey::Space) => {
+                    let tab = self.tab_mut();
+                    if tab.canonical.browser.address_select_all {
+                        tab.canonical.browser.address.clear();
+                        tab.canonical.browser.address_select_all = false;
+                    }
+                    tab.canonical.browser.address.push(' ');
+                    self.sync_chrome();
+                    self.request_redraw();
+                }
+                _ => {
+                    if !cmd {
+                        if let Some(text) = text {
+                            let filtered: String =
+                                text.chars().filter(|c| !c.is_control()).collect();
+                            if !filtered.is_empty() {
+                                let tab = self.tab_mut();
+                                if tab.canonical.browser.address_select_all {
+                                    tab.canonical.browser.address.clear();
+                                    tab.canonical.browser.address_select_all = false;
+                                }
+                                tab.canonical.browser.address.push_str(&filtered);
+                                self.sync_chrome();
+                                self.request_redraw();
+                            }
+                        }
                     }
                 }
             }
+            return;
+        }
+
+        // Address bar is not focused: check if a page form control has focus,
+        // or handle page-level keyboard navigation/scrolling.
+        if matches!(logical_key, Key::Named(NamedKey::Tab)) {
+            let reverse = self.modifiers.shift_key();
+            let tab = self.tab_mut();
+            if focus_adjacent_form_control(tab.instance.page.doc_mut(), reverse).is_some() {
+                tab.instance.page.resolve();
+                self.sync_chrome();
+                self.request_redraw();
+            }
+            return;
+        }
+
+        if let Some(focused_id) = self.tab().instance.page.doc().get_focussed_node_id() {
+            let control_info = self
+                .tab()
+                .instance
+                .page
+                .doc()
+                .get_node(focused_id)
+                .and_then(|n| n.element_data())
+                .filter(|d| d.attr(local_name!("disabled")).is_none())
+                .map(|d| {
+                    let tag = d.name.local.to_string().to_ascii_lowercase();
+                    let input_type = d
+                        .attr(local_name!("type"))
+                        .unwrap_or(if tag == "input" { "text" } else { "" })
+                        .to_ascii_lowercase();
+                    (tag, input_type)
+                });
+
+            if let Some((tag, input_type)) = control_info {
+                if matches!(logical_key, Key::Named(NamedKey::Escape)) {
+                    let tab = self.tab_mut();
+                    tab.instance.page.doc_mut().clear_focus();
+                    tab.instance.page.resolve();
+                    self.sync_chrome();
+                    self.request_redraw();
+                    return;
+                }
+
+                if tag == "select" {
+                    match logical_key {
+                        Key::Named(NamedKey::ArrowDown | NamedKey::ArrowRight) => {
+                            let tab = self.tab_mut();
+                            cycle_select_option(tab.instance.page.doc_mut(), focused_id, 1);
+                            tab.instance.page.resolve();
+                            tab.bump_generation();
+                            self.sync_chrome();
+                            self.request_redraw();
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowUp | NamedKey::ArrowLeft) => {
+                            let tab = self.tab_mut();
+                            cycle_select_option(tab.instance.page.doc_mut(), focused_id, -1);
+                            tab.instance.page.resolve();
+                            tab.bump_generation();
+                            self.sync_chrome();
+                            self.request_redraw();
+                            return;
+                        }
+                        _ => {}
+                    }
+                } else if tag == "input" && input_type == "checkbox" {
+                    if matches!(logical_key, Key::Named(NamedKey::Space)) {
+                        let cur_checked = self
+                            .tab()
+                            .instance
+                            .page
+                            .doc()
+                            .get_node(focused_id)
+                            .and_then(|n| n.element_data())
+                            .map(|d| {
+                                d.checkbox_input_checked()
+                                    .unwrap_or_else(|| d.attr(local_name!("checked")).is_some())
+                            })
+                            .unwrap_or(false);
+                        let next_val = if cur_checked { "false" } else { "true" };
+                        let tab = self.tab_mut();
+                        apply_dom_field_action(
+                            tab.instance.page.doc_mut(),
+                            focused_id,
+                            "input",
+                            "check",
+                            Some(next_val),
+                            None,
+                            None,
+                        );
+                        tab.instance.page.resolve();
+                        tab.bump_generation();
+                        self.sync_chrome();
+                        self.request_redraw();
+                        return;
+                    }
+                } else if tag == "textarea"
+                    || (tag == "input"
+                        && !matches!(
+                            input_type.as_str(),
+                            "button" | "submit" | "reset" | "checkbox" | "radio" | "hidden" | "image" | "file"
+                        ))
+                {
+                    let mut cur_val =
+                        read_dom_field_value(self.tab().instance.page.doc(), focused_id, &tag);
+                    let mut mutated = false;
+
+                    if cmd {
+                        match logical_key {
+                            Key::Character(c) if c.eq_ignore_ascii_case("v") => {
+                                let pasted = read_macos_clipboard();
+                                let cleaned: String = if tag == "textarea" {
+                                    pasted
+                                        .chars()
+                                        .filter(|&ch| ch == '\n' || !ch.is_control())
+                                        .collect()
+                                } else {
+                                    pasted.chars().filter(|ch| !ch.is_control()).collect()
+                                };
+                                if !cleaned.is_empty() {
+                                    cur_val.push_str(&cleaned);
+                                    mutated = true;
+                                }
+                            }
+                            Key::Character(c) if c.eq_ignore_ascii_case("c") => {
+                                if input_type != "password" {
+                                    write_macos_clipboard(&cur_val);
+                                }
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                cur_val.clear();
+                                mutated = true;
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match logical_key {
+                            Key::Named(NamedKey::Enter) => {
+                                if tag == "textarea" {
+                                    cur_val.push('\n');
+                                    mutated = true;
+                                } else {
+                                    self.submit_page_form(focused_id);
+                                    return;
+                                }
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                cur_val.pop();
+                                mutated = true;
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                cur_val.push(' ');
+                                mutated = true;
+                            }
+                            _ => {
+                                if let Some(text) = text {
+                                    let filtered: String =
+                                        text.chars().filter(|c| !c.is_control()).collect();
+                                    if !filtered.is_empty() {
+                                        cur_val.push_str(&filtered);
+                                        mutated = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if mutated {
+                        let tab = self.tab_mut();
+                        apply_dom_field_action(
+                            tab.instance.page.doc_mut(),
+                            focused_id,
+                            &tag,
+                            "type",
+                            Some(&cur_val),
+                            None,
+                            None,
+                        );
+                        blitz_dom::Document::handle_ui_event(
+                            tab.instance.page.doc_mut(),
+                            blitz_traits::events::UiEvent::AppleStandardKeybinding(
+                                "moveToEndOfDocument:".into(),
+                            ),
+                        );
+                        tab.instance.page.resolve();
+                        tab.bump_generation();
+                        self.sync_chrome();
+                        self.request_redraw();
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Page-level keyboard scrolling when no text input consumed the key.
+        match logical_key {
+            Key::Named(NamedKey::ArrowDown) => {
+                self.scroll_page(60.0);
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                self.scroll_page(-60.0);
+            }
+            Key::Named(NamedKey::PageDown) => {
+                self.scroll_page(500.0);
+            }
+            Key::Named(NamedKey::PageUp) => {
+                self.scroll_page(-500.0);
+            }
+            Key::Named(NamedKey::Space) => {
+                let dy = if self.modifiers.shift_key() {
+                    -500.0
+                } else {
+                    500.0
+                };
+                self.scroll_page(dy);
+            }
+            Key::Named(NamedKey::Home) => {
+                let cur = self.tab().instance.page.doc().viewport_scroll();
+                let tab = self.tab_mut();
+                tab.instance
+                    .page
+                    .doc_mut()
+                    .set_viewport_scroll(Point { x: cur.x, y: 0.0 });
+                tab.instance.page.resolve();
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::End) => {
+                self.scroll_page(100_000.0);
+            }
+            _ => {}
         }
     }
 
@@ -6141,6 +6725,23 @@ fn collect_form_submission(
                         )
                     })
                     .or_else(|| data.attr(local_name!("value")).map(str::to_string))
+                    .or_else(|| {
+                        node.children.iter().copied().find_map(|cid| {
+                            let cnode = doc.get_node(cid)?;
+                            let cdata = cnode.element_data()?;
+                            if !cdata.name.local.to_string().eq_ignore_ascii_case("option")
+                                || cdata.attr(local_name!("disabled")).is_some()
+                            {
+                                return None;
+                            }
+                            Some(
+                                cdata
+                                    .attr(local_name!("value"))
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| cnode.text_content().trim().to_string()),
+                            )
+                        })
+                    })
                     .unwrap_or_default();
                 entries.push((name, selected_val));
             }
@@ -6158,6 +6759,323 @@ fn collect_form_submission(
     }
 
     (action_url, method, entries)
+}
+
+fn find_interactive_form_control(
+    doc: &HtmlDocument,
+    start_id: NodeId,
+) -> Option<(NodeId, String, String, Option<NodeId>)> {
+    let mut cur = Some(start_id);
+    let mut clicked_option_id = None;
+    while let Some(nid) = cur {
+        let node = doc.get_node(nid)?;
+        if let Some(data) = node.element_data() {
+            let tag = data.name.local.to_string().to_ascii_lowercase();
+            if tag == "option" {
+                clicked_option_id = Some(nid);
+            } else if matches!(tag.as_str(), "input" | "textarea" | "select" | "button") {
+                let input_type = data
+                    .attr(local_name!("type"))
+                    .unwrap_or(if tag == "input" { "text" } else { "" })
+                    .to_ascii_lowercase();
+                if !(tag == "input" && input_type == "hidden") {
+                    return Some((nid, tag, input_type, clicked_option_id));
+                }
+            } else if tag == "label" {
+                if let Some(for_id) = data.attr(local_name!("for")).filter(|s| !s.is_empty()) {
+                    if let Some(target_id) = doc.get_element_by_id(for_id) {
+                        if let Some(target_node) = doc.get_node(target_id) {
+                            if let Some(tdata) = target_node.element_data() {
+                                let ttag = tdata.name.local.to_string().to_ascii_lowercase();
+                                if matches!(
+                                    ttag.as_str(),
+                                    "input" | "textarea" | "select" | "button"
+                                ) {
+                                    let ttype = tdata
+                                        .attr(local_name!("type"))
+                                        .unwrap_or(if ttag == "input" { "text" } else { "" })
+                                        .to_ascii_lowercase();
+                                    return Some((target_id, ttag, ttype, None));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Otherwise look for a descendant control inside the <label>.
+                let mut stack: Vec<NodeId> = node.children.iter().rev().copied().collect();
+                while let Some(cid) = stack.pop() {
+                    let Some(cnode) = doc.get_node(cid) else {
+                        continue;
+                    };
+                    for &grand in cnode.children.iter().rev() {
+                        stack.push(grand);
+                    }
+                    if let Some(cdata) = cnode.element_data() {
+                        let ctag = cdata.name.local.to_string().to_ascii_lowercase();
+                        if matches!(ctag.as_str(), "input" | "textarea" | "select" | "button") {
+                            let ctype = cdata
+                                .attr(local_name!("type"))
+                                .unwrap_or(if ctag == "input" { "text" } else { "" })
+                                .to_ascii_lowercase();
+                            if !(ctag == "input" && ctype == "hidden") {
+                                return Some((cid, ctag, ctype, None));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cur = node.parent;
+    }
+    None
+}
+
+fn has_enclosing_form_or_submit_attr(doc: &HtmlDocument, button_id: NodeId) -> bool {
+    if let Some(node) = doc.get_node(button_id) {
+        if let Some(data) = node.element_data() {
+            if data
+                .attr(local_name!("type"))
+                .is_some_and(|t| t.eq_ignore_ascii_case("submit"))
+                || data.attr(local_name!("form")).is_some()
+            {
+                return true;
+            }
+        }
+    }
+    let mut cur = doc.get_node(button_id).and_then(|n| n.parent);
+    while let Some(nid) = cur {
+        let Some(node) = doc.get_node(nid) else {
+            break;
+        };
+        if node
+            .element_data()
+            .is_some_and(|d| d.name.local.to_string().eq_ignore_ascii_case("form"))
+        {
+            return true;
+        }
+        cur = node.parent;
+    }
+    false
+}
+
+fn read_dom_field_value(doc: &HtmlDocument, node_id: NodeId, tag: &str) -> String {
+    let Some(node) = doc.get_node(node_id) else {
+        return String::new();
+    };
+    let Some(data) = node.element_data() else {
+        return String::new();
+    };
+    if let Some(tid) = data.text_input_data() {
+        let editor_text = tid.editor.text().to_string();
+        if !editor_text.is_empty() || data.attr(local_name!("value")).is_some() {
+            return editor_text;
+        }
+    }
+    if tag == "textarea" {
+        data.attr(local_name!("value"))
+            .map(str::to_string)
+            .unwrap_or_else(|| node.text_content())
+    } else {
+        data.attr(local_name!("value"))
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
+fn check_radio_group(doc: &mut HtmlDocument, radio_id: NodeId) {
+    let group_name = doc
+        .get_node(radio_id)
+        .and_then(|n| n.element_data())
+        .and_then(|d| d.attr(local_name!("name")))
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Some(name) = group_name {
+        let mut same_group = Vec::new();
+        let mut stack = vec![doc.root_node().id];
+        while let Some(nid) = stack.pop() {
+            let Some(node) = doc.get_node(nid) else {
+                continue;
+            };
+            for &child in node.children.iter().rev() {
+                stack.push(child);
+            }
+            if let Some(data) = node.element_data() {
+                if data.name.local.to_string().eq_ignore_ascii_case("input")
+                    && data
+                        .attr(local_name!("type"))
+                        .is_some_and(|t| t.eq_ignore_ascii_case("radio"))
+                    && data.attr(local_name!("name")) == Some(name.as_str())
+                {
+                    same_group.push(nid);
+                }
+            }
+        }
+        for nid in same_group {
+            let val = if nid == radio_id { "true" } else { "false" };
+            apply_dom_field_action(doc, nid, "input", "check", Some(val), None, None);
+        }
+    } else {
+        apply_dom_field_action(doc, radio_id, "input", "check", Some("true"), None, None);
+    }
+}
+
+fn select_specific_option(doc: &mut HtmlDocument, select_id: NodeId, option_id: NodeId) {
+    let wanted = doc
+        .get_node(option_id)
+        .and_then(|n| {
+            let data = n.element_data()?;
+            if data.attr(local_name!("disabled")).is_some() {
+                return None;
+            }
+            Some(
+                data.attr(local_name!("value"))
+                    .map(str::to_string)
+                    .unwrap_or_else(|| n.text_content().trim().to_string()),
+            )
+        });
+    if let Some(val) = wanted {
+        apply_dom_field_action(doc, select_id, "select", "select", Some(&val), None, None);
+    }
+}
+
+fn cycle_select_option(doc: &mut HtmlDocument, select_id: NodeId, delta: isize) {
+    let options: Vec<(String, bool)> = doc
+        .get_node(select_id)
+        .map(|node| {
+            node.children
+                .iter()
+                .copied()
+                .filter_map(|cid| {
+                    let cnode = doc.get_node(cid)?;
+                    let cdata = cnode.element_data()?;
+                    if !cdata.name.local.to_string().eq_ignore_ascii_case("option")
+                        || cdata.attr(local_name!("disabled")).is_some()
+                    {
+                        return None;
+                    }
+                    let val = cdata
+                        .attr(local_name!("value"))
+                        .map(str::to_string)
+                        .unwrap_or_else(|| cnode.text_content().trim().to_string());
+                    let is_sel = cdata.attr(local_name!("selected")).is_some();
+                    Some((val, is_sel))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if options.is_empty() {
+        return;
+    }
+    let cur_idx = options.iter().position(|(_, sel)| *sel).unwrap_or(0) as isize;
+    let len = options.len() as isize;
+    let next_idx = ((cur_idx + delta) % len + len) % len;
+    let next_val = options[next_idx as usize].0.clone();
+    apply_dom_field_action(
+        doc,
+        select_id,
+        "select",
+        "select",
+        Some(&next_val),
+        None,
+        None,
+    );
+}
+
+fn focus_adjacent_form_control(doc: &mut HtmlDocument, reverse: bool) -> Option<NodeId> {
+    let mut controls = Vec::new();
+    let mut stack = vec![doc.root_node().id];
+    while let Some(nid) = stack.pop() {
+        let Some(node) = doc.get_node(nid) else {
+            continue;
+        };
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+        let Some(data) = node.element_data() else {
+            continue;
+        };
+        if data.attr(local_name!("disabled")).is_some() {
+            continue;
+        }
+        let tag = data.name.local.to_string().to_ascii_lowercase();
+        if matches!(tag.as_str(), "input" | "textarea" | "select" | "button") {
+            let input_type = data
+                .attr(local_name!("type"))
+                .unwrap_or("text")
+                .to_ascii_lowercase();
+            if !(tag == "input" && input_type == "hidden") {
+                controls.push(nid);
+            }
+        }
+    }
+    if controls.is_empty() {
+        return None;
+    }
+    let cur = doc.get_focussed_node_id();
+    let next = match cur.and_then(|id| controls.iter().position(|&c| c == id)) {
+        Some(idx) => {
+            if reverse {
+                if idx == 0 {
+                    controls[controls.len() - 1]
+                } else {
+                    controls[idx - 1]
+                }
+            } else {
+                controls[(idx + 1) % controls.len()]
+            }
+        }
+        None => {
+            if reverse {
+                controls[controls.len() - 1]
+            } else {
+                controls[0]
+            }
+        }
+    };
+    doc.set_focus_to(next);
+    blitz_dom::Document::handle_ui_event(
+        doc,
+        blitz_traits::events::UiEvent::AppleStandardKeybinding("moveToEndOfDocument:".into()),
+    );
+    Some(next)
+}
+
+fn read_macos_clipboard() -> String {
+    std::process::Command::new("/usr/bin/pbpaste")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default()
+}
+
+fn write_macos_clipboard(text: &str) {
+    use std::io::Write;
+    if let Ok(mut child) = std::process::Command::new("/usr/bin/pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+fn generate_random_token_hex() -> String {
+    use std::io::Read;
+    let mut buf = [0u8; 24];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut buf);
+    } else {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = ((nanos >> ((i % 16) * 8)) & 0xFF) as u8 ^ (i as u8).wrapping_mul(37);
+        }
+    }
+    buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// `--exit-after <seconds>`: run the real event loop for N seconds, then exit.
@@ -6393,6 +7311,7 @@ fn main() {
             (Some(h), Some(a)) if h.len() >= 16 && a.len() >= 16 && h != a => {
                 let hub = Arc::new(ControlHub::new());
                 app.control_hub = Some(hub.clone());
+                app.live_socket_info = Some((socket_path.clone(), h.clone(), a.clone()));
                 if let Err(e) = control::spawn_server(proxy, hub, socket_path.into(), h, a) {
                     eprintln!("[control] failed to bind socket: {e}");
                     std::process::exit(2);
@@ -6404,6 +7323,33 @@ fn main() {
                 );
                 std::process::exit(2);
             }
+        }
+    } else {
+        // When launched interactively as a desktop app without --control-socket,
+        // automatically open a local control socket so in-browser agent tasks
+        // (`agent: <goal>` / `#btn-autofill`) and `./walkaway` can drive the
+        // live window directly.
+        let pid = std::process::id();
+        let sock_path = std::env::temp_dir()
+            .join(format!("walkaway-browser-{pid}.sock"))
+            .to_string_lossy()
+            .to_string();
+        let h = generate_random_token_hex();
+        let a = generate_random_token_hex();
+        let hub = Arc::new(ControlHub::new());
+        app.control_hub = Some(hub.clone());
+        app.supervise_commits_only = true;
+        app.live_socket_info = Some((sock_path.clone(), h.clone(), a.clone()));
+        if control::spawn_server(proxy, hub, sock_path.clone().into(), h.clone(), a.clone()).is_ok()
+        {
+            let info_path = std::env::temp_dir().join("walkaway-live-browser.json");
+            let info_json = json!({
+                "pid": pid,
+                "sock_path": sock_path,
+                "host_token": h,
+                "agent_token": a,
+            });
+            let _ = std::fs::write(info_path, info_json.to_string());
         }
     }
     event_loop.run_app(&mut app).expect("run");
@@ -6816,6 +7762,212 @@ fn uitest() -> i32 {
     }
     let _ = std::fs::remove_file(&sb_temp_path);
 
+    // -----------------------------------------------------------------------
+    // Deliverable 5: Real Human Interactive Browser (Address Select-All,
+    // Page Form Click/Focus/Type/Checkbox/Select, and HTTP POST Form Submit)
+    // -----------------------------------------------------------------------
+    // Close the Scrapbook drawer so the content viewport is at standard offset.
+    if let Some((x, y)) = find_click(&app, "exp-scrapbook") {
+        app.handle_chrome_click(x, y);
+    }
+    app.navigate(START_URL);
+    if let Some((x, y)) = find_click(&app, "address") {
+        app.handle_chrome_click(x, y);
+    }
+    app.handle_logical_key(&Key::Character("e".into()), Some("e"));
+    app.handle_logical_key(&Key::Character("x".into()), Some("x"));
+    if !check(
+        app.tab().canonical.browser.address == "ex",
+        "clicking #address selects all so the first character typed replaces muse://start instead of appending",
+    ) {
+        failures += 1;
+        eprintln!(
+            "     address after typing 'ex' was {:?}",
+            app.tab().canonical.browser.address
+        );
+    }
+
+    // Spin up a real local HTTP server to receive a human-submitted POST form.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind form test server");
+    let server_addr = listener.local_addr().expect("local_addr");
+    let (post_tx, post_rx) = std::sync::mpsc::channel::<(String, String)>();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+            let mut buf = vec![0u8; 8192];
+            let mut total = 0usize;
+            loop {
+                match std::io::Read::read(&mut stream, &mut buf[total..]) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        total += n;
+                        if let Some(hdr_end) = buf[..total]
+                            .windows(4)
+                            .position(|w| w == b"\r\n\r\n")
+                        {
+                            let hdr_str = String::from_utf8_lossy(&buf[..hdr_end]);
+                            let content_len = hdr_str
+                                .lines()
+                                .find_map(|line| {
+                                    let (k, v) = line.split_once(':')?;
+                                    if k.trim().eq_ignore_ascii_case("content-length") {
+                                        v.trim().parse::<usize>().ok()
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or(0);
+                            if total >= hdr_end + 4 + content_len {
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let raw = String::from_utf8_lossy(&buf[..total]).to_string();
+            let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+            let req_line = head.lines().next().unwrap_or("").to_string();
+            let _ = post_tx.send((req_line, body.to_string()));
+            let resp_html = format!(
+                "<!DOCTYPE html><html><head><title>Form Submitted</title></head><body><h1 id=\"post-result\">Submitted: {}</h1></body></html>",
+                body
+            );
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                resp_html.len(),
+                resp_html
+            );
+            let _ = std::io::Write::write_all(&mut stream, resp.as_bytes());
+        }
+    });
+
+    let form_url = format!("http://{}/order", server_addr);
+    let form_html = format!(
+        r#"<!DOCTYPE html><html><head><title>Human Form Test</title></head>
+        <body style="margin:16px;">
+          <form id="order-form" method="POST" action="http://{}/submit">
+            <input id="custname" name="custname" type="text" value="" style="display:block;width:240px;height:32px;margin-bottom:12px;" />
+            <input id="agree" name="agree" type="checkbox" value="yes" style="display:block;width:24px;height:24px;margin-bottom:12px;" />
+            <select id="size" name="size" style="display:block;width:200px;margin-bottom:12px;">
+              <option id="opt-small" value="small" selected>Small</option>
+              <option id="opt-large" value="large">Large</option>
+            </select>
+            <button id="sub-btn" type="submit" style="display:block;width:140px;height:36px;">Submit Order</button>
+          </form>
+        </body></html>"#,
+        server_addr
+    );
+    let active_id = app.tab().canonical.id;
+    let nav_gen = app.tab().canonical.browser.generation;
+    app.handle_navigated(
+        active_id,
+        nav_gen,
+        Url::parse(&form_url).expect("form url"),
+        Ok(form_html),
+    );
+
+    // 1. Click #custname on the page and type "Ryan"
+    if let Some((px, py)) = find_page_click(&app, "custname") {
+        app.handle_page_click(px, py);
+    }
+    for ch in ["R", "y", "a", "n"] {
+        app.handle_logical_key(&Key::Character(ch.into()), Some(ch));
+    }
+    let typed_val = app
+        .tab()
+        .instance
+        .page
+        .doc()
+        .get_element_by_id("custname")
+        .map(|id| read_dom_field_value(app.tab().instance.page.doc(), id, "input"))
+        .unwrap_or_default();
+    if !check(
+        !app.tab().canonical.browser.focused && typed_val == "Ryan",
+        "human page click focuses <input id='custname'> and keyboard typing updates its DOM + editor value to 'Ryan'",
+    ) {
+        failures += 1;
+        eprintln!("     typed_val was {:?}", typed_val);
+    }
+
+    // 2. Click #agree checkbox on the page to toggle it checked
+    if let Some((px, py)) = find_page_click(&app, "agree") {
+        app.handle_page_click(px, py);
+    }
+    let agree_checked = app
+        .tab()
+        .instance
+        .page
+        .doc()
+        .get_element_by_id("agree")
+        .and_then(|id| app.tab().instance.page.doc().get_node(id))
+        .and_then(|n| n.element_data())
+        .and_then(|d| d.checkbox_input_checked())
+        .unwrap_or(false);
+    if !check(
+        agree_checked,
+        "human page click on <input type='checkbox' id='agree'> toggles it checked",
+    ) {
+        failures += 1;
+    }
+
+    // 3. Click #opt-large inside <select id='size'> to choose 'large'
+    if let Some((px, py)) = find_page_click(&app, "opt-large") {
+        app.handle_page_click(px, py);
+    }
+    let sub_node_id = app
+        .tab()
+        .instance
+        .page
+        .doc()
+        .get_element_by_id("sub-btn")
+        .expect("sub-btn");
+    let (_, _, entries_before_submit) = collect_form_submission(
+        app.tab().instance.page.doc(),
+        &Url::parse(&form_url).expect("form url"),
+        sub_node_id,
+    );
+    if !check(
+        entries_before_submit.contains(&("custname".to_string(), "Ryan".to_string()))
+            && entries_before_submit.contains(&("agree".to_string(), "yes".to_string()))
+            && entries_before_submit.contains(&("size".to_string(), "large".to_string())),
+        "human page click on <option id='opt-large'> selects 'large' in <select id='size'>",
+    ) {
+        failures += 1;
+        eprintln!("     entries_before_submit: {:?}", entries_before_submit);
+    }
+
+    // 4. Click #sub-btn to submit the form over real HTTP POST and verify server received payload + rendered response
+    if let Some((px, py)) = find_page_click(&app, "sub-btn") {
+        app.handle_page_click(px, py);
+    }
+    let post_received = post_rx.recv_timeout(std::time::Duration::from_secs(3)).ok();
+    let post_heading = app
+        .tab()
+        .instance
+        .page
+        .doc()
+        .get_element_by_id("post-result")
+        .and_then(|id| app.tab().instance.page.doc().get_node(id))
+        .map(|n| n.text_content())
+        .unwrap_or_default();
+    if !check(
+        post_received.as_ref().is_some_and(|(req_line, body)| {
+            req_line.starts_with("POST /submit ")
+                && body.contains("custname=Ryan")
+                && body.contains("agree=yes")
+                && body.contains("size=large")
+        }) && app.tab().canonical.browser.display_url().ends_with("/submit")
+            && post_heading.contains("custname=Ryan&agree=yes&size=large"),
+        "clicking <button type='submit'> submits form over real HTTP POST and renders response page",
+    ) {
+        failures += 1;
+        eprintln!(
+            "     post_received={:?}, post_heading={:?}",
+            post_received, post_heading
+        );
+    }
+
     cleanup_test_run();
 
     if failures == 0 {
@@ -6835,6 +7987,28 @@ fn find_click(app: &BrowserApp, id: &str) -> Option<(f32, f32)> {
             if let Some(hit) = app.chrome_doc.hit(x as f32, y as f32) {
                 if dom_ffi::bubble_target(&app.chrome_doc, hit.node_id) == target {
                     return Some((x as f32 + 0.5, y as f32 + 0.5));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Locate a clickable point for a page element id in window coordinates via real hit-testing.
+fn find_page_click(app: &BrowserApp, id: &str) -> Option<(f32, f32)> {
+    let doc = app.tab().instance.page.doc();
+    let target = doc.get_element_by_id(id)?;
+    let ox = app.left_chrome_width() as f32;
+    let oy = app.top_chrome_height() as f32;
+    for y in (0..HEIGHT as i32).step_by(2) {
+        for x in (0..WIDTH as i32).step_by(2) {
+            if let Some(hit) = doc.hit(x as f32, y as f32) {
+                let mut cur = Some(hit.node_id);
+                while let Some(nid) = cur {
+                    if nid == target {
+                        return Some((ox + x as f32 + 0.5, oy + y as f32 + 0.5));
+                    }
+                    cur = doc.get_node(nid).and_then(|n| n.parent);
                 }
             }
         }

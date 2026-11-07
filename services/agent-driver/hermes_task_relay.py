@@ -356,45 +356,53 @@ class HermesTaskManager:
             self.last_decision_receipt = None
             self.pending_decision = None
 
-            sock_path = self.work_dir / f"hermes-{int(time.time() * 1000)}.sock"
-            self.host_token = secrets.token_urlsafe(18)
-            self.agent_token = secrets.token_urlsafe(18)
-
-            env = os.environ.copy()
-            env["HERMES_HOST_TOKEN"] = self.host_token
-            env["HERMES_AGENT_TOKEN"] = self.agent_token
-            env["HERMES_VAULT_PATH"] = str(self.vault_path)
-            env["HERMES_RECALL_PATH"] = str(self.recall_path)
-            env["HERMES_AUDIT_PATH"] = str(self.audit_path)
-            if self.show_window:
-                env["HERMES_SHOW_WINDOW"] = "1"
+            attach_sock_env = os.environ.get("WALKAWAY_ATTACH_SOCK_PATH", "").strip()
+            reuse_active = False
+            if attach_sock_env and Path(attach_sock_env).exists():
+                sock_path = Path(attach_sock_env)
+                self.host_token = os.environ.get("HERMES_HOST_TOKEN") or self.host_token
+                self.agent_token = os.environ.get("HERMES_AGENT_TOKEN") or self.agent_token
+                reuse_active = True
             else:
-                env["HERMES_HIDDEN_WINDOW"] = "1"
+                sock_path = self.work_dir / f"hermes-{int(time.time() * 1000)}.sock"
+                self.host_token = secrets.token_urlsafe(18)
+                self.agent_token = secrets.token_urlsafe(18)
 
-            hermes_bin = hermes_agent_driver.resolve_hermes_binary()
-            cmd = [
-                str(hermes_bin),
-                "--control-socket",
-                str(sock_path),
-                "--supervise-commits-only",
-                "--xray",
-            ]
-            if not self.show_window:
-                cmd.append("--hidden-window")
+                env = os.environ.copy()
+                env["HERMES_HOST_TOKEN"] = self.host_token
+                env["HERMES_AGENT_TOKEN"] = self.agent_token
+                env["HERMES_VAULT_PATH"] = str(self.vault_path)
+                env["HERMES_RECALL_PATH"] = str(self.recall_path)
+                env["HERMES_AUDIT_PATH"] = str(self.audit_path)
+                if self.show_window:
+                    env["HERMES_SHOW_WINDOW"] = "1"
+                else:
+                    env["HERMES_HIDDEN_WINDOW"] = "1"
 
-            self.browser_proc = subprocess.Popen(
-                cmd,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+                hermes_bin = hermes_agent_driver.resolve_hermes_binary()
+                cmd = [
+                    str(hermes_bin),
+                    "--control-socket",
+                    str(sock_path),
+                    "--supervise-commits-only",
+                    "--xray",
+                ]
+                if not self.show_window:
+                    cmd.append("--hidden-window")
 
-            deadline = time.monotonic() + 10.0
-            while not sock_path.exists() and time.monotonic() < deadline:
-                time.sleep(0.04)
-            if not sock_path.exists():
-                raise RuntimeError("Hermes browser did not create control socket")
+                self.browser_proc = subprocess.Popen(
+                    cmd,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+
+                deadline = time.monotonic() + 10.0
+                while not sock_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.04)
+                if not sock_path.exists():
+                    raise RuntimeError("Hermes browser did not create control socket")
 
             attach_resp = _http_json(
                 f"{self.bridge_url}/sockets",
@@ -403,6 +411,8 @@ class HermesTaskManager:
                     "token": self.host_token,
                     "start_url": resolved_url,
                     "session_title": f"Walkaway: {self.goal[:60]}",
+                    "reuse_active_tab": reuse_active,
+                    "force_replace": reuse_active,
                 },
                 headers=self._bus_headers(),
                 timeout_s=10.0,
