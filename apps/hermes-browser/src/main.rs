@@ -4353,6 +4353,40 @@ impl BrowserApp {
                     rp_id: ceremony.rp_id.clone(),
                     account_hint: ceremony.account_hint.clone(),
                     prompt: ceremony.prompt.clone(),
+                })
+                .or_else(|| {
+                    let s = self.control.as_ref()?;
+                    if s.tab_id != self.tab().canonical.id {
+                        return None;
+                    }
+                    let p = s.pending.as_ref()?;
+                    let _cid = p.ceremony_id.as_ref()?;
+                    let origin = p
+                        .operation
+                        .get("origin")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let rp_id = p
+                        .operation
+                        .get("rp")
+                        .and_then(|r| r.get("id"))
+                        .and_then(Value::as_str)
+                        .or_else(|| p.operation.get("rp_id").and_then(Value::as_str))
+                        .unwrap_or_default()
+                        .to_string();
+                    let account_hint = p
+                        .operation
+                        .get("user")
+                        .and_then(|u| u.get("name"))
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_string());
+                    Some(chrome::PasskeyPrompt {
+                        origin,
+                        rp_id,
+                        account_hint,
+                        prompt: p.rationale.clone(),
+                    })
                 }),
         });
 
@@ -4758,8 +4792,8 @@ impl BrowserApp {
 
         // Supervision bar (session tab only). These are host decisions made
         // through the same code path as a socket `decision`.
-        if id_is("sup-approve") || id_is("sup-reject") {
-            let approve = id_is("sup-approve");
+        if id_is("sup-approve") || id_is("sup-reject") || id_is("pk-allow") || id_is("pk-deny") {
+            let approve = id_is("sup-approve") || id_is("pk-allow");
             if let Some(pending) = self.control.as_ref().and_then(|s| s.pending.as_ref()) {
                 let (pid, fp, generation) = (
                     pending.proposal_id.clone(),

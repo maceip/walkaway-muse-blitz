@@ -1148,20 +1148,27 @@ pub fn render(state: &ChromeState<'_>) -> String {
                 ),
                 _ => String::new(),
             };
+            let pk_rib_bg = ribbed_rect_svg(340, 220, "#F0F0F0", "#FAFAFA", "#E2E2E2");
+            let pk_deny_svg = r##"<div class="rib-bg"><svg width="142" height="28" viewBox="0 0 142 28"><defs><linearGradient id="pkd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8EB4D6"/><stop offset="35%" stop-color="#C2DCF2"/><stop offset="75%" stop-color="#E6F3FF"/><stop offset="100%" stop-color="#FFFFFF"/></linearGradient><linearGradient id="pkds" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.92"/><stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.15"/></linearGradient></defs><rect x="0.8" y="0.8" width="140.4" height="26.4" rx="13.2" fill="url(#pkd)" stroke="#244B70" stroke-width="1.2"/><rect x="8" y="2.4" width="126" height="10" rx="5" fill="url(#pkds)"/></svg></div>"##;
+            let pk_allow_svg = r##"<div class="rib-bg"><svg width="142" height="28" viewBox="0 0 142 28"><defs><linearGradient id="pka" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0A3566"/><stop offset="28%" stop-color="#14589E"/><stop offset="68%" stop-color="#227CD4"/><stop offset="100%" stop-color="#5CE6FF"/></linearGradient><linearGradient id="pkas" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.88"/><stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.08"/></linearGradient></defs><rect x="0.8" y="0.8" width="140.4" height="26.4" rx="13.2" fill="url(#pka)" stroke="#052347" stroke-width="1.2"/><rect x="8" y="2.4" width="126" height="10" rx="5" fill="url(#pkas)"/></svg></div>"##;
             format!(
                 r#"<div class="pk-scrim" id="pk-scrim">
                      <div class="pk-modal" id="pk-modal" role="alertdialog" aria-modal="true" aria-labelledby="pk-title">
+                       {pk_rib_bg}
                        <div class="pk-icon" id="pk-icon">{key_svg}</div>
                        <div class="pk-title" id="pk-title">Use a passkey?</div>
                        <div class="pk-site" id="pk-site">{origin}</div>
                        {account}
                        <div class="pk-detail" id="pk-detail">{detail}</div>
                        <div class="pk-actions">
-                         <div class="pk-btn pk-deny" id="pk-deny">Deny</div>
-                         <div class="pk-btn pk-allow" id="pk-allow">Allow</div>
+                         <div class="pk-btn pk-deny" id="pk-deny">{pk_deny_svg}<span class="sup-btn-lbl">Deny</span></div>
+                         <div class="pk-btn pk-allow" id="pk-allow">{pk_allow_svg}<span class="sup-btn-lbl">Allow</span></div>
                        </div>
                      </div>
                    </div>"#,
+                pk_rib_bg = pk_rib_bg,
+                pk_deny_svg = pk_deny_svg,
+                pk_allow_svg = pk_allow_svg,
                 origin = origin,
                 account = account,
                 detail = escape_html(if prompt.prompt.is_empty() {
@@ -1975,71 +1982,85 @@ pub fn render(state: &ChromeState<'_>) -> String {
     z-index: 90;
   }}
   .pk-modal {{
+    position: relative;
     width: 340px;
     padding: 20px 22px 18px 22px;
-    background-color: #F6F6F6;
-    border: 1px solid #9A9A9A;
-    border-radius: 12px;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
+    background-color: #F0F0F0;
+    border-top: 1.5px solid #FFFFFF;
+    border-left: 1.5px solid #FFFFFF;
+    border-right: 1.5px solid #3A3A3A;
+    border-bottom: 1.5px solid #3A3A3A;
+    border-radius: 10px;
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.38);
     display: flex;
     flex-direction: column;
     align-items: center;
+    overflow: hidden;
     pointer-events: auto;
   }}
   .pk-icon {{
+    position: relative;
     margin-bottom: 8px;
   }}
   .pk-key-svg {{
     pointer-events: none;
   }}
   .pk-title {{
+    position: relative;
     font-size: 15px;
     font-weight: 700;
-    color: #1C1C1E;
+    color: #08243E;
     margin-bottom: 6px;
   }}
   .pk-site {{
+    position: relative;
     font-size: 12px;
-    color: #4A4A4E;
+    font-weight: 600;
+    color: #1C1C1E;
     margin-bottom: 4px;
     word-break: break-all;
     text-align: center;
   }}
   .pk-account {{
+    position: relative;
     font-size: 12px;
-    color: #4A4A4E;
+    color: #2C3E50;
     margin-bottom: 4px;
     text-align: center;
   }}
   .pk-detail {{
+    position: relative;
     font-size: 11px;
-    color: #6E7176;
+    color: #3A3A3C;
     margin-top: 6px;
     margin-bottom: 14px;
     text-align: center;
   }}
   .pk-actions {{
+    position: relative;
     display: flex;
     flex-direction: row;
-    gap: 10px;
+    gap: 12px;
     width: 100%;
+    justify-content: center;
   }}
   .pk-btn {{
-    flex: 1;
-    height: 26px;
-    line-height: 26px;
+    position: relative;
+    width: 142px;
+    height: 28px;
+    line-height: 28px;
     text-align: center;
     font-size: 12px;
-    font-weight: 600;
-    border-radius: 6px;
-    border: 1px solid #8E8E93;
-    background-color: #FFFFFF;
-    color: #1C1C1E;
+    font-weight: 700;
+    background-color: transparent;
+    color: #08243E;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
   }}
   .pk-allow {{
-    background-color: #1B8A38;
-    border-color: #146B2C;
     color: #FFFFFF;
   }}
 </style>
