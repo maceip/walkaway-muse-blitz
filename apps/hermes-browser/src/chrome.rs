@@ -240,14 +240,14 @@ pub struct ChromeState<'a> {
 /// Title/Tab Strip (26) + Ribbed Aqua Button Bar (48) + Cylindrical Aqua Address Bar (30) + Ribbed Favorites Strip (24) = 128.0.
 pub const CHROME_HEIGHT: f64 = 128.0;
 /// Width of the vertical IE5 Mac Explorer Bar folder-tab rail.
-pub const EXPLORER_RAIL_WIDTH: f64 = 36.0;
+pub const EXPLORER_RAIL_WIDTH: f64 = 28.0;
 /// Width of the collapsible Explorer Bar drawer panel when open.
 pub const EXPLORER_DRAWER_WIDTH: f64 = 286.0;
 /// Height of the Page Holder drawer's top control header bar.
 pub const PH_HEADER_HEIGHT: f64 = 52.0;
 
-/// Generates an SVG with explicit horizontal fluted/ribbed Aqua pinstripe `<path>` lines
-/// (`anyrender_svg` renders `<path>` strokes directly without `<pattern>` fallback).
+/// Generates a `<div class="rib-bg">` wrapping an SVG with explicit horizontal fluted/ribbed
+/// Aqua pinstripe `<path>` lines (`anyrender_svg` renders `<path>` strokes directly).
 fn ribbed_rect_svg(width: u32, height: u32, base: &str, hi: &str, lo: &str) -> String {
     let mut hi_path = String::new();
     let mut lo_path = String::new();
@@ -260,80 +260,97 @@ fn ribbed_rect_svg(width: u32, height: u32, base: &str, hi: &str, lo: &str) -> S
         y += 3;
     }
     format!(
-        r##"<svg class="rib-bg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><rect width="{width}" height="{height}" fill="{base}"/><path d="{hi_path}" stroke="{hi}" stroke-width="1"/><path d="{lo_path}" stroke="{lo}" stroke-width="1"/></svg>"##
+        r##"<div class="rib-bg"><svg width="{width}" height="{height}" viewBox="0 0 {width} {height}"><rect width="{width}" height="{height}" fill="{base}"/><path d="{hi_path}" stroke="{hi}" stroke-width="1"/><path d="{lo_path}" stroke="{lo}" stroke-width="1"/></svg></div>"##
     )
 }
 
-/// Generates an interlocking angled IE5 Mac Explorer Bar folder tab SVG (`34x96px`) with
-/// horizontal fluted/ribbed pinstripes inside inactive tabs, solid seamless drawer fill
-/// inside the active tab (`media_1794004131108_320b1153.jpg`), and `/` diagonal joints.
+/// Generates an interlocking angled IE5 Mac Explorer Bar folder tab (`27x90px`) wrapped in
+/// `<div class="exp-tab-bg">` with horizontal fluted/ribbed pinstripes and authentic shoulders:
+/// - Inactive boundary lines slope UP-RIGHT (`/`, from `(0, 90)` to `(26, 77)`).
+/// - The active tab (`active == true`) pops to the front: its top shoulder slopes
+///   DOWN-RIGHT (`\`, from `(0, 0)` to `(26, 13)`) and its bottom shoulder slopes
+///   UP-RIGHT (`/`, from `(0, 90)` to `(26, 77)`), while the tab immediately above
+///   it (`next_active == true`) tucks behind that `\` shoulder (`(0, 77)` to `(26, 90)`).
 fn folder_tab_svg(
     first_tab: bool,
     active: bool,
+    next_active: bool,
     drawer_open: bool,
     base: &str,
     hi: &str,
     lo: &str,
-    drawer_bg: &str,
+    active_base: &str,
 ) -> String {
-    // Tab geometry: width = 34, height = 96.
-    // Top edge:
-    //   if first_tab: flat (0, 0) -> (33, 0)
-    //   else: diagonal `/` matching previous tab's bottom: (0, 14) -> (33, 0)
-    // Bottom edge: diagonal `/` (33, 82) -> (0, 96)
-    let fill_col = if active { drawer_bg } else { base };
-    let poly_pts = if first_tab {
-        "0,0 33,0 33,82 0,96"
+    let fill_col = if active { active_base } else { base };
+
+    let (tl_y, tr_y) = if first_tab {
+        (0u32, 0u32)
+    } else if active {
+        (0u32, 13u32)
     } else {
-        "0,14 33,0 33,82 0,96"
+        (13u32, 0u32)
     };
 
+    let (bl_y, br_y) = if next_active {
+        (77u32, 90u32)
+    } else {
+        (90u32, 77u32)
+    };
+
+    let poly_pts = format!("0,{tl_y} 26,{tr_y} 26,{br_y} 0,{bl_y}");
+
     let mut ribs = String::new();
-    // In Figure 6 (`media_1794004131108_320b1153.jpg`), inactive folder tabs have horizontal
-    // fluted ribs while the active tab has a smooth solid fill matching the open drawer.
-    if !active {
-        let mut y = 2u32;
-        while y < 95 {
-            let yf = y as f64;
-            let x_left = if !first_tab && yf < 14.0 {
-                ((14.0 - yf) * (33.0 / 14.0)).ceil() as u32
-            } else {
-                1
-            };
-            let x_right = if yf > 82.0 {
-                (((96.0 - yf) * (33.0 / 14.0)).floor() as u32).min(32)
-            } else {
-                32
-            };
-            if x_right > x_left + 1 {
-                let stroke_col = if (y / 2) % 2 == 0 { hi } else { lo };
-                let _ = write!(
-                    ribs,
-                    r#"<line x1="{x_left}" y1="{y}.5" x2="{x_right}" y2="{y}.5" stroke="{stroke_col}" stroke-width="1"/>"#
-                );
-            }
-            y += 2;
+    let rib_hi = if active { "#FAFAFA" } else { hi };
+    let rib_lo = if active { "#DCDCDC" } else { lo };
+    let mut y = 2u32;
+    while y < 89 {
+        let yf = y as f64;
+        let mut x_left = 1u32;
+        let mut x_right = 25u32;
+        if tl_y == 13 && tr_y == 0 && yf < 13.0 {
+            x_left = ((13.0 - yf) * (26.0 / 13.0)).ceil() as u32;
+        } else if tl_y == 0 && tr_y == 13 && yf < 13.0 {
+            x_right = ((yf * (26.0 / 13.0)).floor() as u32).min(25);
         }
+        if bl_y == 90 && br_y == 77 && yf > 77.0 {
+            x_right = x_right.min(((90.0 - yf) * (26.0 / 13.0)).floor() as u32);
+        } else if bl_y == 77 && br_y == 90 && yf > 77.0 {
+            x_left = x_left.max(((yf - 77.0) * (26.0 / 13.0)).ceil() as u32);
+        }
+        if x_right > x_left + 1 {
+            let stroke_col = if (y / 2) % 2 == 0 { rib_hi } else { rib_lo };
+            let _ = write!(
+                ribs,
+                r#"<line x1="{x_left}" y1="{y}.5" x2="{x_right}" y2="{y}.5" stroke="{stroke_col}" stroke-width="1"/>"#
+            );
+        }
+        y += 2;
     }
 
     let left_border = if active && drawer_open {
-        // Active tab seamlessly joins the open drawer on its left with zero vertical seam
         String::new()
     } else {
-        let y_top = if first_tab { 0 } else { 14 };
         format!(
-            r##"<line x1="0.5" y1="{y_top}" x2="0.5" y2="96" stroke="#333333" stroke-width="1.1"/><line x1="1.5" y1="{y_top}" x2="1.5" y2="95" stroke="#FFFFFF" stroke-width="1"/>"##
+            r##"<line x1="0.5" y1="{tl_y}" x2="0.5" y2="{bl_y}" stroke="#333333" stroke-width="1.1"/><line x1="1.5" y1="{tl_y}" x2="1.5" y2="{bl_y}" stroke="#FFFFFF" stroke-width="1"/>"##
         )
     };
 
     let top_border = if first_tab {
-        r##"<line x1="0" y1="0.5" x2="33" y2="0.5" stroke="#FFFFFF" stroke-width="1.2"/>"##
+        r##"<line x1="0" y1="0.5" x2="26" y2="0.5" stroke="#444444" stroke-width="1.2"/><line x1="0" y1="1.5" x2="25" y2="1.5" stroke="#FFFFFF" stroke-width="1"/>"##.to_string()
+    } else if active {
+        r##"<line x1="0" y1="0" x2="26" y2="13" stroke="#333333" stroke-width="1.3"/><line x1="1" y1="1.5" x2="25" y2="13.5" stroke="#FFFFFF" stroke-width="1.1"/>"##.to_string()
     } else {
-        r##"<line x1="0" y1="14" x2="33" y2="0" stroke="#444444" stroke-width="1.3"/><line x1="1" y1="14.8" x2="32.5" y2="1.2" stroke="#FFFFFF" stroke-width="1.1"/>"##
+        r##"<line x1="0" y1="13" x2="26" y2="0" stroke="#444444" stroke-width="1.2"/><line x1="1" y1="13.8" x2="25.5" y2="1.2" stroke="#FFFFFF" stroke-width="1"/>"##.to_string()
+    };
+
+    let bottom_border = if next_active {
+        r##"<line x1="0" y1="77" x2="26" y2="90" stroke="#333333" stroke-width="1.3"/>"##
+    } else {
+        r##"<line x1="0" y1="90" x2="26" y2="77" stroke="#333333" stroke-width="1.3"/><line x1="1" y1="88.6" x2="25" y2="76.2" stroke="#B5B5B5" stroke-width="1"/>"##
     };
 
     format!(
-        r##"<svg class="exp-tab-bg" width="34" height="96" viewBox="0 0 34 96"><polygon points="{poly_pts}" fill="{fill_col}"/>{ribs}{top_border}{left_border}<line x1="33" y1="0" x2="33" y2="82" stroke="#444444" stroke-width="1.2"/><line x1="31.8" y1="1" x2="31.8" y2="81.5" stroke="#BDBDBD" stroke-width="0.9"/><line x1="0" y1="96" x2="33" y2="82" stroke="#444444" stroke-width="1.4"/></svg>"##
+        r##"<div class="exp-tab-bg"><svg width="27" height="90" viewBox="0 0 27 90"><polygon points="{poly_pts}" fill="{fill_col}"/>{ribs}{top_border}{left_border}<line x1="26" y1="{tr_y}" x2="26" y2="{br_y}" stroke="#333333" stroke-width="1.2"/><line x1="24.8" y1="{tr_y}" x2="24.8" y2="{br_y}" stroke="#FFFFFF" stroke-width="0.9"/>{bottom_border}</svg></div>"##
     )
 }
 
@@ -378,8 +395,9 @@ pub fn render(state: &ChromeState<'_>) -> String {
         ""
     };
 
-    // Classic grey 3D `@` swirl icon using vector `<path>` curves (no `<text>` node so `anyrender_svg` renders the `@` swirl!).
-    let at_swirl_svg = r##"<svg class="at-svg" width="15" height="15" viewBox="0 0 16 16"><defs><linearGradient id="atg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF"/><stop offset="100%" stop-color="#A8B0B8"/></linearGradient></defs><circle cx="8" cy="8" r="6.8" fill="url(#atg)" stroke="#555E68" stroke-width="1.2"/><path d="M9.6,9.4 C9.1,10.0 8.4,10.3 7.6,10.3 C6.2,10.3 5.2,9.3 5.2,7.9 C5.2,6.5 6.3,5.4 7.7,5.4 C9.1,5.4 10.1,6.4 10.1,7.8 L10.1,9.2 C10.1,9.8 10.5,10.1 11.0,10.0 C11.8,9.7 12.3,8.8 12.3,7.7 C12.3,5.3 10.3,3.6 7.8,3.6 C5.2,3.6 3.3,5.5 3.3,8.0 C3.3,10.5 5.2,12.3 7.9,12.3 C9.0,12.3 10.0,12.0 10.7,11.5" fill="none" stroke="#26323E" stroke-width="1.25" stroke-linecap="round"/><circle cx="7.7" cy="7.9" r="1.4" fill="none" stroke="#26323E" stroke-width="1.2"/></svg>"##;
+    // Classic IE5 Mac 3D silver circular `@` badge (`16x16px`): raised metallic disc with a clean,
+    // high-contrast `@` glyph (open spiral tail on the right so it never looks like concentric rings).
+    let at_swirl_svg = r##"<svg class="at-svg" width="16" height="16" viewBox="0 0 16 16"><defs><radialGradient id="atg" cx="30%" cy="25%" r="75%"><stop offset="0%" stop-color="#FFFFFF"/><stop offset="60%" stop-color="#E0E0E0"/><stop offset="100%" stop-color="#9A9A9A"/></radialGradient></defs><circle cx="8" cy="8" r="6.8" fill="url(#atg)" stroke="#707070" stroke-width="0.9"/><path d="M9.7,6.0 L9.7,9.1 C9.7,9.8 10.6,9.9 11.2,9.2 C11.9,8.4 12.0,6.9 11.4,5.6 C10.5,3.9 8.3,3.2 6.3,4.0 C4.2,4.9 3.4,7.3 4.2,9.5 C5.0,11.6 7.3,12.5 9.7,11.9" fill="none" stroke="#1F1F1F" stroke-width="1.2" stroke-linecap="round"/><path d="M9.6,6.6 C9.1,5.9 8.3,5.6 7.5,5.7 C6.2,5.9 5.5,7.0 5.7,8.3 C5.9,9.5 6.9,10.2 8.1,10.0 C8.8,9.9 9.3,9.5 9.6,8.9" fill="none" stroke="#1F1F1F" stroke-width="1.2" stroke-linecap="round"/></svg>"##;
 
     let mut tabs = String::new();
     for (index, tab) in state.tabs.iter().enumerate() {
@@ -411,65 +429,69 @@ pub fn render(state: &ChromeState<'_>) -> String {
 
     let secure_attr = if state.secure { "https" } else { "http" };
 
-    // Fluted / ribbed horizontal pinstripe SVG backgrounds
+    // Fluted / ribbed horizontal pinstripe SVG backgrounds wrapped in `<div class="rib-bg">`
+    let title_rib_bg = ribbed_rect_svg(2400, 26, "#EAEAEA", "#F8F8F8", "#DCDCDC");
     let nav_rib_bg = ribbed_rect_svg(2400, 48, p.rib_base, p.rib_hi, p.rib_lo);
     let fav_rib_bg = ribbed_rect_svg(2400, 24, p.rib_base, p.rib_hi, p.rib_lo);
-    let status_rib_bg = ribbed_rect_svg(2400, 19, p.rib_base, p.rib_hi, p.rib_lo);
 
-    // 3D Cylindrical Aqua Blue tube SVG background for the 30px Address bar row
-    let addr_aqua_tube_bg = r##"<svg class="rib-bg" width="2400" height="30" viewBox="0 0 2400 30"><defs><linearGradient id="aquatube" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0E3958"/><stop offset="18%" stop-color="#2D80B5"/><stop offset="42%" stop-color="#76CBF7"/><stop offset="56%" stop-color="#48A2DA"/><stop offset="84%" stop-color="#175885"/><stop offset="100%" stop-color="#09263B"/></linearGradient></defs><rect width="2400" height="30" fill="url(#aquatube)"/><line x1="0" y1="0.5" x2="2400" y2="0.5" stroke="#051826" stroke-width="1"/><line x1="0" y1="29.5" x2="2400" y2="29.5" stroke="#051826" stroke-width="1"/></svg>"##;
+    // 3D Cylindrical Deep Bondi-Teal Aqua tube SVG background for the 30px Address bar row
+    let addr_aqua_tube_bg = r##"<div class="rib-bg"><svg width="2400" height="30" viewBox="0 0 2400 30"><defs><linearGradient id="aquatube" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0E4463"/><stop offset="22%" stop-color="#3784AB"/><stop offset="44%" stop-color="#88C8E4"/><stop offset="60%" stop-color="#3B89B0"/><stop offset="86%" stop-color="#14567A"/><stop offset="100%" stop-color="#092E46"/></linearGradient></defs><rect width="2400" height="30" fill="url(#aquatube)"/><line x1="0" y1="0.5" x2="2400" y2="0.5" stroke="#062133" stroke-width="1"/><line x1="0" y1="29.5" x2="2400" y2="29.5" stroke="#062133" stroke-width="1"/></svg></div>"##;
 
-    // 3D Glossy Aqua Blue SVG Icons for the top toolbar (28x24px)
+    // Mac OS X Aqua Traffic Light Gumdrop Buttons (Red, Yellow, Green) for the left of the Title Bar
+    let traffic_lights_svg = r##"<svg class="traffic-svg" width="54" height="16" viewBox="0 0 54 16"><defs><radialGradient id="tlr" cx="35%" cy="25%" r="70%"><stop offset="0%" stop-color="#FFACA6"/><stop offset="45%" stop-color="#FF5F57"/><stop offset="100%" stop-color="#B81D13"/></radialGradient><radialGradient id="tly" cx="35%" cy="25%" r="70%"><stop offset="0%" stop-color="#FFF0A8"/><stop offset="45%" stop-color="#FFBD2E"/><stop offset="100%" stop-color="#B57B00"/></radialGradient><radialGradient id="tlg" cx="35%" cy="25%" r="70%"><stop offset="0%" stop-color="#B4F8C0"/><stop offset="45%" stop-color="#28C840"/><stop offset="100%" stop-color="#0F7A1E"/></radialGradient></defs><circle cx="8" cy="8" r="6" fill="url(#tlr)" stroke="#7A160E" stroke-width="1"/><ellipse cx="8" cy="5.2" rx="3.2" ry="1.6" fill="#FFFFFF" fill-opacity="0.75"/><circle cx="27" cy="8" r="6" fill="url(#tly)" stroke="#7D5600" stroke-width="1"/><ellipse cx="27" cy="5.2" rx="3.2" ry="1.6" fill="#FFFFFF" fill-opacity="0.75"/><circle cx="46" cy="8" r="6" fill="url(#tlg)" stroke="#0C5917" stroke-width="1"/><ellipse cx="46" cy="5.2" rx="3.2" ry="1.6" fill="#FFFFFF" fill-opacity="0.75"/></svg>"##;
+
+    // Mac OS X Aqua Oblong Toolbar-Toggle Pill Button on the right of the Title Bar
+    let aqua_pill_svg = r##"<svg width="24" height="12" viewBox="0 0 24 12"><defs><linearGradient id="aqpil" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FFFFFF"/><stop offset="55%" stop-color="#DCE4EC"/><stop offset="100%" stop-color="#AEBCC8"/></linearGradient></defs><rect x="1" y="1" width="22" height="10" rx="5" fill="url(#aqpil)" stroke="#52606C" stroke-width="1.1"/><ellipse cx="12" cy="4" rx="7" ry="1.8" fill="#FFFFFF" fill-opacity="0.85"/></svg>"##;
+
+    // 3D Translucent Bondi-Teal Aqua Glass SVG Icons for the top toolbar (`media_1794020340993_5f6a11ae.jpg`)
     let back_icon_svg = if state.can_back {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="abk" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7EE0FF"/><stop offset="45%" stop-color="#1A80C2"/><stop offset="100%" stop-color="#0A436E"/></linearGradient></defs><path d="M19,3 C20.5,2 22,3 22,5 L22,19 C22,21 20.5,22 19,21 L6,13.5 C4.5,12.5 4.5,11.5 6,10.5 Z" fill="url(#abk)" stroke="#08385C" stroke-width="1.3"/><path d="M19.5,4.5 L7.5,11.5 L19.5,9.5 Z" fill="#C4EEFF" fill-opacity="0.7"/></svg>"##
+        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="abk" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8AE0FA"/><stop offset="48%" stop-color="#2286AE"/><stop offset="100%" stop-color="#0B4663"/></linearGradient></defs><path d="M19,3.5 C20.5,2.5 22,3.5 22,5.5 L22,18.5 C22,20.5 20.5,21.5 19,20.5 L6.5,13.5 C5,12.5 5,11.5 6.5,10.5 Z" fill="url(#abk)" stroke="#093B54" stroke-width="1.2"/><path d="M19.5,5 L8,11.5 L19.5,9.5 Z" fill="#D4F4FF" fill-opacity="0.7"/></svg>"##
     } else {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="abkd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#D2DEE6"/><stop offset="55%" stop-color="#A5B8C6"/><stop offset="100%" stop-color="#879AA8"/></linearGradient></defs><path d="M19,3 C20.5,2 22,3 22,5 L22,19 C22,21 20.5,22 19,21 L6,13.5 C4.5,12.5 4.5,11.5 6,10.5 Z" fill="url(#abkd)" stroke="#788A98" stroke-width="1.2"/><path d="M19.5,4.5 L7.5,11.5 L19.5,9.5 Z" fill="#ECF4F8" fill-opacity="0.6"/></svg>"##
+        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="abkd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#B0C4CE"/><stop offset="100%" stop-color="#92A8B4"/></linearGradient></defs><path d="M19,3.5 C20.5,2.5 22,3.5 22,5.5 L22,18.5 C22,20.5 20.5,21.5 19,20.5 L6.5,13.5 C5,12.5 5,11.5 6.5,10.5 Z" fill="url(#abkd)" stroke="#859AA6" stroke-width="1.1"/><path d="M19.5,5 L8,11.5 L19.5,9.5 Z" fill="#F0F7FA" fill-opacity="0.65"/></svg>"##
     };
 
     let fwd_icon_svg = if state.can_forward {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="afw" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7EE0FF"/><stop offset="45%" stop-color="#1A80C2"/><stop offset="100%" stop-color="#0A436E"/></linearGradient></defs><path d="M9,3 C7.5,2 6,3 6,5 L6,19 C6,21 7.5,22 9,21 L22,13.5 C23.5,12.5 23.5,11.5 22,10.5 Z" fill="url(#afw)" stroke="#08385C" stroke-width="1.3"/><path d="M8.5,4.5 L20.5,11.5 L8.5,9.5 Z" fill="#C4EEFF" fill-opacity="0.7"/></svg>"##
+        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="afw" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8AE0FA"/><stop offset="48%" stop-color="#2286AE"/><stop offset="100%" stop-color="#0B4663"/></linearGradient></defs><path d="M9,3.5 C7.5,2.5 6,3.5 6,5.5 L6,18.5 C6,20.5 7.5,21.5 9,20.5 L21.5,13.5 C23,12.5 23,11.5 21.5,10.5 Z" fill="url(#afw)" stroke="#093B54" stroke-width="1.2"/><path d="M8.5,5 L20,11.5 L8.5,9.5 Z" fill="#D4F4FF" fill-opacity="0.7"/></svg>"##
     } else {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="afwd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#D2DEE6"/><stop offset="55%" stop-color="#A5B8C6"/><stop offset="100%" stop-color="#879AA8"/></linearGradient></defs><path d="M9,3 C7.5,2 6,3 6,5 L6,19 C6,21 7.5,22 9,21 L22,13.5 C23.5,12.5 23.5,11.5 22,10.5 Z" fill="url(#afwd)" stroke="#788A98" stroke-width="1.2"/><path d="M8.5,4.5 L20.5,11.5 L8.5,9.5 Z" fill="#ECF4F8" fill-opacity="0.6"/></svg>"##
+        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="afwd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#B0C4CE"/><stop offset="100%" stop-color="#92A8B4"/></linearGradient></defs><path d="M9,3.5 C7.5,2.5 6,3.5 6,5.5 L6,18.5 C6,20.5 7.5,21.5 9,20.5 L21.5,13.5 C23,12.5 23,11.5 21.5,10.5 Z" fill="url(#afwd)" stroke="#859AA6" stroke-width="1.1"/><path d="M8.5,5 L20,11.5 L8.5,9.5 Z" fill="#F0F7FA" fill-opacity="0.65"/></svg>"##
     };
 
     let stop_icon_svg = if state.loading {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="astp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FF9A8B"/><stop offset="50%" stop-color="#D63626"/><stop offset="100%" stop-color="#7D190F"/></linearGradient></defs><path d="M7,4 L11,4 L14,8.5 L17,4 L21,4 L16.5,11.5 L21.5,20 L17.5,20 L14,14.5 L10.5,20 L6.5,20 L11.5,11.5 Z" fill="url(#astp)" stroke="#5E1109" stroke-width="1.1"/></svg>"##
+        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="astp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8AE0FA"/><stop offset="50%" stop-color="#2286AE"/><stop offset="100%" stop-color="#0B4663"/></linearGradient></defs><path d="M7,3.5 Q14,9.5 21,3.5 Q15.5,12 21,20.5 Q14,14.5 7,20.5 Q12.5,12 7,3.5 Z" fill="url(#astp)" stroke="#093B54" stroke-width="1.2"/></svg>"##
     } else {
-        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="astpd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#D2DEE6"/><stop offset="55%" stop-color="#A5B8C6"/><stop offset="100%" stop-color="#879AA8"/></linearGradient></defs><path d="M7,4 L11,4 L14,8.5 L17,4 L21,4 L16.5,11.5 L21.5,20 L17.5,20 L14,14.5 L10.5,20 L6.5,20 L11.5,11.5 Z" fill="url(#astpd)" stroke="#788A98" stroke-width="1.1"/></svg>"##
+        r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="astpd" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#B0C4CE"/><stop offset="100%" stop-color="#92A8B4"/></linearGradient></defs><path d="M7,3.5 Q14,9.5 21,3.5 Q15.5,12 21,20.5 Q14,14.5 7,20.5 Q12.5,12 7,3.5 Z" fill="url(#astpd)" stroke="#859AA6" stroke-width="1.1"/></svg>"##
     };
 
-    let refresh_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="arf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7EE0FF"/><stop offset="45%" stop-color="#1982C4"/><stop offset="100%" stop-color="#0A4570"/></linearGradient></defs><path d="M7,12 C7,7.2 11,4 15.5,4 C17.8,4 19.8,4.8 21.2,6.2 L23.5,4 L23.5,10.5 L17,10.5 L19.2,8.3 C18.2,7.3 16.9,6.8 15.5,6.8 C12.4,6.8 10,9.1 10,12 Z" fill="url(#arf)" stroke="#08385C" stroke-width="1"/><path d="M21,12 C21,16.8 17,20 12.5,20 C10.2,20 8.2,19.2 6.8,17.8 L4.5,20 L4.5,13.5 L11,13.5 L8.8,15.7 C9.8,16.7 11.1,17.2 12.5,17.2 C15.6,17.2 18,14.9 18,12 Z" fill="url(#arf)" stroke="#08385C" stroke-width="1"/></svg>"##;
+    let refresh_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="arf" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8AE0FA"/><stop offset="48%" stop-color="#2286AE"/><stop offset="100%" stop-color="#0B4663"/></linearGradient></defs><path d="M7,12 C7,7.2 11,4 15.5,4 C17.8,4 19.8,4.8 21.2,6.2 L23.5,4 L23.5,10.5 L17,10.5 L19.2,8.3 C18.2,7.3 16.9,6.8 15.5,6.8 C12.4,6.8 10,9.1 10,12 Z" fill="url(#arf)" stroke="#093B54" stroke-width="1"/><path d="M21,12 C21,16.8 17,20 12.5,20 C10.2,20 8.2,19.2 6.8,17.8 L4.5,20 L4.5,13.5 L11,13.5 L8.8,15.7 C9.8,16.7 11.1,17.2 12.5,17.2 C15.6,17.2 18,14.9 18,12 Z" fill="url(#arf)" stroke="#093B54" stroke-width="1"/></svg>"##;
 
-    let home_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="ahm" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#84D8FF"/><stop offset="50%" stop-color="#1B80C0"/><stop offset="100%" stop-color="#0A4068"/></linearGradient></defs><polygon points="14,3 4,12 7.5,12 7.5,21 20.5,21 20.5,12 24,12" fill="url(#ahm)" stroke="#083659" stroke-width="1.2"/><rect x="12" y="14" width="4" height="7" fill="#072C47"/></svg>"##;
+    // Arrow 1 Target: IE5 Mac Bondi-Teal Aqua Glass `Home` icon with dark teal roof chevron,
+    // right chimney, translucent aqua house walls, white left window square, and dark teal right door!
+    let home_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="ahmw" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#9BE4FA"/><stop offset="55%" stop-color="#389EC2"/><stop offset="100%" stop-color="#146485"/></linearGradient><linearGradient id="ahmr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#2A88AC"/><stop offset="100%" stop-color="#093C55"/></linearGradient></defs><rect x="18" y="4" width="3" height="5.5" fill="#0B4663" stroke="#072E42" stroke-width="0.8"/><polygon points="14,3.5 5.5,11 7,11 7,20.5 21,20.5 21,11 22.5,11" fill="url(#ahmw)" stroke="#093D57" stroke-width="1.1"/><polygon points="14,2.2 3.2,11.5 5.8,13.2 14,5.8 22.2,13.2 24.8,11.5" fill="url(#ahmr)" stroke="#072E42" stroke-width="0.9"/><rect x="8.8" y="12.2" width="4.2" height="4.2" fill="#FFFFFF" stroke="#0B4663" stroke-width="1"/><rect x="14.8" y="12.5" width="4.2" height="8" fill="#093D57"/></svg>"##;
 
-    let autofill_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="aaf" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#84D8FF"/><stop offset="45%" stop-color="#1B82C4"/><stop offset="100%" stop-color="#093D63"/></linearGradient></defs><rect x="5" y="14" width="16" height="7" rx="1.5" fill="#F8FAFC" stroke="#4A657A" stroke-width="1.1"/><line x1="8" y1="17.5" x2="17" y2="17.5" stroke="#286090" stroke-width="1.2"/><path d="M15,2 C18,2 21,5 20,9 L14,17 L8,14 L12,5 C13,3 14,2 15,2 Z" fill="url(#aaf)" stroke="#083659" stroke-width="1.2"/><ellipse cx="15.5" cy="6.5" rx="2.5" ry="1.6" fill="#C4EEFF" fill-opacity="0.75"/></svg>"##;
+    let autofill_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="aaf" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#A8C0CC"/><stop offset="100%" stop-color="#829CA8"/></linearGradient></defs><path d="M16,2.5 C19.5,2.5 22,5.5 20.5,9.5 L12.5,19.5 L7.5,16.5 L12.5,5.5 C13.5,3.5 14.5,2.5 16,2.5 Z" fill="url(#aaf)" stroke="#78909C" stroke-width="1.1"/><ellipse cx="16.2" cy="6.8" rx="2.4" ry="1.5" fill="#F2F8FA" fill-opacity="0.8"/><line x1="6" y1="20.5" x2="18" y2="20.5" stroke="#859AA6" stroke-width="1.2"/></svg>"##;
 
-    let print_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="apr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#82D6FF"/><stop offset="48%" stop-color="#1B80C0"/><stop offset="100%" stop-color="#0A3F66"/></linearGradient></defs><rect x="8" y="2" width="12" height="7" fill="#FFFFFF" stroke="#4A6478" stroke-width="1.1"/><rect x="4" y="8" width="20" height="10" rx="2.5" fill="url(#apr)" stroke="#083659" stroke-width="1.2"/><rect x="6.5" y="9.5" width="15" height="2.2" rx="1" fill="#C8EEFF" fill-opacity="0.75"/><rect x="7" y="15" width="14" height="6.5" fill="#FFFFFF" stroke="#4A6478" stroke-width="1.1"/><line x1="9.5" y1="18" x2="18.5" y2="18" stroke="#246A9E" stroke-width="1.2"/></svg>"##;
+    let print_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="apr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#DAE6EC"/><stop offset="55%" stop-color="#A8C0CC"/><stop offset="100%" stop-color="#829CA8"/></linearGradient></defs><rect x="8" y="2.5" width="12" height="6.5" fill="#F4F8FA" stroke="#8298A4" stroke-width="1"/><rect x="4.5" y="8" width="19" height="9.5" rx="2" fill="url(#apr)" stroke="#78909C" stroke-width="1.1"/><rect x="7" y="15" width="14" height="6" fill="#F4F8FA" stroke="#8298A4" stroke-width="1"/></svg>"##;
 
-    let mail_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="aml" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F8FCFF"/><stop offset="100%" stop-color="#B8D4E8"/></linearGradient></defs><rect x="4" y="5" width="20" height="14" rx="1.5" fill="url(#aml)" stroke="#185A88" stroke-width="1.2"/><polyline points="4.5,5.5 14,13 23.5,5.5" fill="none" stroke="#185A88" stroke-width="1.2"/><rect x="18.5" y="7" width="3" height="3" fill="#2288CC"/></svg>"##;
+    let mail_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="aml" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#88DCF8"/><stop offset="55%" stop-color="#288BB0"/><stop offset="100%" stop-color="#0D4D6B"/></linearGradient></defs><rect x="4" y="5" width="20" height="14" rx="1.5" fill="url(#aml)" stroke="#093B54" stroke-width="1.2"/><polygon points="4.8,5.5 14,13.2 23.2,5.5" fill="#CEEFFB" stroke="#093B54" stroke-width="1"/><polyline points="4.8,18.5 11.5,12 14,13.8 16.5,12 23.2,18.5" fill="none" stroke="#0B435E" stroke-width="1"/></svg>"##;
 
-    let sherlock_icon_svg = r##"<svg width="28" height="24" viewBox="0 0 28 24"><defs><linearGradient id="ash" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#9BE2FF"/><stop offset="50%" stop-color="#1D84C6"/><stop offset="100%" stop-color="#0A3F66"/></linearGradient></defs><line x1="14" y1="13" x2="6" y2="21" stroke="#1E293B" stroke-width="3.4" stroke-linecap="round"/><circle cx="16.5" cy="9.5" r="6.5" fill="url(#ash)" stroke="#08385C" stroke-width="1.4"/><ellipse cx="14.8" cy="7.2" rx="3.2" ry="2" fill="#DDF6FF" fill-opacity="0.8"/></svg>"##;
-
-    // 3D Glossy Aqua Blue `e` emblem on the far right of the toolbar using vector `<path>` for the `e`
-    let ie_aqua_emblem_svg = r##"<svg width="36" height="36" viewBox="0 0 36 36"><defs><radialGradient id="ieorb" cx="35%" cy="30%" r="70%"><stop offset="0%" stop-color="#C4F0FF"/><stop offset="45%" stop-color="#2290D6"/><stop offset="100%" stop-color="#093D63"/></radialGradient></defs><ellipse cx="18" cy="18" rx="16" ry="9.5" transform="rotate(-24 18 18)" fill="none" stroke="#68C4F8" stroke-width="2.2"/><circle cx="18" cy="18" r="12.5" fill="url(#ieorb)" stroke="#073252" stroke-width="1.3"/><path d="M22.5,17.2 C22.5,14.0 20.4,11.8 17.6,11.8 C14.6,11.8 12.5,14.2 12.5,17.5 C12.5,20.8 14.7,23.2 17.9,23.2 C19.8,23.2 21.4,22.4 22.3,21.0 M13.2,16.8 L22.2,16.8" fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round"/></svg>"##;
+    // Arrow 2 Target: Sculpted 3D Bondi-Teal Aqua lowercase `e` logo (`38x36px`) on the right of the toolbar
+    // with open counter eye, open lower-right gap, orbital swoosh ring, and glossy specular highlight!
+    let ie_aqua_emblem_svg = r##"<svg width="38" height="36" viewBox="0 0 38 36"><defs><linearGradient id="iee" x1="0.15" y1="0.05" x2="0.85" y2="0.95"><stop offset="0%" stop-color="#9EE8FF"/><stop offset="38%" stop-color="#38A2CA"/><stop offset="78%" stop-color="#146B90"/><stop offset="100%" stop-color="#093C56"/></linearGradient><linearGradient id="iering" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#B8F0FF"/><stop offset="50%" stop-color="#2E96BE"/><stop offset="100%" stop-color="#0B4766"/></linearGradient></defs><path d="M5,25 C1.5,21 6,12 16,7 C26,2 35,4 36,8.5 C37,12 31,17 24,20.5" fill="none" stroke="url(#iering)" stroke-width="2.2" stroke-linecap="round"/><path fill-rule="evenodd" d="M31.5,18.5 C31.8,10.5 26.2,4.8 18.8,4.8 C10.8,4.8 5.2,10.8 5.2,18.5 C5.2,26.5 11.0,32.0 19.2,32.0 C24.8,32.0 29.2,29.4 31.2,25.0 L25.4,22.8 C24.0,25.4 21.8,26.8 19.0,26.8 C14.8,26.8 11.8,24.0 11.5,19.8 L31.4,19.8 Z M11.6,15.2 C12.2,11.5 15.0,9.4 18.8,9.4 C22.5,9.4 25.2,11.6 25.6,15.2 Z" fill="url(#iee)" stroke="#083A54" stroke-width="1.1"/><path d="M9.5,11.5 C12,7.8 16,6.2 20.5,6.5" fill="none" stroke="#E0F8FF" stroke-width="1.8" stroke-linecap="round"/><path d="M3.5,23.5 C6.5,27.5 16,25 26,19.5" fill="none" stroke="#7ED8F8" stroke-width="1.8" stroke-linecap="round"/></svg>"##;
 
     let beaded_sep_svg = r##"<svg class="nav-sep-svg" width="6" height="38" viewBox="0 0 6 38"><circle cx="3" cy="3" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="7" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="11" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="15" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="19" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="23" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="27" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="31" r="1.1" fill="#6E6E6E"/><circle cx="3" cy="35" r="1.1" fill="#6E6E6E"/></svg>"##;
-
-    let grip_ridges_left_svg = r##"<svg class="grip-svg" width="110" height="16" viewBox="0 0 110 16"><line x1="2" y1="3" x2="108" y2="3" stroke="#FFFFFF" stroke-width="1"/><line x1="2" y1="4" x2="108" y2="4" stroke="#8C8C8C" stroke-width="1"/><line x1="2" y1="6" x2="108" y2="6" stroke="#FFFFFF" stroke-width="1"/><line x1="2" y1="7" x2="108" y2="7" stroke="#8C8C8C" stroke-width="1"/><line x1="2" y1="9" x2="108" y2="9" stroke="#FFFFFF" stroke-width="1"/><line x1="2" y1="10" x2="108" y2="10" stroke="#8C8C8C" stroke-width="1"/><line x1="2" y1="12" x2="108" y2="12" stroke="#FFFFFF" stroke-width="1"/><line x1="2" y1="13" x2="108" y2="13" stroke="#8C8C8C" stroke-width="1"/></svg>"##;
-    let grip_ridges_right_svg = r##"<svg class="grip-svg-right" width="1600" height="16" viewBox="0 0 1600 16"><line x1="4" y1="3" x2="1596" y2="3" stroke="#FFFFFF" stroke-width="1"/><line x1="4" y1="4" x2="1596" y2="4" stroke="#8C8C8C" stroke-width="1"/><line x1="4" y1="6" x2="1596" y2="6" stroke="#FFFFFF" stroke-width="1"/><line x1="4" y1="7" x2="1596" y2="7" stroke="#8C8C8C" stroke-width="1"/><line x1="4" y1="9" x2="1596" y2="9" stroke="#FFFFFF" stroke-width="1"/><line x1="4" y1="10" x2="1596" y2="10" stroke="#8C8C8C" stroke-width="1"/><line x1="4" y1="12" x2="1596" y2="12" stroke="#FFFFFF" stroke-width="1"/><line x1="4" y1="13" x2="1596" y2="13" stroke="#8C8C8C" stroke-width="1"/></svg>"##;
 
     let top_bars = if state.toolbar_collapsed {
         String::new()
     } else {
         format!(
             r##"<div class="tabstrip">
-                 <div class="win-box"></div>
-                 <div class="grip-left">{grip_ridges_left_svg}</div>
-                 {tabs}
-                 <div class="newtab" id="btn-newtab">+</div>
-                 <div class="grip-right">{grip_ridges_right_svg}</div>
-                 <div class="win-box"></div>
-                 <div class="win-box"></div>
+                 {title_rib_bg}
+                 <div class="traffic-lights">{traffic_lights_svg}</div>
+                 <div class="title-tabs-wrap">
+                   {tabs}
+                   <div class="newtab" id="btn-newtab">+</div>
+                 </div>
+                 <div class="aqua-pill-btn" id="btn-menu">{aqua_pill_svg}</div>
                </div>
                <div class="nav">
                  {nav_rib_bg}
@@ -506,15 +528,11 @@ pub fn render(state: &ChromeState<'_>) -> String {
                    {mail_icon_svg}
                    <div class="btn-lbl">Mail</div>
                  </div>
-                 <div class="btn" id="btn-menu">
-                   {sherlock_icon_svg}
-                   <div class="btn-lbl">Sherlock</div>
-                 </div>
                  <div class="ie-emblem">{ie_aqua_emblem_svg}</div>
                </div>
                <div class="address-row">
                  {addr_aqua_tube_bg}
-                 <div class="address-badge">Address :</div>
+                 <div class="address-badge">Address:</div>
                  <div class="{bar_class}" id="address" data-scheme="{secure_attr}">
                    {at_swirl_svg}
                    <div class="url">{url}</div>
@@ -530,9 +548,10 @@ pub fn render(state: &ChromeState<'_>) -> String {
                  {fav_strip_items}
                  <div class="fav-chevron" id="btn-fav-overflow">&#187;</div>
                </div>"##,
-            grip_ridges_left_svg = grip_ridges_left_svg,
-            grip_ridges_right_svg = grip_ridges_right_svg,
+            title_rib_bg = title_rib_bg,
+            traffic_lights_svg = traffic_lights_svg,
             tabs = tabs,
+            aqua_pill_svg = aqua_pill_svg,
             nav_rib_bg = nav_rib_bg,
             back_class = back_class,
             forward_class = forward_class,
@@ -546,7 +565,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
             autofill_icon_svg = autofill_icon_svg,
             print_icon_svg = print_icon_svg,
             mail_icon_svg = mail_icon_svg,
-            sherlock_icon_svg = sherlock_icon_svg,
             ie_aqua_emblem_svg = ie_aqua_emblem_svg,
             addr_aqua_tube_bg = addr_aqua_tube_bg,
             bar_class = bar_class,
@@ -593,22 +611,33 @@ pub fn render(state: &ChromeState<'_>) -> String {
         String::new()
     };
 
-    // 3D Glossy Aqua Blue `◀|||` / `|||▶` collapse toggle icon at the top of the Explorer Bar rail
+    // Arrow 3 Target: 3D Bondi-Aqua `◀|||` / `|||▶` collapse toggle icon at the top of the slim 28px Explorer Bar rail
     let collapse_svg = if state.toolbar_collapsed {
-        r##"<svg width="26" height="18" viewBox="0 0 26 18"><defs><linearGradient id="aclp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7EE0FF"/><stop offset="50%" stop-color="#1B80C0"/><stop offset="100%" stop-color="#093B61"/></linearGradient></defs><rect x="2" y="3" width="2.5" height="12" rx="1" fill="url(#aclp)" stroke="#083659" stroke-width="0.7"/><rect x="6" y="3" width="2.5" height="12" rx="1" fill="url(#aclp)" stroke="#083659" stroke-width="0.7"/><rect x="10" y="3" width="2.5" height="12" rx="1" fill="url(#aclp)" stroke="#083659" stroke-width="0.7"/><polygon points="15,2.5 24,9 15,15.5" fill="url(#aclp)" stroke="#083659" stroke-width="0.9"/></svg>"##
+        r##"<svg width="24" height="16" viewBox="0 0 24 16"><defs><linearGradient id="aclp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#88E0FA"/><stop offset="50%" stop-color="#2286AE"/><stop offset="100%" stop-color="#093B56"/></linearGradient></defs><rect x="2" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><rect x="5.5" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><rect x="9" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><polygon points="13.5,2 22,8 13.5,14" fill="url(#aclp)" stroke="#073047" stroke-width="0.8"/></svg>"##
     } else {
-        r##"<svg width="26" height="18" viewBox="0 0 26 18"><defs><linearGradient id="aclp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7EE0FF"/><stop offset="50%" stop-color="#1B80C0"/><stop offset="100%" stop-color="#093B61"/></linearGradient></defs><polygon points="11,2.5 2,9 11,15.5" fill="url(#aclp)" stroke="#083659" stroke-width="0.9"/><rect x="13.5" y="3" width="2.5" height="12" rx="1" fill="url(#aclp)" stroke="#083659" stroke-width="0.7"/><rect x="17.5" y="3" width="2.5" height="12" rx="1" fill="url(#aclp)" stroke="#083659" stroke-width="0.7"/><rect x="21.5" y="3" width="2.5" height="12" rx="1" fill="url(#aclp)" stroke="#083659" stroke-width="0.7"/></svg>"##
+        r##"<svg width="24" height="16" viewBox="0 0 24 16"><defs><linearGradient id="aclp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#88E0FA"/><stop offset="50%" stop-color="#2286AE"/><stop offset="100%" stop-color="#093B56"/></linearGradient></defs><polygon points="10.5,2 2,8 10.5,14" fill="url(#aclp)" stroke="#073047" stroke-width="0.8"/><rect x="12.5" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><rect x="16" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/><rect x="19.5" y="2.5" width="2.2" height="11" rx="0.8" fill="url(#aclp)" stroke="#073047" stroke-width="0.6"/></svg>"##
     };
 
-    let fav_cls = exp_tab_class(state.explorer_tab == Some(ExplorerTab::Favorites));
-    let hist_cls = exp_tab_class(state.explorer_tab == Some(ExplorerTab::History));
-    let srch_cls = exp_tab_class(state.explorer_tab == Some(ExplorerTab::Search));
-    let scrp_cls = exp_tab_class(state.explorer_tab == Some(ExplorerTab::Scrapbook));
-    let ph_cls = exp_tab_class(state.explorer_tab == Some(ExplorerTab::PageHolder));
+    let is_fav = state.explorer_tab == Some(ExplorerTab::Favorites);
+    let is_hist = state.explorer_tab == Some(ExplorerTab::History);
+    let is_srch = state.explorer_tab == Some(ExplorerTab::Search);
+    let is_scrp = state.explorer_tab == Some(ExplorerTab::Scrapbook);
+    let is_ph = state.explorer_tab == Some(ExplorerTab::PageHolder);
+
+    let fav_cls = exp_tab_class(is_fav);
+    let hist_cls = exp_tab_class(is_hist);
+    let srch_cls = exp_tab_class(is_srch);
+    let scrp_cls = exp_tab_class(is_scrp);
+    let ph_cls = if is_ph {
+        "exp-tab exp-tab-last exp-tab-active"
+    } else {
+        "exp-tab exp-tab-last"
+    };
 
     let fav_bg = folder_tab_svg(
         true,
-        state.explorer_tab == Some(ExplorerTab::Favorites),
+        is_fav,
+        is_hist,
         drawer_open,
         p.rib_base,
         p.rib_hi,
@@ -617,7 +646,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
     );
     let hist_bg = folder_tab_svg(
         false,
-        state.explorer_tab == Some(ExplorerTab::History),
+        is_hist,
+        is_srch,
         drawer_open,
         p.rib_base,
         p.rib_hi,
@@ -626,7 +656,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
     );
     let srch_bg = folder_tab_svg(
         false,
-        state.explorer_tab == Some(ExplorerTab::Search),
+        is_srch,
+        is_scrp,
         drawer_open,
         p.rib_base,
         p.rib_hi,
@@ -635,7 +666,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
     );
     let scrp_bg = folder_tab_svg(
         false,
-        state.explorer_tab == Some(ExplorerTab::Scrapbook),
+        is_scrp,
+        is_ph,
         drawer_open,
         p.rib_base,
         p.rib_hi,
@@ -644,7 +676,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
     );
     let ph_bg = folder_tab_svg(
         false,
-        state.explorer_tab == Some(ExplorerTab::PageHolder),
+        is_ph,
+        false,
         drawer_open,
         p.rib_base,
         p.rib_hi,
@@ -652,7 +685,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
         p.drawer_bg,
     );
 
-    let rail_rib_bg = ribbed_rect_svg(36, 1200, p.rib_base, p.rib_hi, p.rib_lo);
+    let rail_rib_bg = ribbed_rect_svg(28, 1200, p.rib_base, p.rib_hi, p.rib_lo);
+    let drawer_rib_bg = ribbed_rect_svg(286, 1200, p.rib_base, p.rib_hi, p.rib_lo);
     let rail_bottom_border_cls = if drawer_open {
         "rail-globe rail-globe-bordered"
     } else {
@@ -669,16 +703,14 @@ pub fn render(state: &ChromeState<'_>) -> String {
              <div class="{srch_cls}" id="exp-search">{srch_bg}<div class="exp-tab-label">Search</div></div>
              <div class="{scrp_cls}" id="exp-scrapbook">{scrp_bg}<div class="exp-tab-label">Scrapbook</div></div>
              <div class="{ph_cls}" id="exp-pageholder">{ph_bg}<div class="exp-tab-label">Page Holder</div></div>
-             <div class="{rail_bottom_border_cls}">
-               <svg width="18" height="18" viewBox="0 0 18 18"><defs><radialGradient id="glbg" cx="35%" cy="30%" r="65%"><stop offset="0%" stop-color="#A6E8FF"/><stop offset="50%" stop-color="#1E82C4"/><stop offset="100%" stop-color="#093658"/></radialGradient></defs><circle cx="9" cy="9" r="7" fill="url(#glbg)" stroke="#072842" stroke-width="1.2"/><ellipse cx="9" cy="9" rx="3.5" ry="7" fill="none" stroke="#B5E6FF" stroke-width="0.9"/><line x1="2" y1="9" x2="16" y2="9" stroke="#B5E6FF" stroke-width="0.9"/></svg>
-             </div>
+             <div class="{rail_bottom_border_cls}"></div>
            </div>"##,
     );
 
     // Camera-and-page icon used for Scrapbook entries (PDF Page 1 Figure 6).
     let sb_doc_icon = r##"<svg width="18" height="15" viewBox="0 0 18 15"><rect x="1" y="2.5" width="11" height="10" rx="1.8" fill="#7A8B99" stroke="#2F3E4C" stroke-width="1.1"/><circle cx="6.5" cy="7.5" r="2.6" fill="#D9E6F2" stroke="#2F3E4C" stroke-width="1"/><rect x="10" y="1" width="7" height="12.5" fill="#FFFFFF" stroke="#4A5568" stroke-width="1"/><line x1="11.5" y1="4.5" x2="15" y2="4.5" stroke="#286090" stroke-width="1"/><line x1="11.5" y1="7.5" x2="15" y2="7.5" stroke="#718096" stroke-width="1"/></svg>"##;
     let link_tri_svg = r##"<svg class="ph-tri-svg" width="8" height="10" viewBox="0 0 8 10"><polygon points="1,1 7,5 1,9" fill="#146696"/></svg>"##;
-    let btn_tri_svg = r##"<svg class="ph-tri-svg" width="6" height="8" viewBox="0 0 6 8"><polygon points="1,1 5,4 1,7" fill="#111111"/></svg>"##;
+    let btn_tri_svg = r##"<svg class="ph-tri-svg" width="6" height="10" viewBox="0 0 6 10"><polygon points="1,4 5,7 1,10" fill="#111111"/></svg>"##;
 
     let explorer_drawer = match state.explorer_tab {
         None => String::new(),
@@ -721,18 +753,27 @@ pub fn render(state: &ChromeState<'_>) -> String {
             } else {
                 "exp-drawer"
             };
+            let frame_cls = if !state.page_holder.links_mode && state.page_holder.has_doc {
+                "drawer-frame drawer-frame-transparent"
+            } else {
+                "drawer-frame"
+            };
 
             let ph_url_attr = escape_html(state.page_holder.url);
             let ph_title_attr = escape_html(state.page_holder.title);
             format!(
                 r#"<div class="{drawer_bg_cls}" id="exp-drawer" style="top:{top_chrome_h:.1}px;">
-                     <div class="drawer-header" id="ph-header" data-held-url="{ph_url_attr}" data-held-title="{ph_title_attr}">
-                       <div class="drawer-brand"><div>Page</div><div>Holder</div></div>
-                       <div class="mac-btn" id="ph-add">Add</div>
-                       <div class="{links_btn_cls}" id="ph-links">Links</div>
+                     {drawer_rib_bg}
+                     <div class="{frame_cls}">
+                       <div class="drawer-inner">
+                         <div class="drawer-header" id="ph-header" data-held-url="{ph_url_attr}" data-held-title="{ph_title_attr}">
+                           <div class="drawer-brand"><div>Page</div><div>Holder</div></div>
+                           <div class="mac-btn" id="ph-add">Add</div>
+                           <div class="{links_btn_cls}" id="ph-links">Links</div>
+                         </div>
+                         {body_html}
+                       </div>
                      </div>
-                     <div class="drawer-subbar"></div>
-                     {body_html}
                    </div>"#,
             )
         }
@@ -788,14 +829,18 @@ pub fn render(state: &ChromeState<'_>) -> String {
             }
             format!(
                 r#"<div class="exp-drawer" id="exp-drawer" style="top:{top_chrome_h:.1}px;">
-                     <div class="drawer-header" id="sb-header">
-                       <div class="drawer-brand"><div>Internet</div><div>Scrapbook</div></div>
-                       <div class="mac-btn" id="sb-add">Add</div>
-                       <div class="{delete_btn_cls}" id="sb-delete">Delete</div>
-                       <div class="mac-btn" id="sb-organize"><span>Organize</span>{btn_tri_svg}</div>
+                     {drawer_rib_bg}
+                     <div class="drawer-frame">
+                       <div class="drawer-inner">
+                         <div class="drawer-header" id="sb-header">
+                           <div class="drawer-brand"><div>Internet</div><div>Scrapbook</div></div>
+                           <div class="mac-btn" id="sb-add">Add</div>
+                           <div class="{delete_btn_cls}" id="sb-delete">Delete</div>
+                           <div class="mac-btn" id="sb-organize"><span>Organize</span>{btn_tri_svg}</div>
+                         </div>
+                         <div class="drawer-body" id="sb-list">{rows}</div>
+                       </div>
                      </div>
-                     <div class="drawer-subbar"></div>
-                     <div class="drawer-body" id="sb-list">{rows}</div>
                    </div>"#,
             )
         }
@@ -815,12 +860,16 @@ pub fn render(state: &ChromeState<'_>) -> String {
             }
             format!(
                 r#"<div class="exp-drawer" id="exp-drawer" style="top:{top_chrome_h:.1}px;">
-                     <div class="drawer-header" id="fav-header">
-                       <div class="drawer-brand"><div>Internet</div><div>Favorites</div></div>
-                       <div class="mac-btn" id="fav-add">Add</div>
+                     {drawer_rib_bg}
+                     <div class="drawer-frame">
+                       <div class="drawer-inner">
+                         <div class="drawer-header" id="fav-header">
+                           <div class="drawer-brand"><div>Internet</div><div>Favorites</div></div>
+                           <div class="mac-btn" id="fav-add">Add</div>
+                         </div>
+                         <div class="drawer-body" id="fav-list">{rows}</div>
+                       </div>
                      </div>
-                     <div class="drawer-subbar"></div>
-                     <div class="drawer-body" id="fav-list">{rows}</div>
                    </div>"#,
             )
         }
@@ -846,34 +895,42 @@ pub fn render(state: &ChromeState<'_>) -> String {
             }
             format!(
                 r#"<div class="exp-drawer" id="exp-drawer" style="top:{top_chrome_h:.1}px;">
-                     <div class="drawer-header" id="hist-header">
-                       <div class="drawer-brand"><div>Browsing</div><div>History</div></div>
+                     {drawer_rib_bg}
+                     <div class="drawer-frame">
+                       <div class="drawer-inner">
+                         <div class="drawer-header" id="hist-header">
+                           <div class="drawer-brand"><div>Browsing</div><div>History</div></div>
+                         </div>
+                         <div class="drawer-body" id="hist-list">{rows}</div>
+                       </div>
                      </div>
-                     <div class="drawer-subbar"></div>
-                     <div class="drawer-body" id="hist-list">{rows}</div>
                    </div>"#,
             )
         }
         Some(ExplorerTab::Search) => {
             format!(
                 r#"<div class="exp-drawer" id="exp-drawer" style="top:{top_chrome_h:.1}px;">
-                     <div class="drawer-header" id="search-header">
-                       <div class="drawer-brand"><div>Search</div><div>Assistant</div></div>
-                       <div class="mac-btn" id="exp-search-focus">Address</div>
-                     </div>
-                     <div class="drawer-subbar"></div>
-                     <div class="drawer-body drawer-body-white" id="search-list">
-                       <div class="ph-link-row" id="search-item-0">
-                         {link_tri_svg}
-                         <span class="ph-link-text">DuckDuckGo Lite</span>
-                       </div>
-                       <div class="ph-link-row" id="search-item-1">
-                         {link_tri_svg}
-                         <span class="ph-link-text">Wikipedia Encyclopedia</span>
-                       </div>
-                       <div class="ph-link-row" id="search-item-2">
-                         {link_tri_svg}
-                         <span class="ph-link-text">AOL Portal</span>
+                     {drawer_rib_bg}
+                     <div class="drawer-frame">
+                       <div class="drawer-inner">
+                         <div class="drawer-header" id="search-header">
+                           <div class="drawer-brand"><div>Search</div><div>Assistant</div></div>
+                           <div class="mac-btn" id="exp-search-focus">Address</div>
+                         </div>
+                         <div class="drawer-body drawer-body-white" id="search-list">
+                           <div class="ph-link-row" id="search-item-0">
+                             {link_tri_svg}
+                             <span class="ph-link-text">DuckDuckGo Lite</span>
+                           </div>
+                           <div class="ph-link-row" id="search-item-1">
+                             {link_tri_svg}
+                             <span class="ph-link-text">Wikipedia Encyclopedia</span>
+                           </div>
+                           <div class="ph-link-row" id="search-item-2">
+                             {link_tri_svg}
+                             <span class="ph-link-text">AOL Portal</span>
+                           </div>
+                         </div>
                        </div>
                      </div>
                    </div>"#,
@@ -881,26 +938,21 @@ pub fn render(state: &ChromeState<'_>) -> String {
         }
     };
 
-    // Classic IE5 Mac Bottom Aqua Horizontal Scrollbar + "Internet zone" Status Bar + Right Vertical Aqua Scrollbar (`media_1794004131120_b4ecd3e6.jpg`)
+    // Arrow 4 Target: Mac OS X Aqua 15px Right & Bottom Scrollbar Tracks + 15x15 Bottom-Right Diagonal Resize Grip Box (`media_1794020340993_5f6a11ae.jpg`)
     let bottom_aqua_bar = format!(
         r##"<div class="aqua-vscroll" style="top:{top_chrome_h:.1}px;">
-             <svg width="15" height="1200" viewBox="0 0 15 1200"><defs><linearGradient id="aqvth" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#14649C"/><stop offset="35%" stop-color="#7AD4FF"/><stop offset="75%" stop-color="#228ED2"/><stop offset="100%" stop-color="#0B436B"/></linearGradient></defs><rect width="15" height="1200" fill="#EAEAEA"/><line x1="0.5" y1="0" x2="0.5" y2="1200" stroke="#7A7A7A" stroke-width="1"/><rect x="1" y="1" width="13" height="36" rx="2" fill="url(#aqvth)" stroke="#083252" stroke-width="1"/><line x1="4" y1="15" x2="11" y2="15" stroke="#083252" stroke-width="1"/><line x1="4" y1="18" x2="11" y2="18" stroke="#083252" stroke-width="1"/><line x1="4" y1="21" x2="11" y2="21" stroke="#083252" stroke-width="1"/></svg>
+             <svg width="15" height="1200" viewBox="0 0 15 1200"><rect width="15" height="1200" fill="#F4F4F4"/><line x1="0.5" y1="0" x2="0.5" y2="1200" stroke="#9A9A9A" stroke-width="1"/></svg>
            </div>
            <div class="aqua-bottom-wrap" style="left:{content_x:.1}px;">
              <div class="aqua-hscroll">
-               <svg class="rib-bg" width="2400" height="15" viewBox="0 0 2400 15"><defs><linearGradient id="aqscr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#14649C"/><stop offset="30%" stop-color="#42B0ED"/><stop offset="55%" stop-color="#7AD4FF"/><stop offset="85%" stop-color="#1D84C6"/><stop offset="100%" stop-color="#0D4B78"/></linearGradient></defs><rect width="2400" height="15" fill="url(#aqscr)"/><line x1="0" y1="0.5" x2="2400" y2="0.5" stroke="#083252" stroke-width="1"/><line x1="0" y1="14.5" x2="2400" y2="14.5" stroke="#083252" stroke-width="1"/></svg>
+               <svg width="2400" height="15" viewBox="0 0 2400 15"><rect width="2400" height="15" fill="#F4F4F4"/><line x1="0" y1="0.5" x2="2400" y2="0.5" stroke="#9A9A9A" stroke-width="1"/></svg>
              </div>
-             <div class="aqua-statusbar">
-               {status_rib_bg}
-               <div class="status-zone">
-                 <svg width="13" height="13" viewBox="0 0 18 18"><defs><radialGradient id="glbs" cx="35%" cy="30%" r="65%"><stop offset="0%" stop-color="#A6E8FF"/><stop offset="50%" stop-color="#1E82C4"/><stop offset="100%" stop-color="#093658"/></radialGradient></defs><circle cx="9" cy="9" r="7" fill="url(#glbs)" stroke="#072842" stroke-width="1.2"/></svg>
-                 <span>Internet zone</span>
-               </div>
+             <div class="aqua-resize-corner">
+               <svg width="15" height="15" viewBox="0 0 15 15"><rect width="15" height="15" fill="#ECECEC"/><line x1="0.5" y1="0" x2="0.5" y2="15" stroke="#8C8C8C" stroke-width="1"/><line x1="0" y1="0.5" x2="15" y2="0.5" stroke="#8C8C8C" stroke-width="1"/><line x1="4" y1="13" x2="13" y2="4" stroke="#7A7A7A" stroke-width="1"/><line x1="5" y1="13" x2="13" y2="5" stroke="#FFFFFF" stroke-width="1"/><line x1="7" y1="13" x2="13" y2="7" stroke="#7A7A7A" stroke-width="1"/><line x1="8" y1="13" x2="13" y2="8" stroke="#FFFFFF" stroke-width="1"/><line x1="10" y1="13" x2="13" y2="10" stroke="#7A7A7A" stroke-width="1"/></svg>
              </div>
            </div>"##,
         top_chrome_h = top_chrome_h,
         content_x = content_x,
-        status_rib_bg = status_rib_bg,
     );
 
     let supbar = match &state.supervision {
@@ -1026,6 +1078,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
         String::new()
     };
 
+    let _ = (p.strip, p.tab_active);
     format!(
         r#"<!DOCTYPE html>
 <html>
@@ -1049,67 +1102,71 @@ pub fn render(state: &ChromeState<'_>) -> String {
     pointer-events: none;
   }}
 
-  /* ---- Row 1: IE5 Mac Platinum/Aqua Window Title & Tab Strip (26px) ---- */
+  /* ---- Row 1: Mac OS X Aqua Pinstriped Window Title & Tab Strip (26px) ---- */
   .tabstrip {{
+    position: relative;
     height: 26px;
-    background-color: {strip};
+    background-color: #EAEAEA;
     border-top: 1px solid {bevel_light};
-    border-bottom: 1px solid {bevel_dark};
+    border-bottom: 1px solid #7A7A7A;
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 0 8px;
+    padding: 0 10px;
+    gap: 8px;
+    overflow: hidden;
+  }}
+  .traffic-lights {{
+    position: relative;
+    width: 54px;
+    height: 16px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+  }}
+  .traffic-svg {{
+    pointer-events: none;
+  }}
+  .title-tabs-wrap {{
+    position: relative;
+    flex: 1;
+    height: 24px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
     gap: 6px;
     overflow: hidden;
   }}
-  .win-box {{
-    width: 13px;
-    height: 13px;
-    background-color: {nav};
-    border-top: 1px solid {bevel_light};
-    border-left: 1px solid {bevel_light};
-    border-right: 1px solid #4A4A4A;
-    border-bottom: 1px solid #4A4A4A;
-    flex-shrink: 0;
-    pointer-events: none;
-  }}
-  .grip-left {{
-    width: 110px;
+  .aqua-pill-btn {{
+    position: relative;
+    width: 28px;
     height: 16px;
     flex-shrink: 0;
-    overflow: hidden;
-    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }}
-  .grip-right {{
-    flex: 1;
-    height: 16px;
-    overflow: hidden;
-    pointer-events: none;
-  }}
-  .grip-svg, .grip-svg-right {{
+  .aqua-pill-btn svg {{
     pointer-events: none;
   }}
   .tab {{
-    height: 21px;
-    max-width: 240px;
+    height: 20px;
+    max-width: 280px;
     display: flex;
     flex-direction: row;
     align-items: center;
     gap: 6px;
-    padding: 0 9px;
-    background-color: {strip};
-    border-top: 1px solid {bevel_light};
-    border-left: 1px solid {bevel_light};
-    border-right: 1px solid {bevel_dark};
-    border-bottom: 1px solid {bevel_dark};
+    padding: 0 8px;
+    background-color: transparent;
     color: {ink};
-    font-size: 12px;
-    font-weight: 700;
+    font-size: 12.5px;
+    font-weight: 600;
     flex-shrink: 0;
   }}
   .tab-active {{
-    background-color: {tab_active};
-    border-bottom: 1px solid {tab_active};
+    color: #000000;
   }}
   .tab-title {{
     flex: 1;
@@ -1124,21 +1181,21 @@ pub fn render(state: &ChromeState<'_>) -> String {
     font-size: 12px;
     line-height: 14px;
     text-align: center;
-    color: {ink};
+    color: #555555;
   }}
   .newtab {{
-    width: 22px;
-    height: 20px;
-    font-size: 14px;
+    width: 20px;
+    height: 18px;
+    font-size: 13px;
     font-weight: 700;
-    line-height: 18px;
+    line-height: 16px;
     text-align: center;
-    color: {ink};
-    background-color: {nav};
+    color: #444444;
+    background-color: #E2E2E2;
     border-top: 1px solid {bevel_light};
     border-left: 1px solid {bevel_light};
-    border-right: 1px solid {bevel_dark};
-    border-bottom: 1px solid {bevel_dark};
+    border-right: 1px solid #777777;
+    border-bottom: 1px solid #777777;
     flex-shrink: 0;
   }}
 
@@ -1214,35 +1271,33 @@ pub fn render(state: &ChromeState<'_>) -> String {
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 2px 6px 2px 0;
+    padding: 3px 6px 3px 0;
     overflow: hidden;
   }}
   .address-badge {{
     position: relative;
     width: 82px;
-    height: 26px;
+    height: 24px;
     color: #FFFFFF;
-    font-size: 12.5px;
-    font-weight: 700;
-    line-height: 26px;
-    padding-left: 12px;
-    letter-spacing: 0.02em;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 24px;
+    text-align: right;
+    padding-right: 9px;
+    letter-spacing: 0.01em;
     pointer-events: none;
   }}
   .bar {{
     position: relative;
     flex: 1;
-    height: 24px;
+    height: 23px;
     background-color: {pill};
-    border-top: 1.5px solid #072235;
-    border-left: 1.5px solid #072235;
-    border-right: 1px solid #8CCDF5;
-    border-bottom: 1px solid #8CCDF5;
+    border: 1.5px solid #081E2E;
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 0 8px;
-    gap: 7px;
+    padding: 0 7px;
+    gap: 6px;
   }}
   .bar-focused {{
     background-color: {pill_focus};
@@ -1250,8 +1305,8 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
   .url {{
     color: {ink};
-    font-size: 13px;
-    line-height: 22px;
+    font-size: 12.5px;
+    line-height: 21px;
     white-space: nowrap;
     overflow: hidden;
     pointer-events: none;
@@ -1291,7 +1346,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
     flex-direction: row;
     align-items: center;
     padding: 0 12px;
-    gap: 20px;
+    gap: 18px;
     overflow: hidden;
   }}
   .fav-pill {{
@@ -1299,11 +1354,11 @@ pub fn render(state: &ChromeState<'_>) -> String {
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     height: 20px;
     padding: 0 4px;
     font-size: 11.5px;
-    font-weight: 600;
+    font-weight: 500;
     color: {ink};
     white-space: nowrap;
   }}
@@ -1321,41 +1376,44 @@ pub fn render(state: &ChromeState<'_>) -> String {
     line-height: 20px;
   }}
 
-  /* ---- Left Vertical Explorer Bar Rail (36px wide, Sideways Folder Tabs) ---- */
+  /* ---- Left Vertical Explorer Bar Rail (28px wide, Sideways Folder Tabs) ---- */
   .exp-rail {{
     position: absolute;
     bottom: 0;
-    width: 36px;
+    width: 28px;
     background-color: {rail_bg};
     border-right: 1px solid #4A4A4A;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    padding-top: 2px;
+    padding-top: 0px;
     gap: 0px;
     overflow: hidden;
   }}
   .rail-collapse {{
     position: relative;
-    width: 33px;
-    height: 26px;
-    background-color: {rail_tab_bg};
-    border-top: 1px solid {bevel_light};
+    width: 27px;
+    height: 22px;
+    flex-shrink: 0;
+    background-color: transparent;
+    border-top: 1px solid #555555;
     border-left: 1px solid #333333;
-    border-right: 1px solid {bevel_dark};
-    border-bottom: 1px solid {bevel_dark};
+    border-right: 1px solid #333333;
+    border-bottom: 1px solid #555555;
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: 2px;
+    margin-top: 4px;
+    margin-bottom: 0px;
   }}
   .rail-collapse svg {{
     pointer-events: none;
   }}
   .rail-icon {{
     position: relative;
-    width: 33px;
+    width: 27px;
     height: 28px;
+    flex-shrink: 0;
     background-color: {rail_tab_bg};
     border-top: 1px solid {bevel_light};
     border-left: 1px solid #333333;
@@ -1376,33 +1434,37 @@ pub fn render(state: &ChromeState<'_>) -> String {
   /* Interlocking Angled Folder Tabs with 90-degree Rotated Sideways Text */
   .exp-tab {{
     position: relative;
-    width: 34px;
-    height: 96px;
+    width: 27px;
+    height: 90px;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: center;
     color: {ink};
-    margin-bottom: -14px;
-    padding-bottom: 4px;
+    margin-bottom: -13px;
+    padding-bottom: 2px;
+  }}
+  .exp-tab-last {{
+    margin-bottom: 0px;
   }}
   .exp-tab-active {{
-    color: {brand_teal};
+    color: #207194;
   }}
   .exp-tab-bg {{
     position: absolute;
     top: 0;
     left: 0;
-    width: 34px;
-    height: 96px;
+    width: 27px;
+    height: 90px;
     pointer-events: none;
   }}
   .exp-tab-label {{
     position: relative;
-    width: 86px;
-    height: 18px;
-    font-size: 11.5px;
+    width: 82px;
+    height: 16px;
+    font-size: 11px;
     font-weight: 700;
-    line-height: 18px;
+    line-height: 16px;
     text-align: center;
     white-space: nowrap;
     transform: rotate(90deg);
@@ -1411,11 +1473,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .rail-globe {{
     position: relative;
     flex: 1;
-    width: 34px;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    padding-bottom: 8px;
+    width: 27px;
     pointer-events: none;
   }}
   .rail-globe-bordered {{
@@ -1428,55 +1486,68 @@ pub fn render(state: &ChromeState<'_>) -> String {
     left: 0;
     bottom: 0;
     width: 286px;
-    background-color: {drawer_bg};
-    border-left: 4px solid {rail_bg};
-    border-top: 4px solid {rail_bg};
+    background-color: {rail_bg};
+    padding: 4px 0 0 6px;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }}
   .exp-drawer-transparent {{
     background-color: transparent;
   }}
+  .drawer-frame {{
+    position: relative;
+    flex: 1;
+    background-color: transparent;
+    border-top: 1px solid #333333;
+    border-left: 1px solid #333333;
+    padding: 4px 4px 4px 4px;
+    display: flex;
+    flex-direction: column;
+  }}
+  .drawer-frame-transparent {{
+    background-color: transparent;
+  }}
+  .drawer-inner {{
+    flex: 1;
+    border: 1px solid #4A4A4A;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }}
   .drawer-header {{
     height: 44px;
     background-color: {drawer_header_bg};
-    border-top: 1px solid #333333;
-    border-left: 1px solid #333333;
-    border-right: 1px solid #333333;
-    border-bottom: 1px solid #333333;
+    border-top: 1px solid {bevel_light};
+    border-left: 1px solid {bevel_light};
+    border-bottom: 1.5px solid #222222;
     display: flex;
     flex-direction: row;
     align-items: center;
-    padding: 0 8px;
-    gap: 5px;
+    padding: 0 6px 0 7px;
+    gap: 4px;
   }}
   .drawer-brand {{
-    color: {brand_teal};
-    font-size: 12px;
+    color: #207194;
+    font-size: 14px;
     font-weight: 700;
-    line-height: 13px;
+    line-height: 14.5px;
+    letter-spacing: -0.02em;
     margin-right: auto;
     pointer-events: none;
   }}
-  .drawer-subbar {{
-    height: 4px;
-    background-color: {rail_bg};
-    border-left: 1px solid #333333;
-    border-right: 1px solid #333333;
-    border-bottom: 1px solid {bevel_dark};
-  }}
   .mac-btn {{
-    height: 23px;
-    padding: 0 8px;
-    background-color: {nav};
-    border-top: 1px solid {bevel_light};
-    border-left: 1px solid {bevel_light};
-    border-right: 1.5px solid #222222;
-    border-bottom: 1.5px solid #222222;
+    height: 25px;
+    padding: 0 7px;
+    background-color: #DCDCDC;
+    border-top: 1.5px solid {bevel_light};
+    border-left: 1.5px solid {bevel_light};
+    border-right: 1.5px solid #1A1A1A;
+    border-bottom: 1.5px solid #1A1A1A;
     color: {ink};
-    font-size: 11px;
-    font-weight: 600;
-    line-height: 20px;
+    font-size: 11.5px;
+    font-weight: 500;
+    line-height: 21px;
     white-space: nowrap;
     display: flex;
     flex-direction: row;
@@ -1488,31 +1559,28 @@ pub fn render(state: &ChromeState<'_>) -> String {
   }}
   .mac-btn-active {{
     background-color: #B8D6EC;
-    border-top: 1.5px solid #222222;
-    border-left: 1.5px solid #222222;
+    border-top: 1.5px solid #1A1A1A;
+    border-left: 1.5px solid #1A1A1A;
     border-right: 1px solid {bevel_light};
     border-bottom: 1px solid {bevel_light};
   }}
   .mac-btn-disabled {{
-    color: {muted};
-    border-right: 1px solid {bevel_dark};
-    border-bottom: 1px solid {bevel_dark};
+    color: #888888;
+    background-color: #DEDEDE;
+    border-top: 1px solid #EFEFEF;
+    border-left: 1px solid #EFEFEF;
+    border-right: 1px solid #888888;
+    border-bottom: 1px solid #888888;
   }}
   .drawer-body {{
     flex: 1;
     background-color: {drawer_bg};
-    border-left: 1px solid #333333;
     overflow: hidden;
     display: flex;
     flex-direction: column;
   }}
   .drawer-body-white {{
     background-color: #FFFFFF;
-    margin-right: 4px;
-    margin-bottom: 4px;
-    border-top: 1px solid #555555;
-    border-right: 1px solid #555555;
-    border-bottom: 1px solid #555555;
   }}
   .drawer-body-transparent {{
     flex: 1;
@@ -1578,11 +1646,11 @@ pub fn render(state: &ChromeState<'_>) -> String {
     pointer-events: none;
   }}
 
-  /* ---- Right Vertical Scrollbar + Bottom Aqua Blue Scrollbar + Internet zone Status Bar ---- */
+  /* ---- Right 15px Vertical Scrollbar Track + Bottom 15px Horizontal Scrollbar Track + 15x15 Resize Corner ---- */
   .aqua-vscroll {{
     position: absolute;
     right: 0;
-    bottom: 34px;
+    bottom: 15px;
     width: 15px;
     overflow: hidden;
     pointer-events: none;
@@ -1591,35 +1659,23 @@ pub fn render(state: &ChromeState<'_>) -> String {
     position: absolute;
     right: 0;
     bottom: 0;
-    height: 34px;
+    height: 15px;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     pointer-events: none;
   }}
   .aqua-hscroll {{
     position: relative;
+    flex: 1;
     height: 15px;
     overflow: hidden;
   }}
-  .aqua-statusbar {{
+  .aqua-resize-corner {{
     position: relative;
-    height: 19px;
-    border-top: 1px solid {bevel_light};
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    padding: 0 8px;
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
     overflow: hidden;
-  }}
-  .status-zone {{
-    position: relative;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    color: {ink};
-    font-size: 11px;
-    font-weight: 600;
   }}
 
   .progress {{
@@ -1793,8 +1849,6 @@ pub fn render(state: &ChromeState<'_>) -> String {
 </body>
 </html>"#,
         surface_height = state.surface_height,
-        strip = p.strip,
-        tab_active = p.tab_active,
         nav = p.nav,
         hairline = p.hairline,
         bevel_light = p.bevel_light,
