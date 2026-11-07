@@ -256,9 +256,9 @@ class WalkawayDat(private val appContext: Context) {
     canvas.drawBitmap(baseBitmap, 0f, 0f, null)
 
     val densityScale = w / 540f
-    val by0 = 242f * densityScale
-    val bh = 54f * densityScale
-    val radius = 27f * densityScale
+    val by0 = 248f * densityScale
+    val bh = 52f * densityScale
+    val radius = 26f * densityScale
 
     val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -271,10 +271,10 @@ class WalkawayDat(private val appContext: Context) {
 
     // Clear button strip region to the solid inner modal dark-gray (#24242B) so zero room background bleeds through
     fillPaint.color = Color.rgb(36, 36, 43)
-    canvas.drawRect(18f * densityScale, (by0 - 4f * densityScale), w - 18f * densityScale, (by0 + bh + 4f * densityScale), fillPaint)
+    canvas.drawRect(36f * densityScale, (by0 - 4f * densityScale), w - 36f * densityScale, (by0 + bh + 4f * densityScale), fillPaint)
 
     // 1. Left button: Yes (Ns)
-    val yesRect = RectF(22f * densityScale, by0, 198f * densityScale, by0 + bh)
+    val yesRect = RectF(40f * densityScale, by0, 202f * densityScale, by0 + bh)
     fillPaint.color = if (approvedFlash) Color.rgb(46, 170, 70) else Color.rgb(10, 132, 255)
     canvas.drawRoundRect(yesRect, radius, radius, fillPaint)
     strokePaint.color = if (approvedFlash) Color.rgb(120, 240, 140) else Color.rgb(120, 195, 255)
@@ -284,7 +284,7 @@ class WalkawayDat(private val appContext: Context) {
     canvas.drawText(yesLabel, yesRect.centerX(), textY, textPaint)
 
     // 2. Center button: No (pulsating red)
-    val noRect = RectF(212f * densityScale, by0, 352f * densityScale, by0 + bh)
+    val noRect = RectF(214f * densityScale, by0, 344f * densityScale, by0 + bh)
     fillPaint.color = if (pulseRedHigh) Color.rgb(230, 36, 36) else Color.rgb(95, 24, 24)
     canvas.drawRoundRect(noRect, radius, radius, fillPaint)
     strokePaint.color = if (pulseRedHigh) Color.rgb(255, 145, 145) else Color.rgb(175, 58, 58)
@@ -294,14 +294,14 @@ class WalkawayDat(private val appContext: Context) {
     canvas.drawText("No", noRect.centerX(), textY, textPaint)
 
     // 3. Right button: ✦ Watch (solid #3A3A46 inlay surface + golden fairy star)
-    val watchRect = RectF(366f * densityScale, by0, w - 22f * densityScale, by0 + bh)
+    val watchRect = RectF(356f * densityScale, by0, w - 40f * densityScale, by0 + bh)
     fillPaint.color = Color.rgb(58, 58, 70)
     canvas.drawRoundRect(watchRect, radius, radius, fillPaint)
     strokePaint.color = Color.rgb(245, 194, 66)
     strokePaint.strokeWidth = 2f * densityScale
     canvas.drawRoundRect(watchRect, radius, radius, strokePaint)
 
-    val cx = 398f * densityScale
+    val cx = 386f * densityScale
     val cy = by0 + bh / 2f
     val rOut = 9f * densityScale
     val rIn = 3.2f * densityScale
@@ -344,7 +344,7 @@ class WalkawayDat(private val appContext: Context) {
       if (isFullGraphic && frameBitmap != null) {
         flexBox(
           gap = 0,
-          padding = 6,
+          padding = 20,
           onClick = {
             if (!awaitingAction) return@flexBox
             awaitingAction = false
