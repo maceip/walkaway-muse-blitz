@@ -5,6 +5,12 @@ import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
@@ -236,54 +242,152 @@ class WalkawayDat(private val appContext: Context) {
   }
 
   // RYAN EXPLICIT MOCK/FALLBACK AUTHORIZATION: "create a gray dark gray rounded corner dart card with lighter gray inlay for the question. The question is going to be this project is under imminent cascading collapse or failure or these Asians are out of control. Say something use more correct terms and then show me a series of four of your little GitHub graphs and then the button is you're gonna this project is heading for imminent failure. Can I step in and take over? And the answers are yes, five second countdown, no, and then watch, but for this specific clip I'm just going to let it count down and auto hit yes."
+  private fun composeHudFrame(
+    baseBitmap: Bitmap,
+    yesLabel: String,
+    pulseRedHigh: Boolean,
+    approvedFlash: Boolean = false
+  ): Bitmap {
+    val w = baseBitmap.width
+    val h = baseBitmap.height
+    val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(out)
+    canvas.drawColor(Color.BLACK)
+    canvas.drawBitmap(baseBitmap, 0f, 0f, null)
+
+    val densityScale = w / 540f
+    val by0 = 242f * densityScale
+    val bh = 54f * densityScale
+    val radius = 27f * densityScale
+
+    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      color = Color.WHITE
+      textSize = 18f * densityScale
+      typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+      textAlign = Paint.Align.CENTER
+    }
+
+    // Clear button strip region to pure black
+    fillPaint.color = Color.BLACK
+    canvas.drawRect(10f * densityScale, (by0 - 4f * densityScale), w - 10f * densityScale, h - 8f * densityScale, fillPaint)
+
+    // 1. Left button: Yes (Ns)
+    val yesRect = RectF(18f * densityScale, by0, 198f * densityScale, by0 + bh)
+    fillPaint.color = if (approvedFlash) Color.rgb(46, 160, 67) else Color.rgb(10, 132, 255)
+    canvas.drawRoundRect(yesRect, radius, radius, fillPaint)
+    strokePaint.color = if (approvedFlash) Color.rgb(120, 240, 140) else Color.rgb(120, 195, 255)
+    strokePaint.strokeWidth = 2.5f * densityScale
+    canvas.drawRoundRect(yesRect, radius, radius, strokePaint)
+    val textY = by0 + bh / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+    canvas.drawText(yesLabel, yesRect.centerX(), textY, textPaint)
+
+    // 2. Center button: No (pulsating red)
+    val noRect = RectF(212f * densityScale, by0, 352f * densityScale, by0 + bh)
+    fillPaint.color = if (pulseRedHigh) Color.rgb(230, 36, 36) else Color.rgb(75, 16, 16)
+    canvas.drawRoundRect(noRect, radius, radius, fillPaint)
+    strokePaint.color = if (pulseRedHigh) Color.rgb(255, 145, 145) else Color.rgb(165, 48, 48)
+    strokePaint.strokeWidth = (if (pulseRedHigh) 3.2f else 1.5f) * densityScale
+    canvas.drawRoundRect(noRect, radius, radius, strokePaint)
+    textPaint.color = if (pulseRedHigh) Color.WHITE else Color.rgb(235, 180, 180)
+    canvas.drawText("No", noRect.centerX(), textY, textPaint)
+
+    // 3. Right button: ✦ Watch (golden fairy star)
+    val watchRect = RectF(366f * densityScale, by0, w - 18f * densityScale, by0 + bh)
+    fillPaint.color = Color.BLACK
+    canvas.drawRoundRect(watchRect, radius, radius, fillPaint)
+    strokePaint.color = Color.rgb(245, 194, 66)
+    strokePaint.strokeWidth = 2f * densityScale
+    canvas.drawRoundRect(watchRect, radius, radius, strokePaint)
+
+    val cx = 398f * densityScale
+    val cy = by0 + bh / 2f
+    val rOut = 9f * densityScale
+    val rIn = 3.2f * densityScale
+    val star = Path().apply {
+      moveTo(cx, cy - rOut)
+      lineTo(cx + rIn, cy - rIn)
+      lineTo(cx + rOut, cy)
+      lineTo(cx + rIn, cy + rIn)
+      lineTo(cx, cy + rOut)
+      lineTo(cx - rIn, cy + rIn)
+      lineTo(cx - rOut, cy)
+      lineTo(cx - rIn, cy - rIn)
+      close()
+    }
+    fillPaint.color = Color.rgb(255, 215, 80)
+    canvas.drawPath(star, fillPaint)
+
+    textPaint.color = Color.rgb(255, 225, 120)
+    canvas.drawText("Watch", watchRect.centerX() + 12f * densityScale, textY, textPaint)
+    return out
+  }
+
   private suspend fun renderCardContent(
     readyDisplay: Display,
     title: String,
     body: String,
     iconBitmap: Bitmap?,
     approveLabel: String,
+    pulseRedHigh: Boolean = true,
+    approvedFlash: Boolean = false,
     onAction: (String) -> Unit
   ) {
     val isFullGraphic = iconBitmap != null && iconBitmap.width > 96
+    val frameBitmap = if (isFullGraphic && iconBitmap != null) {
+      composeHudFrame(iconBitmap, approveLabel, pulseRedHigh, approvedFlash)
+    } else {
+      iconBitmap
+    }
     readyDisplay.sendContent {
-      flexBox(gap = if (isFullGraphic) 6 else 10, padding = if (isFullGraphic) 10 else 16) {
-        if (iconBitmap != null) {
-          val preset = if (isFullGraphic) ImageSize.FILL else ImageSize.ICON
-          Log.i(TAG, "rendering iconBitmap ${iconBitmap.width}x${iconBitmap.height} preset=$preset in DAT card")
+      if (isFullGraphic && frameBitmap != null) {
+        flexBox(
+          gap = 0,
+          padding = 6,
+          onClick = {
+            if (!awaitingAction) return@flexBox
+            awaitingAction = false
+            countdownJob?.cancel()
+            onAction("approve")
+            scope.launch { dismissAndPowerOff() }
+          }
+        ) {
           image(
-            bitmap = iconBitmap,
-            sizePreset = preset,
-            cornerRadius = CornerRadius.NONE,
-            alignSelf = if (preset == ImageSize.ICON) Alignment.START else null
+            bitmap = frameBitmap,
+            sizePreset = ImageSize.FILL,
+            cornerRadius = CornerRadius.NONE
           )
-        } else {
-          Log.w(TAG, "iconBitmap is NULL in renderCardContent")
         }
-        text(title.take(80), style = TextStyle.BODY)
-        if (!isFullGraphic && body.isNotBlank()) {
-          text(body.take(160), style = TextStyle.BODY)
+      } else {
+        flexBox(gap = 10, padding = 16) {
+          if (frameBitmap != null) {
+            image(
+              bitmap = frameBitmap,
+              sizePreset = ImageSize.ICON,
+              cornerRadius = CornerRadius.NONE,
+              alignSelf = Alignment.START
+            )
+          }
+          text(title.take(80), style = TextStyle.BODY)
+          if (body.isNotBlank()) {
+            text(body.take(160), style = TextStyle.BODY)
+          }
+          button(approveLabel, style = ButtonStyle.PRIMARY, onClick = {
+            if (!awaitingAction) return@button
+            awaitingAction = false
+            countdownJob?.cancel()
+            onAction("approve")
+            scope.launch { dismissAndPowerOff() }
+          })
+          button("No", style = ButtonStyle.SECONDARY, onClick = {
+            if (!awaitingAction) return@button
+            awaitingAction = false
+            countdownJob?.cancel()
+            onAction("reject")
+            scope.launch { dismissAndPowerOff() }
+          })
         }
-        button(approveLabel, style = ButtonStyle.PRIMARY, onClick = {
-          if (!awaitingAction) return@button
-          awaitingAction = false
-          countdownJob?.cancel()
-          onAction("approve")
-          scope.launch { dismissAndPowerOff() }
-        })
-        button("No", style = ButtonStyle.SECONDARY, onClick = {
-          if (!awaitingAction) return@button
-          awaitingAction = false
-          countdownJob?.cancel()
-          onAction("reject")
-          scope.launch { dismissAndPowerOff() }
-        })
-        button("Watch", style = ButtonStyle.OUTLINE, iconName = IconName.STAR_CIRCLE_TRIANGLE_AI, onClick = {
-          if (!awaitingAction) return@button
-          awaitingAction = false
-          countdownJob?.cancel()
-          onAction("watch")
-          scope.launch { dismissAndPowerOff() }
-        })
       }
     }
   }
@@ -310,23 +414,47 @@ class WalkawayDat(private val appContext: Context) {
             // Single flat flexBox on purpose (2026-11-06 black-screen
             // regression): nested flexBox/CARD layout renders black on
             // current glasses firmware and holds the display.
-            renderCardContent(readyDisplay, title, body, iconBitmap, initialLabel, onAction)
+            renderCardContent(readyDisplay, title, body, iconBitmap, initialLabel, pulseRedHigh = true, onAction = onAction)
           }.onSuccess {
             awaitingAction = true
             setEvent("DAT card sent")
             onResult(Result.success(Unit))
             if (autoApproveSeconds > 0) {
               countdownJob = scope.launch {
+                // Wait 2.2s after initial ACK so the glasses waveguide projector
+                // finishes waking up from cold sleep while still showing "Yes (5s)".
+                delay(2200)
                 for (remaining in (autoApproveSeconds - 1) downTo 1) {
-                  delay(1000)
                   if (!awaitingAction) return@launch
+                  val pulseHigh = (remaining % 2 == 1)
                   runCatching {
-                    renderCardContent(readyDisplay, title, body, iconBitmap, "Yes (${remaining}s)", onAction)
+                    renderCardContent(
+                      readyDisplay,
+                      title,
+                      body,
+                      iconBitmap,
+                      "Yes (${remaining}s)",
+                      pulseRedHigh = pulseHigh,
+                      onAction = onAction
+                    )
                   }
+                  delay(1100)
                 }
-                delay(1000)
                 if (awaitingAction) {
                   awaitingAction = false
+                  runCatching {
+                    renderCardContent(
+                      readyDisplay,
+                      title,
+                      body,
+                      iconBitmap,
+                      "✓ Yes",
+                      pulseRedHigh = false,
+                      approvedFlash = true,
+                      onAction = onAction
+                    )
+                  }
+                  delay(650)
                   setEvent("DAT card auto-approved after ${autoApproveSeconds}s")
                   onAction("approve")
                   dismissAndPowerOff()
