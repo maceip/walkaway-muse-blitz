@@ -67,6 +67,9 @@ class Slice3RecallAndSigninE2ETest(unittest.TestCase):
             env["HERMES_HOST_TOKEN"] = host_token
             env["HERMES_AGENT_TOKEN"] = agent_token
             env["HERMES_VAULT_PATH"] = str(vault_path)
+            # Keep the test out of the credential store the user actually uses.
+            env["HERMES_PASSKEY_KEYCHAIN_SERVICE"] = "ai.zmax.hermes.browser.test.e2e.passkeys"
+            env["HERMES_PASSWORD_KEYCHAIN_SERVICE"] = "ai.zmax.hermes.browser.test.e2e.credentials"
             env["HERMES_RECALL_PATH"] = str(recall_path)
             env["HERMES_AUDIT_PATH"] = str(audit_path)
 

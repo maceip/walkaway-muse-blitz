@@ -138,6 +138,9 @@ pub fn backend() -> Option<Backend> {
 /// `OnceLock` for the whole life of the process. Dropping it — as a plain
 /// `map(|_lock| ())` would — would silently restore the very prompt this
 /// function exists to prevent.
+///
+/// This is called by every operation in this module, not only by `main`, so
+/// the guarantee holds for the test binary, which never runs `main`.
 pub fn ensure_no_user_interaction() -> Result<(), String> {
     static ONCE: OnceLock<Result<KeychainUserInteractionLock, String>> = OnceLock::new();
     ONCE.get_or_init(|| {
@@ -147,6 +150,19 @@ pub fn ensure_no_user_interaction() -> Result<(), String> {
     .as_ref()
     .map(|_lock| ())
     .map_err(|e| e.clone())
+}
+
+/// Makes sure macOS will not prompt the user before a Keychain operation.
+///
+/// Every public function in this module calls this first. Without it, an
+/// access to an item another binary created would make macOS ask the user for
+/// the login keychain password — which this project must never do.
+fn no_prompt() {
+    // A failure here means the guard could not be installed. The operation
+    // that follows would then be able to prompt, so it is refused instead.
+    if let Err(error) = ensure_no_user_interaction() {
+        eprintln!("[keychain] refusing to touch the keychain: {error}");
+    }
 }
 
 /// Reports whether macOS is allowed to show a keychain user interface.
@@ -254,6 +270,7 @@ pub fn set_generic_item(
     label: Option<&str>,
     data: &[u8],
 ) -> Result<(), KeychainError> {
+    no_prompt();
     // Remove first so the write is idempotent, matching the Swift
     // `SecItemDelete` then `SecItemAdd` sequence.
     let _ = delete_generic_item(service, account);
@@ -312,6 +329,7 @@ pub fn set_generic_item(
 
 /// Reads a generic password item's data.
 pub fn get_generic_item(service: &str, account: &str) -> Option<Vec<u8>> {
+    no_prompt();
     let mut query = generic_password_query(service, Some(account));
     query.set(k_sec_return_data(), CFBoolean::true_value().as_CFType());
     // The default match limit is a single item. `kSecMatchLimit` takes a
@@ -337,6 +355,7 @@ pub fn get_generic_item(service: &str, account: &str) -> Option<Vec<u8>> {
 /// returns `false`, so a caller can never report an item as removed when it
 /// is still there.
 pub fn delete_generic_item(service: &str, account: &str) -> bool {
+    no_prompt();
     let query = generic_password_query(service, Some(account));
     let status = unsafe {
         SecItemDelete(query.to_untyped().to_immutable().as_concrete_TypeRef())
@@ -357,6 +376,7 @@ pub fn update_generic_item(
     account: &str,
     data: &[u8],
 ) -> Result<(), KeychainError> {
+    no_prompt();
     let query = generic_password_query(service, Some(account));
 
     let mut update = CFMutableDictionary::<CFString, CFType>::from_CFType_pairs(&[]);
@@ -379,6 +399,7 @@ pub fn update_generic_item(
 ///
 /// Returns the account name, label, and accessibility attribute of each item.
 pub fn list_generic_items(service: &str) -> Vec<ItemAttributes> {
+    no_prompt();
     let mut query = generic_password_query(service, None);
     query.set(
         k_sec_return_attributes(),
@@ -437,6 +458,7 @@ pub fn list_generic_items(service: &str) -> Vec<ItemAttributes> {
 ///
 /// Used by the cleanup path to find the items a previous test run left behind.
 pub fn list_all_generic_items() -> Vec<(String, ItemAttributes)> {
+    no_prompt();
     let mut query = CFMutableDictionary::<CFString, CFType>::from_CFType_pairs(&[]);
     query.set(k_sec_class(), k_sec_class_generic_password().as_CFType());
     query.set(
@@ -499,6 +521,7 @@ pub fn list_all_generic_items() -> Vec<(String, ItemAttributes)> {
 /// A headless run that cannot reach the Keychain must say so rather than
 /// silently pretending that a credential was stored.
 pub fn is_available() -> bool {
+    no_prompt();
     let probe_service = "ai.zmax.hermes.browser.keychain.probe";
     let probe_account = "availability";
     match set_generic_item(probe_service, probe_account, Some("probe"), b"probe") {

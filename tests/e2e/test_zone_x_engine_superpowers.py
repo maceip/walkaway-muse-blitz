@@ -82,10 +82,102 @@ class ZoneXEngineSuperpowersE2ETest(unittest.TestCase):
         finally:
             self.tmp.cleanup()
 
+    def _broker_assertion(
+        self,
+        host,
+        agent,
+        session_id: str,
+        obs: dict,
+        challenge: str,
+        credential_id: str,
+        origin: str,
+        rp_id: str,
+    ) -> dict:
+        """Have the broker produce a real assertion for `challenge`.
+
+        The broker runs the ceremony in Rust against the macOS Keychain,
+        behind the human approval gate, exactly as a page-driven ceremony
+        does. The fixture's relying party then verifies it.
+        """
+        # The ceremony that ran before this changed the document generation,
+        # so the proposal needs a fresh snapshot.
+        agent.send(
+            {
+                "type": "observe.request",
+                "request_id": "obs-passkey-assert",
+                "session_id": session_id,
+                "include_screenshot": False,
+            }
+        )
+        obs = agent.read_until_type("observe.result")
+        agent.send(
+            {
+                "type": "propose",
+                "request_id": "prop-passkey-assert",
+                "session_id": session_id,
+                "proposal_id": "p_passkey_assert",
+                "snapshot_id": obs["snapshot_id"],
+                "fingerprint": obs["fingerprint"],
+                "generation": obs["generation"],
+                "operation": {
+                    "kind": "passkey.assert",
+                    "origin": origin,
+                    "rp_id": rp_id,
+                    "challenge": challenge,
+                    "allow_credentials": [{"type": "public-key", "id": credential_id}],
+                },
+                "rationale": "Produce a passkey assertion for the Zone X gate",
+            }
+        )
+        pending = host.read_until_type("proposal.pending")
+        self.assertEqual(pending.get("type"), "proposal.pending")
+        host.send(
+            {
+                "type": "decision",
+                "session_id": session_id,
+                "request_id": "dec-passkey-assert",
+                "proposal_id": "p_passkey_assert",
+                "fingerprint": obs["fingerprint"],
+                "generation": obs["generation"],
+                "decision": "approve",
+                "decided_by": "user",
+                "surface": "glasses_dat",
+            }
+        )
+        host.read_until_type("executed")
+
+        host.send(
+            {
+                "type": "passkey.status",
+                "request_id": "pk-status-assert",
+                "session_id": session_id,
+            }
+        )
+        status_frame = host.read_until_type("passkey.status")
+        status = status_frame["status"]
+        self.assertIn("Assertion", json.dumps(status), f"unexpected status: {status}")
+
+        # The assertion's fields, as the broker produced them. The status is
+        # `Complete` wrapping an `Assertion` outcome.
+        assertion = status["Complete"]["Assertion"]
+        response = assertion["response"]
+        return {
+            "credential_id": credential_id,
+            "rp_id": rp_id,
+            "origin": origin,
+            "authenticator_data_b64": response["authenticatorData"],
+            "client_data_json_b64": response["clientDataJSON"],
+            "signature_der_b64": response["signature"],
+        }
+
     def test_x1_x2_x3_headed_commits_only_xray_and_webauthn_p256(self) -> None:
-        # 1. Request a fresh WebAuthn challenge from the fixture for socon2026.local
+        # 1. Request a fresh WebAuthn challenge from the fixture for the
+        #    page's own host. The RP ID is the host the page is served from,
+        #    because a relying party may not claim an RP ID that is not the
+        #    origin's host or a parent of it.
+        rp_id = "127.0.0.1"
         status, ch_resp = http_json(
-            f"{self.base_url}/api/webauthn/challenge?rp_id=socon2026.local"
+            f"{self.base_url}/api/webauthn/challenge?rp_id={rp_id}"
         )
         self.assertEqual(status, 200)
         challenge = ch_resp["challenge"]
@@ -93,6 +185,9 @@ class ZoneXEngineSuperpowersE2ETest(unittest.TestCase):
 
         env = os.environ.copy()
         env["HERMES_VAULT_PATH"] = str(self.vault_path)
+        # Keep the test out of the credential store the user actually uses.
+        env["HERMES_PASSKEY_KEYCHAIN_SERVICE"] = "ai.zmax.hermes.browser.test.e2e.passkeys"
+        env["HERMES_PASSWORD_KEYCHAIN_SERVICE"] = "ai.zmax.hermes.browser.test.e2e.credentials"
         env["HERMES_RECALL_PATH"] = str(self.recall_path)
         env["HERMES_AUDIT_PATH"] = str(self.audit_path)
 
@@ -326,16 +421,15 @@ class ZoneXEngineSuperpowersE2ETest(unittest.TestCase):
                 exec_secret = agent.read_until_type("executed")
                 self.assertEqual(exec_secret["proposal_id"], "p_secret_approve")
 
-                # Verify vault created both password secret AND P-256 keypair
+                # The blind vault stores the password only. WebAuthn private
+                # keys live in the macOS Keychain, through the passkey
+                # broker, so the vault file must not carry a keypair.
                 vault_data = json.loads(self.vault_path.read_text(encoding="utf-8"))
                 self.assertEqual(len(vault_data["accounts"]), 1)
                 acct = vault_data["accounts"][0]
                 secret_pw = acct["secret"]
-                priv_pem = acct["private_key_pem"]
-                pub_pem = acct["public_key_pem"]
-                cred_id = acct["credential_id"]
-                self.assertIn("BEGIN PRIVATE KEY", priv_pem)
-                self.assertIn("BEGIN PUBLIC KEY", pub_pem)
+                self.assertNotIn("private_key_pem", acct)
+                self.assertNotIn("public_key_pem", acct)
 
                 # Now propose submit (requires_glasses=True)
                 agent.send(
@@ -398,53 +492,127 @@ class ZoneXEngineSuperpowersE2ETest(unittest.TestCase):
                 _, acc_after = http_json(f"{self.base_url}/api/accounts")
                 self.assertEqual(len(acc_after["accounts"]), 1)
 
-                # X3 Gate: Register the vault's public key with the fixture RP and verify a real
-                # P-256 WebAuthn assertion (plus test wrong challenge, wrong RP, and replay failure)
+                # X3 Gate: register a REAL passkey through the broker, then
+                # have the broker produce a real assertion and verify it with
+                # the fixture's relying party (plus wrong origin and replay).
+                #
+                # This drives the shipping implementation: the passkey broker
+                # in `src/credentials.rs`, with the private key in the macOS
+                # Keychain, behind the human approval gate. It no longer
+                # hand-rolls a keypair and an assertion in Python, which would
+                # have tested the fixture rather than the browser.
+                #
+                # The RP ID is the page's own host: a relying party may not
+                # claim an RP ID that is not the origin's host or a parent of
+                # it, and the broker enforces that rule.
+                rp_id = "127.0.0.1"
+
+                # A fresh snapshot, so the proposal is not stale.
+                agent.send(
+                    {
+                        "type": "observe.request",
+                        "request_id": "obs-passkey",
+                        "session_id": session_id,
+                        "include_screenshot": False,
+                    }
+                )
+                obs_pk = agent.read_until_type("observe.result")
+
+                # 1. Register a passkey for the page's own host through the
+                #    broker. The agent proposes; the host approves.
+                agent.send(
+                    {
+                        "type": "propose",
+                        "request_id": "prop-passkey-register",
+                        "session_id": session_id,
+                        "proposal_id": "p_passkey_register",
+                        "snapshot_id": obs_pk["snapshot_id"],
+                        "fingerprint": obs_pk["fingerprint"],
+                        "generation": obs_pk["generation"],
+                        "operation": {
+                            "kind": "passkey.register",
+                            "origin": self.base_url,
+                            "rp": {"id": rp_id, "name": "Zone X"},
+                            "user": {
+                                "id": base64.b64encode(b"ryan@socon.dev").decode("ascii"),
+                                "name": "ryan@socon.dev",
+                                "displayName": "Ryan MacArthur",
+                            },
+                            "challenge": challenge,
+                            "pub_key_cred_params": [{"type": "public-key", "alg": -7}],
+                        },
+                        "rationale": "Register a passkey for the Zone X gate",
+                    }
+                )
+                pending_reg = host.read_until_type("proposal.pending")
+                self.assertEqual(pending_reg.get("type"), "proposal.pending")
+                host.send(
+                    {
+                        "type": "decision",
+                        "session_id": session_id,
+                        "request_id": "dec-passkey-register",
+                        "proposal_id": "p_passkey_register",
+                        "fingerprint": obs_pk["fingerprint"],
+                        "generation": obs_pk["generation"],
+                        "decision": "approve",
+                        "decided_by": "user",
+                        "surface": "glasses_dat",
+                    }
+                )
+                host.read_until_type("executed")
+
+                # 2. Read the credential id the broker produced.
+                host.send(
+                    {
+                        "type": "passkey.status",
+                        "request_id": "pk-status",
+                        "session_id": session_id,
+                    }
+                )
+                status_frame = host.read_until_type("passkey.status")
+                self.assertEqual(status_frame.get("type"), "passkey.status")
+                cred_id = status_frame["credential_id"]
+                self.assertTrue(cred_id)
+
+                # 3. Register the broker's public key with the fixture RP.
+                host.send(
+                    {
+                        "type": "passkey.publickey",
+                        "request_id": "pk-pub",
+                        "session_id": session_id,
+                        "credential_id": cred_id,
+                    }
+                )
+                pubkey_frame = host.read_until_type("passkey.publickey")
+                pub_pem = pubkey_frame["public_key_pem"]
+                self.assertIn("BEGIN PUBLIC KEY", pub_pem)
+
                 reg_status, reg_resp = http_json(
                     f"{self.base_url}/api/webauthn/register",
                     method="POST",
                     payload={
                         "credential_id": cred_id,
                         "public_key_pem": pub_pem,
-                        "rp_id": "socon2026.local",
+                        "rp_id": rp_id,
                         "user_email": "ryan@socon.dev",
                     },
                 )
                 self.assertEqual(reg_status, 200)
                 self.assertTrue(reg_resp.get("ok"))
 
-                # Construct a real WebAuthn assertion signed by the vault's P-256 private key
-                # matching vault::sign_webauthn_assertion's exact layout
-                import hashlib
-
-                client_data_bytes = json.dumps(
-                    {
-                        "type": "webauthn.get",
-                        "challenge": challenge,
-                        "origin": self.base_url,
-                        "crossOrigin": False,
-                    },
-                    separators=(",", ":"),
-                ).encode("utf-8")
-                rp_hash = hashlib.sha256(b"socon2026.local").digest()
-                auth_data = rp_hash + bytes([0x05]) + (1).to_bytes(4, "big")
-                signed_payload = auth_data + hashlib.sha256(client_data_bytes).digest()
-
-                priv_file = self.tmpdir / "priv.pem"
-                priv_file.write_text(priv_pem, encoding="utf-8")
-                sig_der = subprocess.check_output(
-                    ["openssl", "dgst", "-sha256", "-sign", str(priv_file)],
-                    input=signed_payload,
+                # 4. Have the broker produce the assertion, then verify it
+                #    with the fixture's relying party.
+                assertion_payload = self._broker_assertion(
+                    host,
+                    agent,
+                    session_id,
+                    obs4,
+                    challenge,
+                    cred_id,
+                    self.base_url,
+                    rp_id,
                 )
-
-                assertion_payload = {
-                    "credential_id": cred_id,
-                    "rp_id": "socon2026.local",
-                    "origin": self.base_url,
-                    "authenticator_data_b64": base64.b64encode(auth_data).decode("ascii"),
-                    "client_data_json_b64": base64.b64encode(client_data_bytes).decode("ascii"),
-                    "signature_der_b64": base64.b64encode(sig_der).decode("ascii"),
-                }
+                self.assertEqual(len(assertion_payload["authenticator_data_b64"]) > 0, True)
 
                 # 1) Wrong origin/RP must fail
                 bad_origin_status, _ = http_json(

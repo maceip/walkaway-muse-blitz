@@ -376,7 +376,12 @@ impl Page {
             }
         }
 
-        let mut ctx = Box::new(BlitzHostContext::new(doc));
+        // The page's origin travels with the context so a WebAuthn ceremony
+        // can be bound to the origin the document was actually served from.
+        // Deriving it from the relying party's own `rpId` would make the
+        // origin check vacuous.
+        let origin = base.as_ref().map(|url| url.origin().ascii_serialization()).unwrap_or_default();
+        let mut ctx = Box::new(BlitzHostContext::with_origin(doc, &origin));
         let hermes =
             unsafe { hermes_app_init((&mut *ctx as *mut BlitzHostContext).cast::<c_void>()) };
         let mut page = Self { ctx, hermes };
@@ -1647,6 +1652,31 @@ impl BrowserApp {
                 });
                 self.emit(OutTarget::Conn(conn_id), body);
             }
+            "passkey.publickey" => {
+                // A relying party needs the credential's public key to register
+                // it. The private key never leaves the Keychain, and the
+                // public key is not secret, so the host may read it.
+                if role != Role::Host {
+                    self.refused(conn_id, &frame, "wrong_role");
+                    return;
+                }
+                let Some(credential_id) = frame.get("credential_id").and_then(Value::as_str) else {
+                    self.refused(conn_id, &frame, "internal");
+                    return;
+                };
+                let bytes = webauthn::b64::b64url_decode(credential_id)
+                    .or_else(|| control::b64_decode(credential_id));
+                let public_key = bytes
+                    .and_then(|bytes| self.passkey_broker.public_key_pem(&bytes).ok())
+                    .flatten();
+                let body = json!({
+                    "v": 1, "type": "passkey.publickey",
+                    "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                    "credential_id": credential_id,
+                    "public_key_pem": public_key,
+                });
+                self.emit(OutTarget::Conn(conn_id), body);
+            }
             "passkey.delete" => {
                 // Removing a passkey is a trusted shell action.
                 if role != Role::Host {
@@ -1677,13 +1707,46 @@ impl BrowserApp {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
+                // With no ceremony id the caller is asking for the most
+                // recent ceremony, which is how a host learns which
+                // credential a registration produced.
+                let ceremony_id = if ceremony_id.is_empty() {
+                    self.passkey_broker
+                        .latest_ceremony_id()
+                        .map(|id| id.0)
+                        .unwrap_or_default()
+                } else {
+                    ceremony_id
+                };
                 let status = self
                     .passkey_broker
                     .poll_assertion(credentials::PasskeyCeremonyId(ceremony_id.clone()));
+                // The registration is polled too: the ceremony id does not
+                // say which kind it is.
+                let status = match status {
+                    Ok(status) => Ok(status),
+                    Err(error) => self
+                        .passkey_broker
+                        .poll_registration(credentials::PasskeyCeremonyId(ceremony_id.clone()))
+                        .map_err(|_| error),
+                };
+                // Surface the credential id at the top level when the ceremony
+                // completed, so a host can register it with a relying party
+                // without parsing the nested status.
+                let credential_id = match &status {
+                    Ok(credentials::PasskeyStatus::Complete(
+                        credentials::CeremonyOutcome::Registration(credential),
+                    )) => Some(credential.id.clone()),
+                    Ok(credentials::PasskeyStatus::Complete(
+                        credentials::CeremonyOutcome::Assertion(credential),
+                    )) => Some(credential.id.clone()),
+                    _ => None,
+                };
                 let body = json!({
                     "v": 1, "type": "passkey.status",
                     "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
                     "ceremony_id": ceremony_id,
+                    "credential_id": credential_id,
                     "status": match status {
                         Ok(status) => serde_json::to_value(status).unwrap_or(Value::Null),
                         Err(error) => json!({"failed": error.to_string()}),
@@ -4803,6 +4866,9 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
             if self.started.elapsed() >= limit {
                 self.exit_after = None;
                 eprintln!("[host] exit-after elapsed, shutting down");
+                // A run that used a test credential service leaves nothing
+                // behind. The user's own service is never touched.
+                wipe_test_credential_services();
                 event_loop.exit();
             }
         }
@@ -5455,6 +5521,69 @@ fn parse_exit_after() -> Option<Duration> {
     None
 }
 
+/// Removes the credentials a test service holds, before and after a run.
+///
+/// A test must never read another run's credentials and must never leave its
+/// own behind. The user's own service is never touched: only a service whose
+/// name marks it as a test service is cleared.
+fn wipe_test_credential_services() {
+    let passkey_service = credentials::passkey_service_name();
+    let password_service = credentials::password_service_name();
+    for service in [passkey_service, password_service] {
+        if !is_test_credential_service(&service) {
+            continue;
+        }
+        for (name, attributes) in keychain::list_all_generic_items() {
+            if name == service {
+                keychain::delete_generic_item(&name, &attributes.account);
+            }
+        }
+    }
+}
+
+/// Whether a credential service name marks it as a test service.
+fn is_test_credential_service(service: &str) -> bool {
+    service.contains(".test.")
+}
+
+/// Cleans up the test credential services when the process is asked to stop.
+///
+/// A test harness terminates the browser. Without this, the credentials the
+/// run created would stay in the Keychain. Only a test service is touched;
+/// the user's own service is never removed.
+fn install_test_cleanup_signal_handler() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| unsafe {
+        // SIGTERM and SIGINT: clean up, then exit with the conventional
+        // status for a terminated process.
+        libc::signal(
+            libc::SIGTERM,
+            handle_termination_signal as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            handle_termination_signal as *const () as libc::sighandler_t,
+        );
+    });
+}
+
+/// The signal handler. It must be async-signal-safe, so it only sets a flag
+/// and lets the process exit.
+extern "C" fn handle_termination_signal(_signal: libc::c_int) {
+    // `wipe_test_credential_services` touches the Keychain, which is not
+    // async-signal-safe, so the work is done by a detached thread and the
+    // process exits immediately afterwards.
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        wipe_test_credential_services();
+        std::process::exit(143); // 128 + SIGTERM
+    });
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -5469,6 +5598,11 @@ fn main() {
         eprintln!("could not disable keychain interaction: {error}");
         std::process::exit(1);
     }
+
+    // A run that points the credential store at a test service starts from
+    // a clean slate, and leaves nothing behind. The user's own service is
+    // never touched.
+    wipe_test_credential_services();
 
     if args.iter().any(|a| a == "--selftest") {
         std::process::exit(selftest());
@@ -5559,6 +5693,7 @@ fn main() {
     if args.iter().any(|a| a == "--collapsed") {
         app.toolbar_collapsed = true;
     }
+    install_test_cleanup_signal_handler();
     if args.iter().any(|a| a == "--scrapbook") {
         app.explorer_tab = Some(ExplorerTab::Scrapbook);
     } else if args.iter().any(|a| a == "--pageholder") {
@@ -5614,10 +5749,44 @@ fn main() {
     event_loop.run_app(&mut app).expect("run");
 }
 
+/// Prepares a test run: the Keychain must never prompt, and the run must
+/// never touch the credentials the user actually stored.
+///
+/// Every suite calls this first. Two things are set up:
+///
+/// 1. macOS keychain user interaction is switched off, so an access this
+///    binary is not trusted for fails with an error instead of asking the
+///    user for their login keychain password.
+/// 2. The passkey store is pointed at a service named after this process, so
+///    the run cannot read or overwrite the user's own passkeys.
+fn prepare_test_run() {
+    let _ = keychain::ensure_no_user_interaction();
+    credentials::set_passkey_service_override(&test_passkey_service());
+}
+
+/// The Keychain service this test run uses for passkeys.
+fn test_passkey_service() -> String {
+    format!(
+        "ai.zmax.hermes.browser.test.passkeys.{}",
+        std::process::id()
+    )
+}
+
+/// Removes the Keychain items this test run created.
+///
+/// A test must leave no credential behind. The test binary is trusted for
+/// the items it created, so it can remove them; anything it is not trusted
+/// for is left in place rather than falsely reported as removed.
+fn cleanup_test_run() {
+    let service = test_passkey_service();
+    keychain::delete_generic_item(&service, credentials::PASSKEY_KEYCHAIN_ACCOUNT);
+}
+
 /// `--uitest`: drive the real chrome click handler at coordinates obtained from
 /// real hit-testing, and assert the resulting state. This is what proves the
 /// buttons do something, rather than merely being present.
 fn uitest() -> i32 {
+    prepare_test_run();
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(el) => el,
         Err(e) => {
@@ -5987,6 +6156,8 @@ fn uitest() -> i32 {
     }
     let _ = std::fs::remove_file(&sb_temp_path);
 
+    cleanup_test_run();
+
     if failures == 0 {
         println!("UITEST PASS");
         0
@@ -6016,6 +6187,7 @@ fn find_click(app: &BrowserApp, id: &str) -> Option<(f32, f32)> {
 /// all Deliverable 1 Static Hermes `$SHBuiltin.extern_c` DOM bindings + automatic
 /// `<script>` execution + `addEventListener` bubbling + `getBoundingClientRect`.
 fn runtimetest() -> i32 {
+    prepare_test_run();
     fn button_text(page: &Page) -> String {
         let Some(button) = page.doc().get_element_by_id("action-btn") else {
             return String::new();
@@ -6140,25 +6312,38 @@ fn runtimetest() -> i32 {
           parentEl.setAttribute("data-bubbled-from", ev.target.getAttribute("id"));
         });
 
+        // A WebAuthn ceremony is bound to the origin the page was served
+        // from, and the relying party may only claim an RP ID that is that
+        // origin's host or a parent of it. The page below is served from
+        // https://example.com, so the RP ID is example.com.
+        //
+        // The challenge is a `BufferSource`, which is what the spec requires
+        // and what a real site sends. The bytes must reach the authenticator
+        // intact.
         navigator.credentials.create({
           publicKey: {
             rp: { id: "example.com", name: "Example" },
             user: { name: "ryan@example.com", displayName: "Ryan" },
-            challenge: "chal_create_123"
+            challenge: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])
           }
         }).then(function(cred) {
-          host.setAttribute("data-webauthn-id", cred.id);
+          host.setAttribute("data-webauthn-id", String(cred.id.byteLength));
           return navigator.credentials.get({
-            publicKey: { rpId: "example.com", challenge: "chal_get_456" }
+            publicKey: { rpId: "example.com", challenge: new Uint8Array([9, 8, 7, 6, 5, 4, 3, 2]) }
           });
         }).then(function(assertion) {
-          host.setAttribute("data-webauthn-sig-len", String(assertion.signature.length));
+          host.setAttribute("data-webauthn-sig-len", String(assertion.response.signature.byteLength));
+        }).catch(function(err) {
+          host.setAttribute("data-webauthn-error", String(err && err.message ? err.message : err));
         });
       </script>
     </body>
     </html>"##;
 
-    let mut dom_page = Page::load(dom_test_html, None, None, viewport, Theme::Light);
+    // The page is served from https://example.com, which is the origin the
+    // WebAuthn ceremony is bound to.
+    let dom_base = Url::parse("https://example.com/").ok();
+    let mut dom_page = Page::load(dom_test_html, dom_base, None, viewport, Theme::Light);
     let doc = dom_page.doc();
     let host_id = doc.get_element_by_id("box-host").expect("#box-host");
     let host_node = doc.get_node(host_id).expect("host node");
@@ -6238,10 +6423,26 @@ fn runtimetest() -> i32 {
         .and_then(|n| n.attr(LocalName::from("data-webauthn-sig-len")))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let webauthn_error: String = dom_page
+        .doc()
+        .get_element_by_id("box-host")
+        .and_then(|id| dom_page.doc().get_node(id))
+        .and_then(|n| n.attr(LocalName::from("data-webauthn-error")))
+        .unwrap_or_default()
+        .to_string();
     check(
         !webauthn_id.is_empty() && webauthn_sig_len >= 64,
-        "navigator.credentials.create() and .get() execute P-256 WebAuthn ceremonies via $SHBuiltin.extern_c",
+        &format!(
+            "navigator.credentials.create() and .get() execute P-256 WebAuthn ceremonies via $SHBuiltin.extern_c{}",
+            if webauthn_error.is_empty() {
+                String::new()
+            } else {
+                format!(" (page reported: {webauthn_error})")
+            }
+        ),
     );
+
+    cleanup_test_run();
 
     if failures == 0 {
         println!("RUNTIME TEST PASS");
@@ -6316,7 +6517,10 @@ fn keychain_cleanup() -> i32 {
     let mut removed = 0usize;
     let mut refused = 0usize;
     for (service, attributes) in items {
-        if !service.starts_with(prefix) {
+        // An earlier test run used a temporary directory as the service name.
+        // Those items are Hermes' too, so they are cleaned as well.
+        let is_hermes = service.starts_with(prefix) || service.contains("hermes-");
+        if !is_hermes {
             continue;
         }
         if keychain::delete_generic_item(&service, &attributes.account) {
@@ -6338,6 +6542,7 @@ fn keychain_cleanup() -> i32 {
 /// BrowserApp — channel authority, proposal/decision binding, exactly-once
 /// execution, takeover/release, stop discarding a fetch, and audit secrecy.
 fn supervisortest() -> i32 {
+    prepare_test_run();
     fn send(
         app: &mut BrowserApp,
         conn: u64,
@@ -7240,6 +7445,8 @@ fn supervisortest() -> i32 {
             .ok();
     }
 
+    cleanup_test_run();
+
     if failures == 0 {
         println!("SUPERVISOR TEST PASS");
         0
@@ -7252,6 +7459,7 @@ fn supervisortest() -> i32 {
 /// `--observetest`: snapshot labels, stability, mutation fingerprinting, and
 /// sensitive-value redaction against real Blitz documents.
 fn observetest() -> i32 {
+    prepare_test_run();
     let mut failures = 0;
     let mut check = |condition: bool, message: &str| {
         if condition {
@@ -7376,6 +7584,8 @@ fn observetest() -> i32 {
         "checkbox state is observed",
     );
 
+    cleanup_test_run();
+
     if failures == 0 {
         println!("OBSERVE TEST PASS");
         0
@@ -7386,6 +7596,7 @@ fn observetest() -> i32 {
 }
 
 fn selftest() -> i32 {
+    prepare_test_run();
     let viewport = Viewport::new(WIDTH, HEIGHT, 1.0, ColorScheme::Light);
     let mut doc = HtmlDocument::from_html(
         START_PAGE,
@@ -7980,6 +8191,7 @@ fn render_to_png(
 ///      and `< 1ms` zero-LLM `FormRecipe` recall/replay.
 ///   4. Live Mach kernel resident memory telemetry (`mach_task_basic_info`).
 fn hurdletest() -> i32 {
+    prepare_test_run();
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::Mutex;
@@ -8680,6 +8892,10 @@ fn hurdletest() -> i32 {
         let store = crate::credentials::KeychainPasswordStore::new();
         let _ = store.delete(&stored_host, stored_user);
     }
+
+    cleanup_test_run();
+
+    cleanup_test_run();
 
     if failures == 0 {
         println!("HURDLE TEST PASS");

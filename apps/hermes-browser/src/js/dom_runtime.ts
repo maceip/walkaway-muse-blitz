@@ -106,18 +106,30 @@
   });
   const _webauthn_create = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_webauthn_create(
     rp_id: c_ptr,
-    user_name: c_ptr,
-    challenge: c_ptr
+    user_name: c_ptr
   ): c_int {
     throw 0;
   });
   const _webauthn_get = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_webauthn_get(
-    rp_id: c_ptr,
-    challenge: c_ptr
+    rp_id: c_ptr
   ): c_int {
     throw 0;
   });
   const _mark_dirty = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_mark_dirty(): void {});
+  const _write_scratch_bytes = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_write_scratch_bytes(
+    bytes: c_ptr,
+    len: c_size_t
+  ): c_int {
+    throw 0;
+  });
+  const _scratch_bytes_len = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_scratch_bytes_len(): c_int {
+    throw 0;
+  });
+  const _scratch_bytes_get = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_scratch_bytes_get(
+    index: c_size_t
+  ): c_int {
+    throw 0;
+  });
 
   /* Allocate a NUL-terminated UTF-8 copy of `s`. Caller frees.
    * Supports full Unicode (1-, 2-, 3-, and 4-byte UTF-8 sequences including
@@ -193,6 +205,75 @@
           String.fromCharCode(0xd800 + (cp >> 10)) +
           String.fromCharCode(0xdc00 + (cp & 0x3ff));
       }
+    }
+    return out;
+  }
+
+  /* Coerce a WebAuthn challenge into a Uint8Array.
+   *
+   * The WebAuthn spec makes `challenge` an `ArrayBuffer` (a `BufferSource`).
+   * A relying party that follows the spec sends binary, so the bytes must
+   * survive intact: a NUL byte or a byte above 0x7f must not be truncated or
+   * re-encoded. A plain string is accepted as well, because some sites and
+   * test harnesses pass one; it is encoded as UTF-8.
+   *
+   * Returns null when the value cannot be read as bytes at all. */
+  function challengeToBytes(challenge: any): any {
+    if (challenge === null || challenge === undefined) return null;
+    if (typeof challenge === "string") {
+      let enc: any = new TextEncoder();
+      return new Uint8Array(enc.encode(challenge));
+    }
+    if (typeof challenge === "number") {
+      return new Uint8Array([challenge & 0xff]);
+    }
+    if (challenge instanceof Uint8Array) return challenge;
+    if (challenge instanceof ArrayBuffer) return new Uint8Array(challenge);
+    /* A DataView, or any other view over a buffer. */
+    if (challenge && typeof challenge.byteLength === "number" && challenge.buffer) {
+      return new Uint8Array(challenge.buffer, challenge.byteOffset || 0, challenge.byteLength);
+    }
+    /* An array of byte values. */
+    if (challenge && typeof challenge.length === "number" && typeof challenge !== "string") {
+      let out: any = new Uint8Array(challenge.length);
+      for (let i: number = 0; i < challenge.length; i = i + 1) {
+        out[i] = challenge[i] & 0xff;
+      }
+      return out;
+    }
+    return null;
+  }
+
+  /* Hand `bytes` to the Rust host through the binary scratch buffer.
+   *
+   * The bytes are copied out of the JS heap into a C allocation and then into
+   * the host's buffer, so the host sees exactly the bytes the page sent.
+   *
+   * Each byte is written through the char writer. `char` is signed on this
+   * platform, but the host reads the buffer as `unsigned char`, so the bit
+   * pattern of every byte is preserved exactly — a byte above 0x7f arrives
+   * unchanged. */
+  function writeChallengeBytes(bytes: any): number {
+    let len: number = bytes.length;
+    if (len === 0) {
+      let empty: c_ptr = 0 as any as c_ptr;
+      _write_scratch_bytes(empty, 0);
+      return 0;
+    }
+    let buf: c_ptr = _malloc(len);
+    for (let i: number = 0; i < len; i = i + 1) {
+      _write_char(buf, i, bytes[i] & 0xff);
+    }
+    let written: number = _write_scratch_bytes(buf, len);
+    _free(buf);
+    return written;
+  }
+
+  /* Read `len` bytes back from the Rust host's binary scratch buffer. */
+  function readScratchBytes(len: number): any {
+    let out: any = new Uint8Array(len);
+    for (let i: number = 0; i < len; i = i + 1) {
+      out[i] = _scratch_bytes_get(i) & 0xff;
     }
     return out;
   }
@@ -557,47 +638,147 @@
   (globalThis as any).self = globalThis;
 
   /* Expose W3C WebAuthn navigator.credentials.create() and navigator.credentials.get()
-   * backed by the native Rust P-256 authenticator via $SHBuiltin.extern_c. */
+   * backed by the native Rust P-256 authenticator via $SHBuiltin.extern_c.
+   *
+   * The ceremony itself is performed in Rust, in the host, by the passkey
+   * broker, with the private key in the macOS Keychain and behind the human
+   * approval gate. Nothing here signs anything: this is the API surface a
+   * relying party talks to, the same way a browser exposes it. The spec
+   * forbids simulating a passkey ceremony in page JS, and nothing in this
+   * file does that. */
   let credsObj: any = new ObjectCtor();
+
+  /* Decode a base64url string into an ArrayBuffer, the way a WebAuthn
+   * response field is delivered to the page. */
+  function b64urlToBuffer(value: string): any {
+    let alphabet: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let clean: string = String(value).replace(/=+$/, "");
+    let out: any = new Uint8Array(Math.floor((clean.length * 6) / 8));
+    let acc: number = 0;
+    let bits: number = 0;
+    let o: number = 0;
+    for (let i: number = 0; i < clean.length; i = i + 1) {
+      let v: number = alphabet.indexOf(clean.charAt(i));
+      if (v < 0) continue;
+      acc = (acc << 6) | v;
+      bits = bits + 6;
+      if (bits >= 8) {
+        bits = bits - 8;
+        out[o] = (acc >> bits) & 0xff;
+        o = o + 1;
+      }
+    }
+    return out.buffer;
+  }
+
+  /* Build the response object a relying party expects:
+   * an ArrayBuffer `id`, an ArrayBuffer `authenticatorData`, an ArrayBuffer
+   * `clientDataJSON`, an ArrayBuffer `signature`, and a `getClientExtensionResults`
+   * method. */
+  function buildCredentialResponse(json: any, isAssertion: boolean): any {
+    let resp: any = new ObjectCtor();
+    let idBuf: any = b64urlToBuffer(json.credential_id || json.id || "");
+    let clientDataBuf: any = b64urlToBuffer(json.client_data_json_b64 || "");
+    let authDataBuf: any = b64urlToBuffer(json.authenticator_data_b64 || "");
+    let sigBuf: any = b64urlToBuffer(json.signature_der_b64 || "");
+    resp.id = idBuf;
+    resp.rawId = idBuf;
+    resp.type = "public-key";
+    resp.authenticatorAttachment = "platform";
+    resp.response = new ObjectCtor();
+    if (isAssertion) {
+      resp.response.authenticatorData = authDataBuf;
+      resp.response.clientDataJSON = clientDataBuf;
+      resp.response.signature = sigBuf;
+      resp.response.userHandle = null;
+    } else {
+      resp.response.attestationObject = authDataBuf;
+      resp.response.clientDataJSON = clientDataBuf;
+      resp.response.transports = ["internal"];
+    }
+    resp.getClientExtensionResults = function (): any {
+      return new ObjectCtor();
+    };
+    /* `PublicKeyCredential.toJSON()` is the serialization a relying party may
+     * read off the credential. */
+    resp.toJSON = function (): any {
+      let out: any = new ObjectCtor();
+      out.id = json.credential_id || json.id || "";
+      out.rawId = json.credential_id || json.id || "";
+      out.type = "public-key";
+      out.authenticatorAttachment = "platform";
+      out.response = new ObjectCtor();
+      if (isAssertion) {
+        out.response.authenticatorData = json.authenticator_data_b64 || "";
+        out.response.clientDataJSON = json.client_data_json_b64 || "";
+        out.response.signature = json.signature_der_b64 || "";
+        out.response.userHandle = null;
+      } else {
+        out.response.attestationObject = json.authenticator_data_b64 || "";
+        out.response.clientDataJSON = json.client_data_json_b64 || "";
+        out.response.transports = ["internal"];
+      }
+      out.clientExtensionResults = new ObjectCtor();
+      return out;
+    };
+    return resp;
+  }
+
   credsObj.create = function (options: any): any {
+    let PromiseCtor: any = (globalThis as any).Promise;
     let pk: any = options ? options.publicKey || options : new ObjectCtor();
     let rpObj: any = pk.rp || new ObjectCtor();
     let userObj: any = pk.user || new ObjectCtor();
-    let rpIdStr: string = String(rpObj.id || rpObj.name || "localhost");
-    let userNameStr: string = String(userObj.name || userObj.displayName || "user@localhost");
-    let chalStr: string = String(pk.challenge || "challenge_create");
+    let rpIdStr: string = String(rpObj.id || rpObj.name || "");
+    let userNameStr: string = String(userObj.name || userObj.displayName || "");
+    let chalBytes: any = challengeToBytes(pk.challenge);
+    if (chalBytes === null) {
+      return PromiseCtor.reject(new Error("WebAuthn create: challenge is missing"));
+    }
     let cRp: c_ptr = toUtf8z(rpIdStr);
     let cUser: c_ptr = toUtf8z(userNameStr);
-    let cChal: c_ptr = toUtf8z(chalStr);
-    let len: number = _webauthn_create(cRp, cUser, cChal);
+    writeChallengeBytes(chalBytes);
+    let len: number = _webauthn_create(cRp, cUser);
     _free(cRp);
     _free(cUser);
-    _free(cChal);
-    let PromiseCtor: any = (globalThis as any).Promise;
     let JSONObj: any = (globalThis as any).JSON;
     if (len < 0) {
       return PromiseCtor.reject(new Error("WebAuthn create failed"));
     }
     let jsonStr: string = readScratchUtf8(len);
-    return PromiseCtor.resolve(JSONObj.parse(jsonStr));
+    let parsed: any = JSONObj.parse(jsonStr);
+    if (!parsed || parsed.error) {
+      return PromiseCtor.reject(new Error((parsed && parsed.error) || "WebAuthn create failed"));
+    }
+    return PromiseCtor.resolve(buildCredentialResponse(parsed, false));
   };
   credsObj.get = function (options: any): any {
-    let pk: any = options ? options.publicKey || options : new ObjectCtor();
-    let rpIdStr: string = String(pk.rpId || (pk.rp && pk.rp.id) || "localhost");
-    let chalStr: string = String(pk.challenge || "challenge_get");
-    let cRp: c_ptr = toUtf8z(rpIdStr);
-    let cChal: c_ptr = toUtf8z(chalStr);
-    let len: number = _webauthn_get(cRp, cChal);
-    _free(cRp);
-    _free(cChal);
     let PromiseCtor: any = (globalThis as any).Promise;
+    let pk: any = options ? options.publicKey || options : new ObjectCtor();
+    let rpIdStr: string = String(pk.rpId || (pk.rp && pk.rp.id) || "");
+    let chalBytes: any = challengeToBytes(pk.challenge);
+    if (chalBytes === null) {
+      return PromiseCtor.reject(new Error("WebAuthn get: challenge is missing"));
+    }
+    let cRp: c_ptr = toUtf8z(rpIdStr);
+    writeChallengeBytes(chalBytes);
+    let len: number = _webauthn_get(cRp);
+    _free(cRp);
     let JSONObj: any = (globalThis as any).JSON;
     if (len < 0) {
       return PromiseCtor.reject(new Error("WebAuthn get failed"));
     }
     let jsonStr: string = readScratchUtf8(len);
-    return PromiseCtor.resolve(JSONObj.parse(jsonStr));
+    let parsed: any = JSONObj.parse(jsonStr);
+    if (!parsed || parsed.error) {
+      return PromiseCtor.reject(new Error((parsed && parsed.error) || "WebAuthn get failed"));
+    }
+    return PromiseCtor.resolve(buildCredentialResponse(parsed, true));
   };
+  /* `CredentialsContainer.preventSilentMediation()` is part of the spec. The
+   * browser honours it by refusing to answer a conditional request without an
+   * explicit user gesture. */
+  credsObj.preventSilentMediation = function (): void {};
   let navObj: any = new ObjectCtor();
   navObj.credentials = credsObj;
   navObj.userAgent = "Walkaway-Hermes-Blitz/0.1";

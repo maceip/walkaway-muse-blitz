@@ -55,6 +55,50 @@ pub const PASSKEY_KEYCHAIN_ACCOUNT: &str = "passkey_records_v1";
 /// The Keychain service that holds saved passwords.
 pub const PASSWORD_KEYCHAIN_SERVICE: &str = "ai.zmax.hermes.browser.credentials";
 
+/// The environment variable that overrides the passkey service name.
+///
+/// A test harness sets this so a run never reads or writes the credentials
+/// the user actually stored.
+pub const PASSKEY_SERVICE_ENV: &str = "HERMES_PASSKEY_KEYCHAIN_SERVICE";
+
+/// The environment variable that overrides the password service name.
+pub const PASSWORD_SERVICE_ENV: &str = "HERMES_PASSWORD_KEYCHAIN_SERVICE";
+
+/// The Keychain service the passkey store writes to.
+///
+/// This is overridable so a test run can use its own service and never touch
+/// the credentials the user actually stored. The override is process-wide and
+/// is set before any ceremony runs.
+static PASSKEY_SERVICE_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn passkey_service_name() -> String {
+    if let Some(service) = PASSKEY_SERVICE_OVERRIDE.get() {
+        return service.clone();
+    }
+    std::env::var(PASSKEY_SERVICE_ENV)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| PASSKEY_KEYCHAIN_SERVICE.to_string())
+}
+
+/// Points the passkey store at a different Keychain service.
+///
+/// This exists so a test run never writes into the service the user actually
+/// uses. It must be called before any ceremony runs; the first call wins.
+pub fn set_passkey_service_override(service: &str) {
+    let _ = PASSKEY_SERVICE_OVERRIDE.set(service.to_string());
+}
+
+/// The Keychain service the password store writes to.
+///
+/// Overridable the same way as the passkey service.
+pub fn password_service_name() -> String {
+    std::env::var(PASSWORD_SERVICE_ENV)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| PASSWORD_KEYCHAIN_SERVICE.to_string())
+}
+
 /// Errors raised by the brokers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BrokerError {
@@ -148,7 +192,7 @@ impl KeychainPasskeyStore {
     /// Creates a store using the default service and account names.
     pub fn new() -> Self {
         Self {
-            service: PASSKEY_KEYCHAIN_SERVICE.to_string(),
+            service: passkey_service_name(),
             account: PASSKEY_KEYCHAIN_ACCOUNT.to_string(),
         }
     }
@@ -163,6 +207,10 @@ impl KeychainPasskeyStore {
     }
 }
 
+/// The Keychain service the passkey store writes to.
+///
+/// This is overridable so a test run can use its own service and never touch
+/// the credentials the user actually stored. The override is process-wide and
 impl PasskeyStore for KeychainPasskeyStore {
     fn all(&self) -> Result<Vec<StoredPasskey>, String> {
         let Some(data) = keychain::get_generic_item(&self.service, &self.account) else {
@@ -228,7 +276,7 @@ impl KeychainPasswordStore {
     /// Creates a store using the default service name.
     pub fn new() -> Self {
         Self {
-            service: PASSWORD_KEYCHAIN_SERVICE.to_string(),
+            service: password_service_name(),
         }
     }
 
@@ -468,13 +516,7 @@ impl PasskeyRequest {
             .get("rp_id")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
-        let allow_credentials = match operation.get("allow_credentials") {
-            Some(serde_json::Value::Array(_)) => serde_json::from_value(
-                operation.get("allow_credentials").cloned().unwrap(),
-            )
-            .map_err(|e| BrokerError::Invalid(format!("allow_credentials: {e}")))?,
-            _ => Vec::new(),
-        };
+        let allow_credentials = decode_credential_descriptors(operation.get("allow_credentials"))?;
         let user_verification = operation
             .get("user_verification")
             .and_then(serde_json::Value::as_str)
@@ -564,8 +606,39 @@ impl RegistrationRequest {
         let user_value = operation
             .get("user")
             .ok_or_else(|| BrokerError::Invalid("user is required".to_string()))?;
-        let mut user = serde_json::from_value::<PublicKeyCredentialUserEntity>(user_value.clone())
-            .map_err(|e| BrokerError::Invalid(format!("user: {e}")))?;
+        // The user handle is a byte sequence. On the wire it travels as
+        // base64url, which is what a relying party produces, so a string is
+        // accepted and decoded. An array of byte values is accepted too,
+        // because that is how the in-memory type serializes.
+        let mut user = match serde_json::from_value::<PublicKeyCredentialUserEntity>(
+            user_value.clone(),
+        ) {
+            Ok(user) => user,
+            Err(error) => {
+                let raw = user_value.get("id").and_then(serde_json::Value::as_str);
+                match raw {
+                    Some(raw) => {
+                        let id = decode_challenge(Some(&serde_json::Value::String(raw.to_string())))?;
+                        let name = user_value
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let display_name = user_value
+                            .get("displayName")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(&name)
+                            .to_string();
+                        PublicKeyCredentialUserEntity {
+                            id,
+                            name,
+                            display_name,
+                        }
+                    }
+                    None => return Err(BrokerError::Invalid(format!("user: {error}"))),
+                }
+            }
+        };
         // The user handle travels as base64url on the wire.
         if user.id.is_empty() {
             if let Some(raw) = user_value.get("id").and_then(serde_json::Value::as_str) {
@@ -579,13 +652,7 @@ impl RegistrationRequest {
             .map_err(|e| BrokerError::Invalid(format!("pub_key_cred_params: {e}")))?,
             _ => Vec::new(),
         };
-        let exclude_credentials = match operation.get("exclude_credentials") {
-            Some(serde_json::Value::Array(_)) => serde_json::from_value(
-                operation.get("exclude_credentials").cloned().unwrap(),
-            )
-            .map_err(|e| BrokerError::Invalid(format!("exclude_credentials: {e}")))?,
-            _ => Vec::new(),
-        };
+        let exclude_credentials = decode_credential_descriptors(operation.get("exclude_credentials"))?;
         let authenticator_selection = match operation.get("authenticator_selection") {
             Some(value) if !value.is_null() => Some(
                 serde_json::from_value(value.clone())
@@ -626,9 +693,46 @@ impl RegistrationRequest {
     }
 }
 
+/// Decodes credential descriptors whose ids arrived as base64url.
+///
+/// A `PublicKeyCredentialDescriptor`'s id is a byte sequence. A relying party
+/// puts it on the wire as base64url, so a descriptor whose `id` is a string
+/// is decoded here before the descriptor is parsed. A descriptor whose `id`
+/// is already an array of byte values is parsed as it is.
+fn decode_credential_descriptors(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<PublicKeyCredentialDescriptor>, BrokerError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let Some(items) = value.as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let mut item = item.clone();
+        if let Some(raw) = item.get("id").and_then(serde_json::Value::as_str) {
+            let bytes = crate::webauthn::b64::b64url_decode(raw)
+                .or_else(|| crate::control::b64_decode(raw))
+                .ok_or_else(|| {
+                    BrokerError::Invalid(format!(
+                        "credential id is not valid base64url: {raw}"
+                    ))
+                })?;
+            item["id"] = serde_json::Value::Array(
+                bytes.into_iter().map(|b| serde_json::Value::from(b)).collect(),
+            );
+        }
+        out.push(
+            serde_json::from_value(item)
+                .map_err(|e| BrokerError::Invalid(format!("credential descriptor: {e}")))?,
+        );
+    }
+    Ok(out)
+}
+
 /// Decodes a base64url (or standard base64) challenge from the wire.
-fn decode_challenge(value: Option<&serde_json::Value>) -> Result<Vec<u8>, BrokerError> {
-    let raw = value
+fn decode_challenge(value: Option<&serde_json::Value>) -> Result<Vec<u8>, BrokerError> {    let raw = value
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| BrokerError::Invalid("challenge is required".to_string()))?;
     if raw.contains('-') || raw.contains('_') {
@@ -768,6 +872,27 @@ impl LocalPasskeyBroker {
     /// The AAGUID this authenticator reports.
     pub fn aaguid(&self) -> [u8; 16] {
         self.authenticator.aaguid
+    }
+
+    /// The most recently created ceremony's id.
+    ///
+    /// A host that approved a ceremony learns its id from the proposal; this
+    /// is the fallback for a host that wants the outcome of the ceremony it
+    /// just approved without keeping the id.
+    pub fn latest_ceremony_id(&self) -> Option<PasskeyCeremonyId> {
+        let mut latest: Option<(u64, &String)> = None;
+        for id in self.ceremonies.keys() {
+            let sequence = id
+                .rsplit('-')
+                .next()
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(0);
+            match latest {
+                Some((best, _)) if best >= sequence => {}
+                _ => latest = Some((sequence, id)),
+            }
+        }
+        latest.map(|(_, id)| PasskeyCeremonyId(id.clone()))
     }
 
     /// Lists the stored passkeys, redacted for the agent.

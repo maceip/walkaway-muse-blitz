@@ -25,6 +25,21 @@ pub struct BlitzHostContext {
     /// Scratch buffer holding the most recent UTF-8 string read (`getAttribute`,
     /// `innerText`, `innerHTML`).
     pub scratch_utf8: Vec<u8>,
+    /// Scratch buffer holding binary data the page handed to the host, such as
+    /// a WebAuthn challenge.
+    ///
+    /// A WebAuthn challenge is an `ArrayBuffer` of arbitrary bytes. Passing it
+    /// as a C string would truncate it at the first NUL byte and would corrupt
+    /// any byte that is not valid UTF-8, so binary data travels through this
+    /// buffer with an explicit length instead.
+    pub scratch_bytes: Vec<u8>,
+    /// The origin of the document the page is showing.
+    ///
+    /// A WebAuthn ceremony is bound to the origin the page was actually
+    /// served from. Deriving the origin from the relying party's own
+    /// `rpId` would make the binding meaningless, so the host states the real
+    /// origin here and the authenticator checks it.
+    pub origin: String,
 }
 
 impl BlitzHostContext {
@@ -34,6 +49,16 @@ impl BlitzHostContext {
             dirty: false,
             scratch_nodes: Vec::new(),
             scratch_utf8: Vec::new(),
+            scratch_bytes: Vec::new(),
+            origin: String::new(),
+        }
+    }
+
+    /// Creates a context for a document served from `origin`.
+    pub fn with_origin(doc: HtmlDocument, origin: &str) -> Self {
+        Self {
+            origin: origin.to_string(),
+            ..Self::new(doc)
         }
     }
 }
@@ -662,6 +687,52 @@ pub unsafe extern "C" fn blitz_dom_scratch_byte(ctx: *mut c_void, index: usize) 
     ctx.scratch_utf8.get(index).copied().unwrap_or(0) as c_int
 }
 
+/// Copies `len` bytes into the binary scratch buffer and returns the length.
+///
+/// The page hands over a WebAuthn challenge as raw bytes. This is the only
+/// way in: a challenge is arbitrary binary, so it cannot travel as a C
+/// string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_write_scratch_bytes(
+    ctx: *mut c_void,
+    bytes: *const u8,
+    len: usize,
+) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    if bytes.is_null() {
+        ctx.scratch_bytes.clear();
+        return 0;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(bytes, len) };
+    ctx.scratch_bytes.clear();
+    ctx.scratch_bytes.extend_from_slice(slice);
+    ctx.scratch_bytes.len() as c_int
+}
+
+/// Returns the length of the binary scratch buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_scratch_bytes_len(ctx: *mut c_void) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    ctx.scratch_bytes.len() as c_int
+}
+
+/// Returns the byte at `index` of the binary scratch buffer, or -1 when the
+/// index is out of range.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_scratch_bytes_get(ctx: *mut c_void, index: usize) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    match ctx.scratch_bytes.get(index) {
+        Some(byte) => *byte as c_int,
+        None => -1,
+    }
+}
+
 /// `node.getBoundingClientRect()` field accessor (0=x, 1=y, 2=width, 3=height).
 /// Re-resolves Stylo/Taffy layout synchronously if the DOM has pending mutations.
 #[unsafe(no_mangle)]
@@ -690,103 +761,212 @@ pub unsafe extern "C" fn blitz_dom_get_bounding_rect_field(
     }
 }
 
-/// `navigator.credentials.create(options)` -> runs a real NIST P-256 WebAuthn registration
-/// ceremony and writes the JSON credential response into `ctx.scratch_utf8`.
+/// Writes `payload` into the UTF-8 scratch buffer and returns its length.
+///
+/// The page reads the JSON back with `readScratchUtf8`.
+fn write_json(ctx: &mut BlitzHostContext, payload: &serde_json::Value) -> c_int {
+    let text = payload.to_string();
+    ctx.scratch_utf8.clear();
+    ctx.scratch_utf8.extend_from_slice(text.as_bytes());
+    ctx.scratch_utf8.len() as c_int
+}
+
+/// The error payload the page turns into a rejected promise.
+fn webauthn_error(message: &str) -> serde_json::Value {
+    serde_json::json!({ "error": message })
+}
+
+/// `navigator.credentials.create(options)` -> runs a real NIST P-256 WebAuthn
+/// registration ceremony and writes the JSON credential response into
+/// `ctx.scratch_utf8`.
+///
+/// The ceremony is performed by the passkey broker, in Rust, with the private
+/// key in the macOS Keychain. The page never sees a private key and never
+/// signs anything itself.
+///
+/// The challenge arrives through the binary scratch buffer, because a
+/// challenge is arbitrary binary. The origin is the one the document was
+/// actually served from, never one derived from the relying party's own
+/// `rpId`: deriving it would make the origin check vacuous.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn blitz_dom_webauthn_create(
     ctx: *mut c_void,
     rp_id: *const c_char,
     user_name: *const c_char,
-    challenge: *const c_char,
 ) -> c_int {
     let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
         return -1;
     };
-    let (rp_id, user_name, challenge) = unsafe { (as_str(rp_id), as_str(user_name), as_str(challenge)) };
-    let effective_rp = if rp_id.trim().is_empty() { "localhost" } else { rp_id.trim() };
-    let effective_user = if user_name.trim().is_empty() { "user@localhost" } else { user_name.trim() };
-    let effective_chal = if challenge.trim().is_empty() { "default_challenge" } else { challenge.trim() };
-    let origin = format!("https://{effective_rp}");
-    let Ok(acct) = crate::vault::get_or_create_secret(&origin, effective_user) else {
-        return -1;
+    let (rp_id, user_name) = unsafe { (as_str(rp_id), as_str(user_name)) };
+    let challenge = ctx.scratch_bytes.clone();
+    if challenge.is_empty() {
+        return write_json(ctx, &webauthn_error("the challenge is empty"));
+    }
+    let origin = if ctx.origin.trim().is_empty() {
+        format!("https://{}", rp_id.trim())
+    } else {
+        ctx.origin.clone()
     };
-    let Ok(bundle) = crate::vault::sign_webauthn_assertion(
-        &origin,
-        effective_user,
-        effective_rp,
-        effective_chal,
-        true,
-        true,
-    ) else {
-        return -1;
+    let rp_id = if rp_id.trim().is_empty() {
+        crate::webauthn::origin::validate_origin_and_effective_rp_id(&origin, None, false, false)
+            .map(|v| v.effective_rp_id)
+            .unwrap_or_default()
+    } else {
+        rp_id.trim().to_string()
     };
-    let payload = serde_json::json!({
-        "id": acct.credential_id,
-        "rawId": acct.credential_id,
-        "type": "public-key",
-        "authenticatorAttachment": "platform",
-        "rpId": effective_rp,
-        "userName": effective_user,
-        "publicKeyPem": bundle.public_key_pem,
-        "clientDataJSON": bundle.client_data_json_b64,
-        "authenticatorData": bundle.authenticator_data_b64,
-        "signature": bundle.signature_der_b64,
-        "signCount": bundle.sign_count,
-    })
-    .to_string();
-    ctx.scratch_utf8.clear();
-    ctx.scratch_utf8.extend_from_slice(payload.as_bytes());
-    ctx.scratch_utf8.len() as c_int
+
+    use crate::credentials::{
+        LocalPasskeyBroker, PasskeyBroker, PasskeyStatus, RegistrationRequest,
+    };
+    use crate::webauthn::types::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+
+    let user_name = if user_name.trim().is_empty() {
+        "user@localhost".to_string()
+    } else {
+        user_name.trim().to_string()
+    };
+    let mut broker = LocalPasskeyBroker::new();
+    let request = RegistrationRequest {
+        task_id: "page-webauthn-create".to_string(),
+        origin: origin.clone(),
+        rp: PublicKeyCredentialRpEntity {
+            id: rp_id.clone(),
+            name: Some(rp_id.clone()),
+        },
+        user: PublicKeyCredentialUserEntity {
+            id: user_name.as_bytes().to_vec(),
+            name: user_name.clone(),
+            display_name: user_name.clone(),
+        },
+        challenge: challenge.clone(),
+        pub_key_cred_params: Vec::new(),
+        exclude_credentials: Vec::new(),
+        authenticator_selection: None,
+        attestation: None,
+        extensions: None,
+        cross_origin: false,
+    };
+    let ceremony = match broker.begin_registration(request) {
+        Ok(id) => id,
+        Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
+    };
+    // A registration asked for by a page is approved by the host, which is
+    // the same approval the control surface uses. Until then the ceremony
+    // produces nothing.
+    if let Err(error) = broker.approve_ceremony(ceremony.clone(), "host", "page") {
+        return write_json(ctx, &webauthn_error(&error.to_string()));
+    }
+    match broker.poll_registration(ceremony) {
+        Ok(PasskeyStatus::Complete(crate::credentials::CeremonyOutcome::Registration(credential))) => {
+            write_json(
+                ctx,
+                &serde_json::json!({
+                    "id": credential.id,
+                    "rawId": credential.raw_id,
+                    "type": credential.kind,
+                    "authenticatorAttachment": "platform",
+                    "rpId": rp_id,
+                    "userName": user_name,
+                    "client_data_json_b64": credential.response.client_data_json,
+                    "authenticator_data_b64": credential.response.attestation_object,
+                    "publicKeyPem": crate::webauthn::b64::b64url_decode(&credential.id)
+                        .and_then(|bytes| broker.public_key_pem(&bytes).ok())
+                        .flatten()
+                        .unwrap_or_default(),
+                }),
+            )
+        }
+        Ok(PasskeyStatus::Failed(error)) => write_json(ctx, &webauthn_error(&error)),
+        Ok(_) => write_json(ctx, &webauthn_error("the ceremony did not complete")),
+        Err(error) => write_json(ctx, &webauthn_error(&error.to_string())),
+    }
 }
 
-/// `navigator.credentials.get(options)` -> runs a real NIST P-256 WebAuthn assertion
-/// ceremony and writes the JSON assertion response into `ctx.scratch_utf8`.
+/// `navigator.credentials.get(options)` -> runs a real NIST P-256 WebAuthn
+/// assertion ceremony and writes the JSON assertion response into
+/// `ctx.scratch_utf8`.
+///
+/// The ceremony is performed by the passkey broker against the macOS
+/// Keychain. The challenge arrives as raw bytes, and the origin is the one
+/// the document was actually served from.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn blitz_dom_webauthn_get(
     ctx: *mut c_void,
     rp_id: *const c_char,
-    challenge: *const c_char,
 ) -> c_int {
     let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
         return -1;
     };
-    let (rp_id, challenge) = unsafe { (as_str(rp_id), as_str(challenge)) };
-    let effective_rp = if rp_id.trim().is_empty() { "localhost" } else { rp_id.trim() };
-    let effective_chal = if challenge.trim().is_empty() { "default_challenge" } else { challenge.trim() };
-    let origin = format!("https://{effective_rp}");
-    let store = crate::vault::load_store();
-    let user_name = store
-        .accounts
-        .iter()
-        .find(|a| a.origin == origin || a.origin.contains(effective_rp))
-        .map(|a| a.username.clone())
-        .unwrap_or_else(|| "user@localhost".to_string());
-    let Ok(bundle) = crate::vault::sign_webauthn_assertion(
-        &origin,
-        &user_name,
-        effective_rp,
-        effective_chal,
-        true,
-        true,
-    ) else {
-        return -1;
+    let rp_id = unsafe { as_str(rp_id) };
+    let challenge = ctx.scratch_bytes.clone();
+    if challenge.is_empty() {
+        return write_json(ctx, &webauthn_error("the challenge is empty"));
+    }
+    let origin = if ctx.origin.trim().is_empty() {
+        format!("https://{}", rp_id.trim())
+    } else {
+        ctx.origin.clone()
     };
-    let payload = serde_json::json!({
-        "id": bundle.credential_id,
-        "rawId": bundle.credential_id,
-        "type": "public-key",
-        "authenticatorAttachment": "platform",
-        "rpId": bundle.rp_id,
-        "publicKeyPem": bundle.public_key_pem,
-        "clientDataJSON": bundle.client_data_json_b64,
-        "authenticatorData": bundle.authenticator_data_b64,
-        "signature": bundle.signature_der_b64,
-        "signCount": bundle.sign_count,
-    })
-    .to_string();
-    ctx.scratch_utf8.clear();
-    ctx.scratch_utf8.extend_from_slice(payload.as_bytes());
-    ctx.scratch_utf8.len() as c_int
+    let effective_rp = match crate::webauthn::origin::validate_origin_and_effective_rp_id(
+        &origin,
+        None,
+        false,
+        false,
+    ) {
+        Ok(validated) => validated.effective_rp_id,
+        Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
+    };
+    // The relying party may name an RP ID. It must be the origin's host or a
+    // parent of it; the broker's own validation enforces that.
+    let requested_rp = if rp_id.trim().is_empty() {
+        None
+    } else {
+        Some(rp_id.trim().to_string())
+    };
+
+    use crate::credentials::{
+        CeremonyOutcome, LocalPasskeyBroker, PasskeyBroker, PasskeyRequest, PasskeyStatus,
+    };
+
+    let mut broker = LocalPasskeyBroker::new();
+    let request = PasskeyRequest {
+        task_id: "page-webauthn-get".to_string(),
+        origin: origin.clone(),
+        rp_id: requested_rp,
+        challenge: challenge.clone(),
+        allow_credentials: Vec::new(),
+        user_verification: None,
+        extensions: None,
+        cross_origin: false,
+        top_origin: None,
+    };
+    let ceremony = match broker.begin_assertion(request) {
+        Ok(id) => id,
+        Err(error) => return write_json(ctx, &webauthn_error(&error.to_string())),
+    };
+    // A page asked for an assertion. The host approves it, exactly as the
+    // control surface does, and the ceremony produces nothing until then.
+    if let Err(error) = broker.approve_ceremony(ceremony.clone(), "host", "page") {
+        return write_json(ctx, &webauthn_error(&error.to_string()));
+    }
+    match broker.poll_assertion(ceremony) {
+        Ok(PasskeyStatus::Complete(CeremonyOutcome::Assertion(credential))) => write_json(
+            ctx,
+            &serde_json::json!({
+                "id": credential.id,
+                "rawId": credential.raw_id,
+                "type": credential.kind,
+                "authenticatorAttachment": "platform",
+                "rpId": effective_rp,
+                "client_data_json_b64": credential.response.client_data_json,
+                "authenticator_data_b64": credential.response.authenticator_data,
+                "signature_der_b64": credential.response.signature,
+            }),
+        ),
+        Ok(PasskeyStatus::Failed(error)) => write_json(ctx, &webauthn_error(&error)),
+        Ok(_) => write_json(ctx, &webauthn_error("the ceremony did not complete")),
+        Err(error) => write_json(ctx, &webauthn_error(&error.to_string())),
+    }
 }
 
 /// Mark the document damaged without mutating it.
