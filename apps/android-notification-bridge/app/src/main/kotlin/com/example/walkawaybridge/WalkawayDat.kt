@@ -249,7 +249,7 @@ class WalkawayDat(private val appContext: Context) {
           image(
             bitmap = iconBitmap,
             sizePreset = ImageSize.ICON,
-            cornerRadius = CornerRadius.SMALL
+            cornerRadius = CornerRadius.NONE
           )
         }
         text(title.take(80), style = TextStyle.BODY)
