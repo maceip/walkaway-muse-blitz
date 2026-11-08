@@ -1,7 +1,9 @@
 package com.example.walkawaybridge
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -53,10 +55,24 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
 
   var datActionNote by remember { mutableStateOf("") }
 
+  val btEnableLauncher = rememberLauncherForActivityResult(
+    ActivityResultContracts.StartActivityForResult()
+  ) {
+    dat.refreshNow()
+    val btNow = WalkawayDat.isBluetoothEnabled(context)
+    datActionNote = if (btNow) "Bluetooth turned ON — reconnecting glasses…" else "Bluetooth is still OFF"
+  }
+
   val datPermissions = rememberLauncherForActivityResult(
     ActivityResultContracts.RequestMultiplePermissions()
   ) { _ ->
     if (WalkawayDat.permissionsGranted(context) && activity != null) {
+      if (!WalkawayDat.isBluetoothEnabled(context)) {
+        WalkawayDat.ensureBluetoothEnabled(context, activity)
+        if (!WalkawayDat.isBluetoothEnabled(context)) {
+          runCatching { btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
+        }
+      }
       dat.initialize(activity)
       datActionNote = "DAT permissions granted"
     } else {
@@ -73,6 +89,12 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
     if (missing.isNotEmpty()) {
       datPermissions.launch(missing.toTypedArray())
     } else if (activity != null) {
+      if (!WalkawayDat.isBluetoothEnabled(context)) {
+        WalkawayDat.ensureBluetoothEnabled(context, activity)
+        if (!WalkawayDat.isBluetoothEnabled(context)) {
+          runCatching { btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
+        }
+      }
       dat.initialize(activity)
     }
     // Demo-safe default (WS3): launching the Activity auto-connects, which
@@ -82,6 +104,14 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
 
   LaunchedEffect(datStatus.initialized) {
     if (datStatus.initialized) dat.refreshNow()
+  }
+
+  val activeCardSummary = when {
+    snap.cardMessageId != null -> "Card #${snap.cardMessageId} LIVE ON GLASSES (${snap.cardMessage?.title ?: ""})"
+    snap.pendingResend != null -> "Card #${snap.pendingResend?.id} QUEUED / NEEDS RESEND (${snap.deliveryState})"
+    snap.pendingDecision != null -> "Card #${snap.pendingDecision?.id} IN FLIGHT (${snap.deliveryState})"
+    snap.decidedMessageId != null -> "Card #${snap.decidedMessageId} DECIDED: ${snap.decidedAction} via ${snap.decidedSurface}"
+    else -> "None (Bus cursor at #${snap.lastId})"
   }
 
   Column(
@@ -97,9 +127,31 @@ fun BridgeScreen(modifier: Modifier = Modifier) {
         BridgePhase.DECIDED -> "Card #${snap.decidedMessageId} decided via ${snap.decidedSurface ?: "unknown"}: ${snap.decidedAction}"
         else -> snap.status
       },
-      datLine = "DAT: registration=${datStatus.registration} devices=${datStatus.deviceCount} " +
-        "connected=${datStatus.connectedDevice ?: "none"}\n${datStatus.lastEvent}"
+      datLine = "Bluetooth: ${if (datStatus.bluetoothEnabled) "ON" else "OFF (Glasses link blocked)"}\n" +
+        "Glasses: ${datStatus.connectedDevice ?: "DISCONNECTED"} (reg=${datStatus.registration}, known=${datStatus.deviceCount})\n" +
+        "Queue: $activeCardSummary" +
+        (if (snap.skippedStaleCount > 0) " [Skipped ${snap.skippedStaleCount} stale]" else "") +
+        "\nEvent: ${datStatus.lastEvent}"
     )
+    if (!datStatus.bluetoothEnabled) {
+      Button(
+        onClick = {
+          WalkawayDat.ensureBluetoothEnabled(context, activity)
+          if (!WalkawayDat.isBluetoothEnabled(context)) {
+            runCatching { btEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }
+          }
+        },
+        modifier = Modifier.fillMaxWidth()
+      ) {
+        Text("Turn On Bluetooth for Glasses")
+      }
+    }
+    OutlinedButton(
+      onClick = { BridgePoller.resyncAndRetryLatest() },
+      modifier = Modifier.fillMaxWidth()
+    ) {
+      Text("Resync Queue & Retry Latest Card")
+    }
     OutlinedTextField(
       value = serverUrl,
       onValueChange = { serverUrl = it },

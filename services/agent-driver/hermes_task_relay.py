@@ -117,6 +117,11 @@ def _extract_url_from_goal(goal: str, explicit_url: str | None = None) -> str:
     match = re.search(r"https?://[^\s,\"'>)]+", goal or "")
     if match:
         return match.group(0)
+    goal_lower = (goal or "").lower()
+    if "linkedin" in goal_lower:
+        if any(k in goal_lower for k in ("create", "sign up", "signup", "join", "account", "register")):
+            return "https://www.linkedin.com/signup"
+        return "https://www.linkedin.com/login"
     domain_match = re.search(r"\b([a-zA-Z0-9-]+\.(?:org|com|io|net|edu|gov|build)(?:/[^\s,\"'>)]*)?)", goal or "")
     if domain_match:
         return "https://" + domain_match.group(1)
@@ -504,11 +509,13 @@ class HermesTaskManager:
             snap = self._observe_locked("start")
             for _ in range(60):
                 cur_url = str(snap.get("url") or "")
-                if cur_url not in {"", "about:blank", "muse://start"} and (
-                    snap.get("elements") or snap.get("text")
-                ):
+                has_inputs = any(
+                    (el.get("tag") or "").lower() in {"input", "select", "textarea"}
+                    for el in (snap.get("elements") or [])
+                )
+                if cur_url not in {"", "about:blank", "muse://start"} and has_inputs:
                     break
-                time.sleep(0.1)
+                time.sleep(0.15)
                 snap = self._observe_locked("start-poll")
 
             self.status = "ready"
@@ -521,15 +528,35 @@ class HermesTaskManager:
                 for el in (snap.get("elements") or [])
             )
             if has_form_controls:
-                try:
-                    return self._predict_next_step_locked()
-                except Exception:
-                    pass
+                for attempt in range(2):
+                    try:
+                        return self._predict_next_step_locked()
+                    except Exception as exc:
+                        print(
+                            f"[relay] start_task predict attempt {attempt + 1} error: {exc}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        time.sleep(0.4)
             return self._public_state_locked()
 
     def predict_next_step(self) -> dict[str, Any]:
         with self._lock:
-            return self._predict_next_step_locked()
+            last_err: Exception | None = None
+            for attempt in range(2):
+                try:
+                    return self._predict_next_step_locked()
+                except Exception as exc:
+                    last_err = exc
+                    print(
+                        f"[relay] predict_next_step attempt {attempt + 1} error: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    time.sleep(0.3)
+            if last_err is not None:
+                raise last_err
+            return self._public_state_locked()
 
     def _predict_next_step_locked(
         self,

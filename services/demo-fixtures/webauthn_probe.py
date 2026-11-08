@@ -10,14 +10,19 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
+import os
 from pathlib import Path
 import ssl
 import threading
 from urllib.parse import urlparse
+import urllib.request
 
 REPORTS_PATH = Path("/tmp/webauthn_probe_reports.jsonl")
 PENDING_DECISIONS_PATH = Path("/tmp/walkaway_pending_decisions.json")
 DIST_DIR = Path(__file__).resolve().parents[2] / "apps" / "glasses-webapp" / "dist"
+BUS_URL = os.environ.get("WALKAWAY_BUS_URL", "http://127.0.0.1:19099").rstrip("/")
+BRIDGE_URL = os.environ.get("WALKAWAY_BRIDGE_URL", "http://127.0.0.1:19101").rstrip("/")
+BUS_TOKEN = os.environ.get("WALKAWAY_BUS_TOKEN", "walkaway-dev-bus-token")
 
 
 def load_reports(limit: int = 25) -> tuple[int, list[dict]]:
@@ -34,7 +39,67 @@ def load_reports(limit: int = 25) -> tuple[int, list[dict]]:
     return total, rows
 
 
+def _bus_request(base_url: str, path: str, payload: dict | None = None) -> dict | None:
+    headers = {"X-Bus-Token": BUS_TOKEN}
+    data = None
+    method = "GET"
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode("utf-8")
+        method = "POST"
+    req = urllib.request.Request(f"{base_url}{path}", data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def load_bus_pending_decisions() -> list[dict]:
+    """Query live Walkaway message_bus (:19099) and decision_bridge (:19101) for unconsumed cards."""
+    acks_resp = _bus_request(BUS_URL, "/acks")
+    if not isinstance(acks_resp, dict):
+        return []
+    decided_msg_ids = {
+        a.get("message_id")
+        for a in (acks_resp.get("acks") or [])
+        if isinstance(a, dict) and a.get("action") in ("approve", "reject")
+    }
+    messages: list[dict] = []
+    after = 0
+    for _ in range(32):
+        nxt = _bus_request(BUS_URL, f"/messages/next?after={after}")
+        msg = nxt.get("message") if isinstance(nxt, dict) else None
+        if not isinstance(msg, dict) or not msg.get("id"):
+            break
+        msg_id = int(msg["id"])
+        if msg_id not in decided_msg_ids:
+            messages.append(msg)
+        if msg_id <= after:
+            break
+        after = msg_id
+
+    if not messages:
+        return []
+
+    latest = messages[-1]
+    kind = str(latest.get("kind") or "").lower()
+    category = "passkey" if "passkey" in kind else "failure" if "fail" in kind else "start"
+    return [
+        {
+            "decision_id": f"bus_{latest['id']}",
+            "message_id": int(latest["id"]),
+            "category": category,
+            "title": str(latest.get("title") or "Walkaway Commit"),
+            "summary": str(latest.get("body") or ""),
+        }
+    ]
+
+
 def load_pending_decisions() -> list[dict]:
+    bus_items = load_bus_pending_decisions()
+    if bus_items:
+        return bus_items
     if PENDING_DECISIONS_PATH.exists():
         try:
             data = json.loads(PENDING_DECISIONS_PATH.read_text(encoding="utf-8"))
@@ -153,7 +218,28 @@ class ProbeHandler(BaseHTTPRequestHandler):
             f.write(json.dumps(data) + "\n")
 
         if req_path == "/api/decision-ack":
-            decision_id = data.get("decision_id")
+            decision_id = str(data.get("decision_id") or "")
+            approved = bool(data.get("approved"))
+            msg_id: int | None = None
+            if decision_id.startswith("bus_"):
+                try:
+                    msg_id = int(decision_id.split("bus_", 1)[1])
+                except ValueError:
+                    msg_id = None
+            if msg_id is None:
+                bus_items = load_bus_pending_decisions()
+                if bus_items and isinstance(bus_items[-1].get("message_id"), int):
+                    msg_id = int(bus_items[-1]["message_id"])
+            if msg_id is not None:
+                _bus_request(
+                    BUS_URL,
+                    "/ack",
+                    {
+                        "message_id": msg_id,
+                        "action": "approve" if approved else "reject",
+                        "source": "glasses_dat",
+                    },
+                )
             if decision_id and PENDING_DECISIONS_PATH.exists():
                 remaining = [
                     d

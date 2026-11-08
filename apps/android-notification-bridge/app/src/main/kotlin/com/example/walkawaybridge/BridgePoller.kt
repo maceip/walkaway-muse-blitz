@@ -40,6 +40,8 @@ object BridgePoller {
   data class Snapshot(
     val connected: Boolean = false,
     val status: String = "Not connected",
+    val deliveryState: String = "IDLE",
+    val skippedStaleCount: Int = 0,
     val lastMessage: BusMessage? = null,
     val cardMessageId: Long? = null,
     val cardMessage: BusMessage? = null,
@@ -74,15 +76,35 @@ object BridgePoller {
     dat = WalkawayDat.getInstance(app).also { d ->
       d.onCardGone = {
         val gone = _state.value.cardMessage
-        if (gone != null && _state.value.decidedMessageId != gone.id) {
+        if (gone != null && _state.value.decidedMessageId != gone.id && _state.value.pendingDecision?.id == gone.id) {
           cardedDedupe?.forget(gone.id)
           _state.update {
             it.copy(
               cardMessageId = null,
+              deliveryState = "FAILED_NEEDS_RESEND",
               pendingResend = gone,
               status = "Card #${gone.id} gone without a decision. Use Resend card.",
             )
           }
+        }
+      }
+      d.onGlassesConnected = {
+        val candidate = _state.value.pendingResend ?: _state.value.pendingDecision
+        if (
+          candidate != null &&
+          _state.value.decidedMessageId != candidate.id &&
+          _state.value.cardMessageId != candidate.id
+        ) {
+          Log.i(TAG, "Glasses reconnected; auto-retrying pending card #${candidate.id}")
+          cardedDedupe?.forget(candidate.id)
+          _state.update {
+            it.copy(
+              pendingResend = null,
+              deliveryState = "SENDING_TO_GLASSES",
+              status = "Glasses connected — auto-sending queued card #${candidate.id}…"
+            )
+          }
+          sendDat(candidate)
         }
       }
     }
@@ -112,9 +134,26 @@ object BridgePoller {
         }
       while (isActive && _state.value.connected) {
         runCatching {
-          withContext(Dispatchers.IO) { client().nextMessage(_state.value.lastId) }
-        }.onSuccess { message ->
-          if (message != null) handleMessage(message)
+          withContext(Dispatchers.IO) {
+            var cursor = _state.value.lastId
+            var newest: BusMessage? = null
+            var count = 0
+            for (step in 0 until 16) {
+              val m = client().nextMessage(cursor) ?: break
+              if (m.id <= cursor) break
+              newest = m
+              cursor = m.id
+              count++
+            }
+            newest to (if (count > 1) count - 1 else 0)
+          }
+        }.onSuccess { (message, skipped) ->
+          if (message != null) {
+            if (skipped > 0) {
+              _state.update { it.copy(skippedStaleCount = it.skippedStaleCount + skipped) }
+            }
+            handleMessage(message)
+          }
         }.onFailure {
           Log.e(TAG, "poll failed", it)
           _state.update { s -> s.copy(status = "Poll failed: ${it.message}") }
@@ -139,6 +178,7 @@ object BridgePoller {
         cardMessage = null,
         pendingDecision = null,
         pendingResend = null,
+        deliveryState = "DECIDED",
         decidedMessageId = message.id,
         decidedAction = action,
         decidedSurface = "android_app",
@@ -149,20 +189,79 @@ object BridgePoller {
   }
 
   fun resend(message: BusMessage) {
-    _state.update { it.copy(pendingResend = null) }
+    cardedDedupe?.forget(message.id)
+    _state.update {
+      it.copy(
+        pendingResend = null,
+        deliveryState = "SENDING_TO_GLASSES",
+        status = "Retrying card #${message.id} to glasses…"
+      )
+    }
     sendDat(message)
+  }
+
+  /** Clear any stale/stuck local queue state and immediately resync with the latest card on the laptop bus. */
+  fun resyncAndRetryLatest() {
+    val app = appContext ?: return
+    dat?.cancelPendingWait()
+    val p = prefs(app)
+    p.edit()
+      .remove(PREF_CARDED_IDS)
+      .putLong(PREF_LAST_ID, 0L)
+      .apply()
+    _state.update {
+      it.copy(
+        lastId = 0L,
+        cardMessageId = null,
+        pendingResend = null,
+        deliveryState = "RESYNCING",
+        status = "Cleared stale queue state — fetching latest card from laptop…"
+      )
+    }
+    scope.launch {
+      runCatching {
+        withContext(Dispatchers.IO) {
+          var cursor = 0L
+          var newest: BusMessage? = null
+          for (step in 0 until 32) {
+            val m = client().nextMessage(cursor) ?: break
+            if (m.id <= cursor) break
+            newest = m
+            cursor = m.id
+          }
+          newest
+        }
+      }.onSuccess { newest ->
+        if (newest != null) {
+          cardedDedupe?.forget(newest.id)
+          handleMessage(newest)
+        } else {
+          _state.update { it.copy(deliveryState = "IDLE", status = "Queue resynced — no pending cards on laptop bus.") }
+        }
+      }.onFailure { err ->
+        _state.update { it.copy(deliveryState = "FAILED_NEEDS_RESEND", status = "Resync failed: ${err.message}") }
+      }
+    }
   }
 
   private fun client() = BusClient(serverUrl.trim(), token.trim())
 
   private fun handleMessage(message: BusMessage) {
     val app = appContext ?: return
+    val btOn = WalkawayDat.isBluetoothEnabled(app)
     _state.update {
       it.copy(
         lastId = message.id,
         lastMessage = message,
         pendingDecision = message,
-        status = "Received #${message.id}; notification posted; sending DAT card",
+        pendingResend = null,
+        cardMessageId = null,
+        deliveryState = if (btOn) "SENDING_TO_GLASSES" else "WAITING_FOR_BLUETOOTH",
+        status = if (btOn) {
+          "Received #${message.id}; sending DAT card to glasses…"
+        } else {
+          "Received #${message.id}; Bluetooth is OFF — turn on Bluetooth to auto-send to glasses"
+        },
       )
     }
     prefs(app).edit().putLong(PREF_LAST_ID, message.id).apply()
@@ -200,13 +299,14 @@ object BridgePoller {
       iconBitmap = iconBitmap,
       autoApproveSeconds = 5,
       onAction = { action ->
-        if (decidedDedupe?.mark(message.id) == true) {
+        if (_state.value.pendingDecision?.id == message.id && decidedDedupe?.mark(message.id) == true) {
           _state.update {
             it.copy(
               cardMessageId = null,
               cardMessage = null,
               pendingDecision = null,
               pendingResend = null,
+              deliveryState = "DECIDED",
               decidedMessageId = message.id,
               decidedAction = action,
               decidedSurface = "glasses",
@@ -216,24 +316,29 @@ object BridgePoller {
         }
       },
       onResult = { result ->
+        // Ignore late callbacks from superseded cards so they never overwrite the active card
+        if (_state.value.pendingDecision?.id != message.id) return@sendCard
         result.onSuccess {
           _state.update {
             it.copy(
               cardMessageId = message.id,
+              deliveryState = "LIVE_ON_GLASSES",
               decidedMessageId = null,
               decidedAction = null,
               decidedSurface = null,
-              status = "DAT card sent for #${message.id}",
+              status = "DAT card #${message.id} is LIVE on glasses",
             )
           }
           sendAckFor(message, "dat_sent", "android_dat")
         }.onFailure { err ->
           // Failed sends must not consume the one-card dedupe slot (WS3).
           cardedDedupe?.forget(message.id)
+          val btOn = appContext?.let { WalkawayDat.isBluetoothEnabled(it) } ?: true
           _state.update {
             it.copy(
               pendingResend = message,
-              status = "DAT card failed: ${err.message}${datFailureHint(err.message)} Use Resend card.",
+              deliveryState = if (!btOn) "WAITING_FOR_BLUETOOTH" else "FAILED_NEEDS_RESEND",
+              status = "DAT card #${message.id} queued (${err.message}${datFailureHint(err.message)}). Will auto-send when glasses connect.",
             )
           }
           sendAckFor(message, "dat_failed", "android_dat")

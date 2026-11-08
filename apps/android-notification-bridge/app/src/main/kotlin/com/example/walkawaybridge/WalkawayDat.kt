@@ -1,8 +1,14 @@
 package com.example.walkawaybridge
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -55,6 +61,7 @@ private const val TAG = "walkaway.dat"
 
 data class DatStatus(
   val initialized: Boolean = false,
+  val bluetoothEnabled: Boolean = true,
   val registration: String = "UNAVAILABLE",
   val deviceCount: Int = 0,
   val connectedDevice: String? = null,
@@ -63,7 +70,7 @@ data class DatStatus(
 
 class WalkawayDat(private val appContext: Context) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-  private val _status = MutableStateFlow(DatStatus())
+  private val _status = MutableStateFlow(DatStatus(bluetoothEnabled = isBluetoothEnabled(appContext)))
   val status: StateFlow<DatStatus> = _status.asStateFlow()
 
   private val devices = MutableStateFlow<Set<DeviceIdentifier>>(emptySet())
@@ -77,12 +84,43 @@ class WalkawayDat(private val appContext: Context) {
   private var sessionErrorJob: Job? = null
   private var displayStateJob: Job? = null
   private var countdownJob: Job? = null
+  private var waitConnectJob: Job? = null
   private var pendingDeviceId: DeviceIdentifier? = null
   private var onDisplayReady: ((Display) -> Unit)? = null
   private var onDisplayFailed: ((String) -> Unit)? = null
   /** Fired when a shown card disappears without Approve/Reject (WS3 resend). */
   @Volatile var onCardGone: (() -> Unit)? = null
+  /** Fired when a display-capable glasses device transitions to CONNECTED so pending cards auto-retry. */
+  @Volatile var onGlassesConnected: (() -> Unit)? = null
   @Volatile private var awaitingAction = false
+  private var btReceiverRegistered = false
+
+  private val btStateReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+      val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+      when (state) {
+        BluetoothAdapter.STATE_OFF, BluetoothAdapter.STATE_TURNING_OFF -> {
+          _status.update {
+            it.copy(
+              bluetoothEnabled = false,
+              connectedDevice = null,
+              lastEvent = "Bluetooth is OFF — enable Bluetooth to connect glasses"
+            )
+          }
+        }
+        BluetoothAdapter.STATE_ON -> {
+          _status.update {
+            it.copy(
+              bluetoothEnabled = true,
+              lastEvent = "Bluetooth turned ON — reconnecting glasses…"
+            )
+          }
+          refreshNow()
+        }
+      }
+    }
+  }
 
   private fun notifyCardGone(reason: String) {
     if (!awaitingAction) return
@@ -94,12 +132,25 @@ class WalkawayDat(private val appContext: Context) {
   private var monitoringStarted = false
 
   fun initialize(activity: ComponentActivity) {
+    ensureBluetoothEnabled(appContext, activity)
     if (!processInitialized.compareAndSet(false, true)) {
-      _status.update { it.copy(initialized = true, lastEvent = "Wearables already initialized in this process") }
+      _status.update {
+        it.copy(
+          initialized = true,
+          bluetoothEnabled = isBluetoothEnabled(appContext),
+          lastEvent = "Wearables already initialized in this process"
+        )
+      }
       return
     }
     Wearables.initialize(activity)
-    _status.update { it.copy(initialized = true, lastEvent = "Wearables.initialize complete") }
+    _status.update {
+      it.copy(
+        initialized = true,
+        bluetoothEnabled = isBluetoothEnabled(appContext),
+        lastEvent = "Wearables.initialize complete"
+      )
+    }
     startMonitoring()
     refreshNow()
   }
@@ -114,6 +165,7 @@ class WalkawayDat(private val appContext: Context) {
   }
 
   fun refreshNow() {
+    _status.update { it.copy(bluetoothEnabled = isBluetoothEnabled(appContext)) }
     if (!_status.value.initialized) return
     val identifiers = Wearables.devices.value
     updateDevices(identifiers)
@@ -124,6 +176,12 @@ class WalkawayDat(private val appContext: Context) {
   }
 
   private fun startMonitoring() {
+    if (!btReceiverRegistered) {
+      runCatching {
+        appContext.registerReceiver(btStateReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+        btReceiverRegistered = true
+      }
+    }
     if (monitoringStarted) return
     monitoringStarted = true
     val handler = CoroutineExceptionHandler { _, error -> setEvent("DAT monitoring failed: ${error.message}") }
@@ -171,23 +229,34 @@ class WalkawayDat(private val appContext: Context) {
 
   private fun updateMetadata(id: DeviceIdentifier, device: Device) {
     Log.i(TAG, "device id=$id snapshot=$device")
+    val wasConnected = metadata.value[id]?.linkState == LinkState.CONNECTED
     metadata.update { it.toMutableMap().apply { put(id, device) } }
     publishStatus("device ${device.name} link=${device.linkState.name}")
+    if (!wasConnected && device.isDisplayCapable() && device.linkState == LinkState.CONNECTED) {
+      Log.i(TAG, "Glasses ${device.name} transitioned to CONNECTED; triggering onGlassesConnected")
+      onGlassesConnected?.invoke()
+    }
   }
 
   private fun publishStatus(event: String) {
-    val connected = connectedDisplayDevice()?.let { metadata.value[it]?.name ?: it.toString() }
+    val btOn = isBluetoothEnabled(appContext)
+    val connected = if (btOn) {
+      connectedDisplayDevice()?.let { metadata.value[it]?.name ?: it.toString() }
+    } else {
+      null
+    }
     _status.update {
       it.copy(
+        bluetoothEnabled = btOn,
         deviceCount = devices.value.size,
         connectedDevice = connected,
-        lastEvent = event
+        lastEvent = if (!btOn) "Bluetooth is OFF — enable Bluetooth for glasses link" else event
       )
     }
   }
 
   private fun setEvent(event: String) {
-    _status.update { it.copy(lastEvent = event) }
+    _status.update { it.copy(bluetoothEnabled = isBluetoothEnabled(appContext), lastEvent = event) }
     Log.i(TAG, event)
   }
 
@@ -198,6 +267,11 @@ class WalkawayDat(private val appContext: Context) {
 
   private fun displayCapableDevice(): DeviceIdentifier? =
     devices.value.firstOrNull { id -> metadata.value[id]?.isDisplayCapable() == true }
+
+  fun cancelPendingWait() {
+    waitConnectJob?.cancel()
+    waitConnectJob = null
+  }
 
   fun sendCard(
     title: String,
@@ -210,31 +284,51 @@ class WalkawayDat(private val appContext: Context) {
     onAction: (String) -> Unit,
     onResult: (Result<Unit>) -> Unit
   ) {
+    // Cancel any older in-flight waitConnectJob so stale cards never fire 20s later
+    waitConnectJob?.cancel()
+    waitConnectJob = null
+
+    if (!isBluetoothEnabled(appContext)) {
+      ensureBluetoothEnabled(appContext, null)
+    }
     if (!_status.value.initialized) {
       onResult(Result.failure(IllegalStateException("DAT not initialized")))
       return
     }
-    val connected = connectedDisplayDevice()
+    val connected = if (isBluetoothEnabled(appContext)) connectedDisplayDevice() else null
     if (connected != null) {
       prepareAndSend(connected, title, body, imageUrl, price, detail, iconBitmap, autoApproveSeconds, onAction, onResult)
       return
     }
     val candidate = displayCapableDevice()
     if (candidate == null) {
-      val error = "No display-capable glasses known to Meta DAT"
+      val error = if (!isBluetoothEnabled(appContext)) {
+        "Bluetooth is OFF — turn on Bluetooth to send card to glasses"
+      } else {
+        "No display-capable glasses known to Meta DAT"
+      }
       setEvent(error)
       onResult(Result.failure(IllegalStateException(error)))
       return
     }
-    setEvent("Waiting for glasses link to connect")
-    scope.launch {
+    val waitMsg = if (!isBluetoothEnabled(appContext)) {
+      "Bluetooth is OFF — turn on Bluetooth; waiting for glasses link…"
+    } else {
+      "Waiting for glasses link to connect"
+    }
+    setEvent(waitMsg)
+    waitConnectJob = scope.launch {
       val ready = withTimeoutOrNull(20_000) {
-        metadata.first { it[candidate]?.linkState == LinkState.CONNECTED }
+        metadata.first { isBluetoothEnabled(appContext) && it[candidate]?.linkState == LinkState.CONNECTED }
       } != null
       if (ready) {
         prepareAndSend(candidate, title, body, imageUrl, price, detail, iconBitmap, autoApproveSeconds, onAction, onResult)
       } else {
-        val error = "Timed out waiting for glasses CONNECTED state"
+        val error = if (!isBluetoothEnabled(appContext)) {
+          "Bluetooth is OFF — card queued until Bluetooth is turned ON"
+        } else {
+          "Timed out waiting for glasses CONNECTED state"
+        }
         setEvent(error)
         onResult(Result.failure(IllegalStateException(error)))
       }
@@ -754,5 +848,33 @@ class WalkawayDat(private val appContext: Context) {
       PERMISSIONS.all {
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
       }
+
+    fun isBluetoothEnabled(context: Context): Boolean {
+      val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+      return bm?.adapter?.isEnabled == true
+    }
+
+    @SuppressLint("MissingPermission")
+    fun ensureBluetoothEnabled(context: Context, activity: Activity? = null): Boolean {
+      val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+      val adapter = bm?.adapter ?: return false
+      if (adapter.isEnabled) return true
+      val hasConnectPerm = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.BLUETOOTH_CONNECT
+      ) == PackageManager.PERMISSION_GRANTED
+      if (hasConnectPerm) {
+        runCatching {
+          @Suppress("DEPRECATION")
+          adapter.enable()
+        }
+        if (!adapter.isEnabled && activity != null) {
+          runCatching {
+            activity.startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+          }
+        }
+      }
+      return adapter.isEnabled
+    }
   }
 }

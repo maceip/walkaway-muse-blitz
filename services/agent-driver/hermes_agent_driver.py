@@ -231,6 +231,8 @@ def plan_recall_or_llm(
 
 DEFAULT_USER_PROFILE: dict[str, str] = {
     "full_name": "Ryan MacArthur",
+    "first_name": "Ryan",
+    "last_name": "MacArthur",
     "email": "ryan@zunftmax.secure.build",
     "phone": "415-555-0199",
     "affiliation": "Zunftmax Systems",
@@ -292,6 +294,7 @@ def plan_general_web_form_with_local_llm(
     controls_summary = []
     by_key: dict[str, dict[str, Any]] = {}
     submit_el: dict[str, Any] | None = None
+    best_submit_score = -1
 
     for el in elements:
         if not el.get("visible", True) or not el.get("enabled", True):
@@ -301,8 +304,38 @@ def plan_general_web_form_with_local_llm(
         label = (el.get("label") or "").strip()
 
         if tag == "button" or (tag == "input" and input_type in {"submit", "button"}):
-            if submit_el is None or "submit" in label.lower() or input_type == "submit":
+            dom_id_lower = (el.get("dom_id") or "").lower()
+            name_lower = (el.get("name") or "").lower()
+            label_lower = label.lower()
+            score = 0
+            if "submit" in dom_id_lower or "submit" in name_lower:
+                score += 100
+            if any(
+                kw in label_lower
+                for kw in (
+                    "submit",
+                    "agree & join",
+                    "agree and join",
+                    "sign up",
+                    "create account",
+                    "register",
+                    "place order",
+                    "submit order",
+                    "complete",
+                    "confirm",
+                )
+            ):
+                score += 80
+            elif any(
+                kw in label_lower
+                for kw in ("join", "agree", "continue", "next", "save", "send", "order", "login", "sign in")
+            ):
+                score += 50
+            if input_type == "submit":
+                score += 10
+            if submit_el is None or score > best_submit_score:
                 submit_el = el
+                best_submit_score = score
             continue
 
         if tag not in {"input", "select", "textarea"}:
@@ -408,7 +441,7 @@ def plan_general_web_form_with_local_llm(
                 "map the controls required to fulfill the goal.\n"
                 "Rules:\n"
                 "1. Output ONLY a single valid JSON object mapping `field_key` -> string value. Never output markdown fences or prose.\n"
-                "2. Match semantic meaning across `label`, `name`, `placeholder`, and `input_type` (for example, `custname`/`author`/`speaker_name` -> user's full name; `custemail`/`email` -> user's email; `custtel`/`phone`/`tel` -> user's phone; `comments`/`instructions`/`notes` -> task instructions from `goal`).\n"
+                "2. Match semantic meaning across `label`, `name`, `placeholder`, and `input_type` (for example, `custname`/`author`/`speaker_name` -> user's full name; `first-name`/`first_name` -> user's first name; `last-name`/`last_name` -> user's last name; `email-address`/`email-or-phone`/`custemail`/`email` -> user's email; `custtel`/`phone`/`tel` -> user's phone; `comments`/`instructions`/`notes` -> task instructions from `goal`).\n"
                 "3. Always prioritize explicit instructions in `goal` (such as sizes, toppings, delivery instructions, or custom values) over generic defaults.\n"
                 "4. For `<select>` controls (`input_type == \"select\"`), choose the matching option's `value` from `options`.\n"
                 "5. For `radio` and `checkbox` controls, output `\"true\"` ONLY for the `field_key` whose `option_value` or `label` should be selected according to `goal`; omit unselected `radio`/`checkbox` keys."
@@ -454,6 +487,9 @@ def plan_general_web_form_with_local_llm(
     )
     username_str = str(
         field_values.get("email")
+        or field_values.get("email-address")
+        or field_values.get("email_address")
+        or field_values.get("email-or-phone")
         or field_values.get("username")
         or profile.get("email")
         or "ryan@zunftmax.secure.build"
@@ -482,7 +518,12 @@ def plan_general_web_form_with_local_llm(
             raw_name = (el.get("name") or el.get("dom_id") or "").lower()
             if raw_name in {"speaker_name", "full_name", "name", "custname", "author"}:
                 val = profile.get("full_name")
-            elif raw_name in {"email", "custemail", "user_email"}:
+            elif raw_name in {"first-name", "first_name", "firstname", "given-name", "given_name"}:
+                val = profile.get("first_name") or (profile.get("full_name") or "Ryan MacArthur").split()[0]
+            elif raw_name in {"last-name", "last_name", "lastname", "family-name", "family_name", "surname"}:
+                parts = (profile.get("full_name") or "Ryan MacArthur").split()
+                val = profile.get("last_name") or (parts[-1] if len(parts) > 1 else "MacArthur")
+            elif raw_name in {"email", "email-address", "email_address", "email-or-phone", "custemail", "user_email"}:
                 val = profile.get("email")
             elif raw_name in {"phone", "tel", "custtel"}:
                 val = profile.get("phone")

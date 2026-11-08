@@ -161,10 +161,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class BusServer(ThreadingHTTPServer):
-    # SO_REUSEADDR allowed 0.0.0.0:19099 and 127.0.0.1:19099 to dual-bind on
-    # macOS during the 2026-11-04 live run; the flock in main() is the hard
-    # guarantee, this removes the bind-level half of the trap.
-    allow_reuse_address = False
+    # Exclusive per-port flock in acquire_bus_lock() prevents dual live instances;
+    # allow_reuse_address=True prevents TIME_WAIT bind failures across restarts.
+    allow_reuse_address = True
 
 
 _LOCK_FD = None
