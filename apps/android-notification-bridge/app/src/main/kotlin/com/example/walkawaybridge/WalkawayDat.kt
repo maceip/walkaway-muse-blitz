@@ -248,63 +248,126 @@ class WalkawayDat(private val appContext: Context) {
     pulseRedHigh: Boolean,
     approvedFlash: Boolean = false
   ): Bitmap {
-    val w = baseBitmap.width
-    val h = baseBitmap.height
+    val w = 540
+    val h = 360
     val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(out)
     canvas.drawColor(Color.BLACK)
-    canvas.drawBitmap(baseBitmap, 0f, 0f, null)
-
-    val densityScale = w / 540f
-    val by0 = 248f * densityScale
-    val bh = 52f * densityScale
-    val radius = 26f * densityScale
 
     val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+
+    // 1. Outer frame (Threads/Messenger Display spec: 24px viewport margin, 32px radius, #383D47 frame + #7A828E border)
+    val outerRect = RectF(18f, 12f, w - 18f, h - 12f)
+    fillPaint.color = Color.rgb(56, 61, 71)
+    canvas.drawRoundRect(outerRect, 32f, 32f, fillPaint)
+    strokePaint.color = Color.rgb(128, 136, 150)
+    strokePaint.strokeWidth = 2f
+    canvas.drawRoundRect(outerRect, 32f, 32f, strokePaint)
+
+    // 2. Inner modal card surface (#262A32 opaque smoked slate so zero room background bleeds through)
+    val modalRect = RectF(26f, 20f, w - 26f, h - 20f)
+    fillPaint.color = Color.rgb(38, 42, 50)
+    canvas.drawRoundRect(modalRect, 26f, 26f, fillPaint)
+
+    // 3. Elevated question header inlay (#343944 with 22px radius and #565E6D hairline, generous 24px padding)
+    val headerRect = RectF(44f, 36f, w - 44f, 102f)
+    fillPaint.color = Color.rgb(52, 57, 68)
+    canvas.drawRoundRect(headerRect, 20f, 20f, fillPaint)
+    strokePaint.color = Color.rgb(92, 100, 115)
+    strokePaint.strokeWidth = 1.5f
+    canvas.drawRoundRect(headerRect, 20f, 20f, strokePaint)
+
+    // Gold/amber status dot + large 24px bold question text (Threads headline scale)
+    fillPaint.color = Color.rgb(245, 166, 35)
+    canvas.drawCircle(68f, 69f, 7f, fillPaint)
+
+    val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
       color = Color.WHITE
-      textSize = 18f * densityScale
+      textSize = 23.5f
+      typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+      textAlign = Paint.Align.LEFT
+    }
+    val titleY = headerRect.centerY() - (titlePaint.descent() + titlePaint.ascent()) / 2f
+    canvas.drawText("Cascading failure — Take over?", 86f, titleY, titlePaint)
+
+    // 4. Worktree diff rows (3 clean rows with generous 36px vertical rhythm & 20px bold type so it never blurs together)
+    data class WtRow(val name: String, val added: String, val removed: String, val blocks: IntArray)
+    val rows = listOf(
+      WtRow("wt-auth", "+842", "-619", intArrayOf(1, 1, 1, -1, -1)),
+      WtRow("wt-core", "+514", "-498", intArrayOf(1, 1, -1, -1, -1)),
+      WtRow("main", "+42", "-380", intArrayOf(1, -1, -1, -1, -1))
+    )
+    val monoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      textSize = 20f
+      typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+      textAlign = Paint.Align.LEFT
+    }
+    rows.forEachIndexed { idx, row ->
+      val ry = 136f + idx * 38f
+      monoPaint.color = Color.rgb(230, 236, 244)
+      canvas.drawText(row.name, 52f, ry, monoPaint)
+      monoPaint.color = Color.rgb(63, 212, 107)
+      canvas.drawText(row.added, 178f, ry, monoPaint)
+      monoPaint.color = Color.rgb(248, 89, 89)
+      canvas.drawText(row.removed, 258f, ry, monoPaint)
+
+      for (b in 0 until 5) {
+        val bx = 344f + b * 29f
+        val by = ry - 16f
+        val bRect = RectF(bx, by, bx + 23f, by + 18f)
+        fillPaint.color = when (row.blocks[b]) {
+          1 -> Color.rgb(46, 184, 87)
+          -1 -> Color.rgb(229, 62, 62)
+          else -> Color.rgb(64, 70, 82)
+        }
+        canvas.drawRoundRect(bRect, 5f, 5f, fillPaint)
+      }
+    }
+
+    // 5. Bottom action pill row (Threads/Messenger pill geometry: 54px height, 27px radius, crisp 2.5px focus ring)
+    val by0 = 256f
+    val bh = 54f
+    val radius = 27f
+    val btnTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      color = Color.WHITE
+      textSize = 20f
       typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
       textAlign = Paint.Align.CENTER
     }
+    val textY = by0 + bh / 2f - (btnTextPaint.descent() + btnTextPaint.ascent()) / 2f
 
-    // Clear button strip region to the solid inner modal dark-gray (#24242B) so zero room background bleeds through
-    fillPaint.color = Color.rgb(36, 36, 43)
-    canvas.drawRect(36f * densityScale, (by0 - 4f * densityScale), w - 36f * densityScale, (by0 + bh + 4f * densityScale), fillPaint)
-
-    // 1. Left button: Yes (Ns)
-    val yesRect = RectF(40f * densityScale, by0, 202f * densityScale, by0 + bh)
-    fillPaint.color = if (approvedFlash) Color.rgb(46, 170, 70) else Color.rgb(10, 132, 255)
+    // Left button: Yes (Ns) — Focused pill with bright white Threads focus ring
+    val yesRect = RectF(44f, by0, 198f, by0 + bh)
+    fillPaint.color = if (approvedFlash) Color.rgb(35, 165, 90) else Color.rgb(24, 119, 242)
     canvas.drawRoundRect(yesRect, radius, radius, fillPaint)
-    strokePaint.color = if (approvedFlash) Color.rgb(120, 240, 140) else Color.rgb(120, 195, 255)
-    strokePaint.strokeWidth = 2.5f * densityScale
+    strokePaint.color = Color.WHITE
+    strokePaint.strokeWidth = 3f
     canvas.drawRoundRect(yesRect, radius, radius, strokePaint)
-    val textY = by0 + bh / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
-    canvas.drawText(yesLabel, yesRect.centerX(), textY, textPaint)
+    canvas.drawText(yesLabel, yesRect.centerX(), textY, btnTextPaint)
 
-    // 2. Center button: No (pulsating red)
-    val noRect = RectF(214f * densityScale, by0, 344f * densityScale, by0 + bh)
-    fillPaint.color = if (pulseRedHigh) Color.rgb(230, 36, 36) else Color.rgb(95, 24, 24)
+    // Center button: No — Muted crimson Threads destructive pill (#7D242B fill + #F87171 border)
+    val noRect = RectF(212f, by0, 336f, by0 + bh)
+    fillPaint.color = if (pulseRedHigh) Color.rgb(158, 38, 46) else Color.rgb(88, 28, 34)
     canvas.drawRoundRect(noRect, radius, radius, fillPaint)
-    strokePaint.color = if (pulseRedHigh) Color.rgb(255, 145, 145) else Color.rgb(175, 58, 58)
-    strokePaint.strokeWidth = (if (pulseRedHigh) 3.2f else 1.5f) * densityScale
+    strokePaint.color = if (pulseRedHigh) Color.rgb(252, 142, 142) else Color.rgb(168, 72, 78)
+    strokePaint.strokeWidth = if (pulseRedHigh) 2.5f else 1.5f
     canvas.drawRoundRect(noRect, radius, radius, strokePaint)
-    textPaint.color = if (pulseRedHigh) Color.WHITE else Color.rgb(235, 185, 185)
-    canvas.drawText("No", noRect.centerX(), textY, textPaint)
+    btnTextPaint.color = Color.WHITE
+    canvas.drawText("No", noRect.centerX(), textY, btnTextPaint)
 
-    // 3. Right button: ✦ Watch (solid #3A3A46 inlay surface + golden fairy star)
-    val watchRect = RectF(356f * densityScale, by0, w - 40f * densityScale, by0 + bh)
-    fillPaint.color = Color.rgb(58, 58, 70)
+    // Right button: ✦ Watch — Charcoal pill (#3A3F4B) + gold star & border
+    val watchRect = RectF(350f, by0, w - 44f, by0 + bh)
+    fillPaint.color = Color.rgb(58, 63, 75)
     canvas.drawRoundRect(watchRect, radius, radius, fillPaint)
     strokePaint.color = Color.rgb(245, 194, 66)
-    strokePaint.strokeWidth = 2f * densityScale
+    strokePaint.strokeWidth = 2f
     canvas.drawRoundRect(watchRect, radius, radius, strokePaint)
 
-    val cx = 386f * densityScale
+    val cx = 378f
     val cy = by0 + bh / 2f
-    val rOut = 9f * densityScale
-    val rIn = 3.2f * densityScale
+    val rOut = 9.5f
+    val rIn = 3.5f
     val star = Path().apply {
       moveTo(cx, cy - rOut)
       lineTo(cx + rIn, cy - rIn)
@@ -319,8 +382,8 @@ class WalkawayDat(private val appContext: Context) {
     fillPaint.color = Color.rgb(255, 215, 80)
     canvas.drawPath(star, fillPaint)
 
-    textPaint.color = Color.rgb(255, 225, 120)
-    canvas.drawText("Watch", watchRect.centerX() + 12f * densityScale, textY, textPaint)
+    btnTextPaint.color = Color.rgb(255, 228, 132)
+    canvas.drawText("Watch", watchRect.centerX() + 12f, textY, btnTextPaint)
     return out
   }
 
@@ -360,7 +423,7 @@ class WalkawayDat(private val appContext: Context) {
           )
         }
       } else {
-        flexBox(gap = 10, padding = 16) {
+        flexBox(gap = 12, padding = 24) {
           if (frameBitmap != null) {
             image(
               bitmap = frameBitmap,
@@ -369,18 +432,18 @@ class WalkawayDat(private val appContext: Context) {
               alignSelf = Alignment.START
             )
           }
-          text(title.take(80), style = TextStyle.BODY)
+          text(title.take(80), style = TextStyle.HEADING)
           if (body.isNotBlank()) {
             text(body.take(160), style = TextStyle.BODY)
           }
-          button(approveLabel, style = ButtonStyle.PRIMARY, onClick = {
+          button(approveLabel, ButtonStyle.PRIMARY, IconName.CHECKMARK, onClick = {
             if (!awaitingAction) return@button
             awaitingAction = false
             countdownJob?.cancel()
             onAction("approve")
             scope.launch { dismissAndPowerOff() }
           })
-          button("No", style = ButtonStyle.SECONDARY, onClick = {
+          button("No", ButtonStyle.SECONDARY, IconName.X, onClick = {
             if (!awaitingAction) return@button
             awaitingAction = false
             countdownJob?.cancel()
