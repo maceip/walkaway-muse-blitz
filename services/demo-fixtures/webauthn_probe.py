@@ -39,12 +39,17 @@ PROBE_HTML = """<!DOCTYPE html>
     .ok { color: #34d399; }
     .warn { color: #fbbf24; }
     .bad { color: #f87171; }
-    .btns { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .btns { display: flex; flex-direction: row; gap: 12px; margin-bottom: 14px; }
     button {
-      flex: 1; min-width: 180px; padding: 12px 16px;
-      border-radius: 10px; border: 1px solid #4b5563;
-      background: #1f2937; color: #f9fafb; font-size: 14px; font-weight: 700;
-      cursor: pointer;
+      flex: 1; padding: 14px 12px;
+      border-radius: 12px; border: 2px solid #4b5563;
+      background: #1f2937; color: #f9fafb; font-size: 16px; font-weight: 700;
+      cursor: pointer; outline: none;
+    }
+    button:focus, button.focused {
+      border-color: #ffffff !important;
+      box-shadow: 0 0 0 4px #38bdf8;
+      transform: scale(1.02);
     }
     button.primary { background: #2563eb; border-color: #60a5fa; }
     button.success { background: #059669; border-color: #34d399; }

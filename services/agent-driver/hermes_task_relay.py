@@ -258,19 +258,26 @@ class HermesTaskManager:
     def _observe_locked(self, label: str = "obs", with_screenshot: bool = False) -> dict[str, Any]:
         if self.agent_client is None or not self.session_id:
             return self.last_snapshot
+        req_id = f"{label}-{int(time.time() * 1000)}"
         self.agent_client.send(
             {
                 "type": "observe.request",
                 "session_id": self.session_id,
-                "request_id": f"{label}-{int(time.time() * 1000)}",
+                "request_id": req_id,
                 "include_screenshot": with_screenshot,
             }
         )
-        snap = self.agent_client.read_until_type("observe.result", timeout_s=10.0)
-        self.last_snapshot = snap
-        if with_screenshot:
-            self.preview_b64 = _downscale_preview_b64(snap.get("screenshot_png_b64"))
-        return snap
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            frame = self.agent_client.read_frame()
+            if frame.get("type") == "observe.result":
+                self.last_snapshot = frame
+                if with_screenshot:
+                    self.preview_b64 = _downscale_preview_b64(frame.get("screenshot_png_b64"))
+                return frame
+            if frame.get("type") == "refused" and frame.get("request_id") == req_id:
+                raise RuntimeError(f"observe.request ({req_id}) refused: {frame}")
+        raise TimeoutError(f"Timed out waiting for observe.result ({req_id})")
 
     def _sync_bridge_decisions_locked(self) -> None:
         """Check if a pending proposal was approved or rejected on glasses_dat or android_app."""
@@ -324,6 +331,15 @@ class HermesTaskManager:
                 self.status = "committed"
                 title = self.last_snapshot.get("title") or self.last_snapshot.get("url") or ""
                 self.say = f"Approved via {via} and committed on {title}."
+                return
+            if rtype == "proposal.invalidated" and receipt.get("reason") == "takeover":
+                try:
+                    self._observe_locked("post-takeover", with_screenshot=True)
+                except Exception:
+                    pass
+                self.pending_decision = None
+                self.status = "human_control"
+                self.say = "Human took control in desktop browser; edit form fields and click Done or Submit."
                 return
             if rtype in {"proposal.invalidated", "refused"} or entry.get("decision") == "reject":
                 via = human_entry.get("via") or entry.get("via") or "human"
@@ -437,144 +453,153 @@ class HermesTaskManager:
                 f"Opened {snap.get('title') or resolved_url} in Hermes browser. "
                 "Call propose_step to stage fields and request approval on glasses or Android app."
             )
+            has_form_controls = any(
+                (el.get("tag") or "").lower() in {"input", "select", "textarea"}
+                for el in (snap.get("elements") or [])
+            )
+            if has_form_controls:
+                try:
+                    return self._predict_next_step_locked()
+                except Exception:
+                    pass
             return self._public_state_locked()
 
     def predict_next_step(self) -> dict[str, Any]:
         with self._lock:
-            self._sync_bridge_decisions_locked()
-            if self.pending_decision is not None:
-                return self._public_state_locked()
-            if self.agent_client is None or not self.session_id:
-                raise ValueError("No active browser session. Call walkaway_start_task first.")
+            return self._predict_next_step_locked()
 
-            snap = self._observe_locked("predict-pre", with_screenshot=True)
-            plan = hermes_agent_driver.plan_general_web_form_with_local_llm(
-                snapshot=snap,
-                goal=self.goal,
-                user_profile=self.user_profile,
-            )
-            self.decision_model = plan.get("model_id") or "FormRecipe"
+    def _predict_next_step_locked(self) -> dict[str, Any]:
+        self._sync_bridge_decisions_locked()
+        if self.pending_decision is not None:
+            return self._public_state_locked()
+        if self.agent_client is None or not self.session_id:
+            raise ValueError("No active browser session. Call walkaway_start_task first.")
 
-            # Step 1: If there are non-destructive form fields to fill, stage them immediately
-            stage_op = plan.get("stage_operation")
-            if stage_op:
-                stage_pid = f"stage-{int(time.time() * 1000)}"
-                self.agent_client.send(
-                    {
-                        "type": "propose",
-                        "session_id": self.session_id,
-                        "request_id": f"req-{stage_pid}",
-                        "proposal_id": stage_pid,
-                        "snapshot_id": snap["snapshot_id"],
-                        "fingerprint": snap["fingerprint"],
-                        "generation": snap["generation"],
-                        "operation": stage_op,
-                        "rationale": f"Stage form fields for goal: {self.goal}",
-                    }
-                )
-                # Wait for decision_bridge policy_auto execution
-                deadline = time.monotonic() + 10.0
-                while time.monotonic() < deadline:
-                    dec_resp = _http_json(
-                        f"{self.bridge_url}/decisions",
-                        headers=self._bus_headers(),
-                        timeout_s=3.0,
-                    )
-                    if any(
-                        str((d.get("receipt") or {}).get("proposal_id")) == stage_pid
-                        and (d.get("receipt") or {}).get("type") == "executed"
-                        for d in (dec_resp.get("decisions") or [])
-                    ):
-                        break
-                    time.sleep(0.04)
-                self.steps_acted += 1
-                snap = self._observe_locked("predict-post-stage")
+        snap = self._observe_locked("predict-pre", with_screenshot=True)
+        plan = hermes_agent_driver.plan_general_web_form_with_local_llm(
+            snapshot=snap,
+            goal=self.goal,
+            user_profile=self.user_profile,
+        )
+        self.decision_model = plan.get("model_id") or "FormRecipe"
 
-            # Step 2: Propose the irreversible commit (submit) with requires_glasses=True
-            commit_op = plan.get("commit_operation")
-            if not commit_op:
-                self.status = "staged"
-                self.say = "Form fields staged; no submit button found on page."
-                return self._public_state_locked()
-
-            commit_pid = f"commit-{int(time.time() * 1000)}"
+        # Step 1: If there are non-destructive form fields to fill, stage them immediately
+        stage_op = plan.get("stage_operation")
+        if stage_op:
+            stage_pid = f"stage-{int(time.time() * 1000)}"
+            stage_req_id = f"req-{stage_pid}"
             self.agent_client.send(
                 {
                     "type": "propose",
                     "session_id": self.session_id,
-                    "request_id": f"req-{commit_pid}",
-                    "proposal_id": commit_pid,
+                    "request_id": stage_req_id,
+                    "proposal_id": stage_pid,
                     "snapshot_id": snap["snapshot_id"],
                     "fingerprint": snap["fingerprint"],
                     "generation": snap["generation"],
-                    "operation": commit_op,
-                    "rationale": f"Commit form on {snap.get('url')}: {self.goal}",
+                    "operation": stage_op,
+                    "rationale": f"Stage form fields for goal: {self.goal}",
                 }
             )
-
-            # Wait for proposal to appear in decision_bridge GET /pending
-            pending_item: dict[str, Any] | None = None
-            deadline_p = time.monotonic() + 10.0
-            while time.monotonic() < deadline_p:
-                pend_resp = _http_json(
-                    f"{self.bridge_url}/pending",
-                    headers=self._bus_headers(),
-                    timeout_s=3.0,
-                )
-                for item in pend_resp.get("pending") or []:
-                    if (
-                        str(item.get("session_id")) == str(self.session_id)
-                        and str(item.get("proposal_id")) == commit_pid
-                    ):
-                        pending_item = item
-                        break
-                if pending_item is not None:
+            # Wait for stage execution frame directly on agent socket
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                frame = self.agent_client.read_frame()
+                ftype = frame.get("type")
+                if ftype == "executed" and frame.get("proposal_id") == stage_pid:
                     break
-                time.sleep(0.04)
+                if ftype == "refused" and frame.get("request_id") == stage_req_id:
+                    raise RuntimeError(f"Staging form fields refused by browser: {frame}")
+                if ftype == "proposal.invalidated" and frame.get("proposal_id") == stage_pid:
+                    raise RuntimeError(f"Staging form fields invalidated: {frame}")
+            self.steps_acted += 1
+            snap = self._observe_locked("predict-post-stage", with_screenshot=True)
 
-            if pending_item is None:
-                raise RuntimeError(f"Commit proposal {commit_pid} did not reach decision_bridge /pending")
+        # Step 2: Propose the irreversible commit (submit) with requires_glasses=True
+        commit_op = plan.get("commit_operation")
+        if not commit_op:
+            self.status = "staged"
+            self.say = "Form fields staged; no submit button found on page."
+            return self._public_state_locked()
 
-            card_title = plan["card_title"]
-            card_body = plan["card_body"]
-            manifest = [
-                {
-                    "session_id": self.session_id,
-                    "proposal_id": commit_pid,
-                    "fingerprint": pending_item["fingerprint"],
-                    "generation": pending_item["generation"],
-                }
-            ]
-            card_msg = _http_json(
-                f"{self.bridge_url}/cards",
-                payload={
-                    "title": card_title,
-                    "body": card_body,
-                    "kind": "high_consequence_commit",
-                    "batch_proposals": manifest,
-                },
-                headers=self._bus_headers(),
-                timeout_s=5.0,
-            )
-
-            submit_label = (plan.get("submit_target") or {}).get("label") or "Submit"
-            self.pending_decision = {
+        commit_pid = f"commit-{int(time.time() * 1000)}"
+        self.agent_client.send(
+            {
+                "type": "propose",
+                "session_id": self.session_id,
+                "request_id": f"req-{commit_pid}",
                 "proposal_id": commit_pid,
-                "operation": "submit",
-                "label": submit_label,
-                "choice": ", ".join(plan.get("fields_preview") or []),
-                "card_message_id": card_msg.get("id"),
-                "card_title": card_title,
-                "card_body": card_body,
+                "snapshot_id": snap["snapshot_id"],
+                "fingerprint": snap["fingerprint"],
+                "generation": snap["generation"],
+                "operation": commit_op,
+                "rationale": f"Commit form on {snap.get('url')}: {self.goal}",
+            }
+        )
+
+        # Wait for proposal to appear in decision_bridge GET /pending
+        pending_item: dict[str, Any] | None = None
+        deadline_p = time.monotonic() + 10.0
+        while time.monotonic() < deadline_p:
+            pend_resp = _http_json(
+                f"{self.bridge_url}/pending",
+                headers=self._bus_headers(),
+                timeout_s=3.0,
+            )
+            for item in pend_resp.get("pending") or []:
+                if (
+                    str(item.get("session_id")) == str(self.session_id)
+                    and str(item.get("proposal_id")) == commit_pid
+                ):
+                    pending_item = item
+                    break
+            if pending_item is not None:
+                break
+            time.sleep(0.04)
+
+        if pending_item is None:
+            raise RuntimeError(f"Commit proposal {commit_pid} did not reach decision_bridge /pending")
+
+        card_title = plan["card_title"]
+        card_body = plan["card_body"]
+        manifest = [
+            {
+                "session_id": self.session_id,
+                "proposal_id": commit_pid,
                 "fingerprint": pending_item["fingerprint"],
                 "generation": pending_item["generation"],
             }
-            self.status = "awaiting_approval"
-            self.say = (
-                f"Staged form on {snap.get('title') or snap.get('url')} and sent approval card "
-                f"#{card_msg.get('id')} ({card_title}) to your glasses and Android app."
-            )
-            return self._public_state_locked()
+        ]
+        card_msg = _http_json(
+            f"{self.bridge_url}/cards",
+            payload={
+                "title": card_title,
+                "body": card_body,
+                "kind": "high_consequence_commit",
+                "batch_proposals": manifest,
+            },
+            headers=self._bus_headers(),
+            timeout_s=5.0,
+        )
+
+        submit_label = (plan.get("submit_target") or {}).get("label") or "Submit"
+        self.pending_decision = {
+            "proposal_id": commit_pid,
+            "operation": "submit",
+            "label": submit_label,
+            "choice": ", ".join(plan.get("fields_preview") or []),
+            "card_message_id": card_msg.get("id"),
+            "card_title": card_title,
+            "card_body": card_body,
+            "fingerprint": pending_item["fingerprint"],
+            "generation": pending_item["generation"],
+        }
+        self.status = "awaiting_approval"
+        self.say = (
+            f"Staged form on {snap.get('title') or snap.get('url')} and sent approval card "
+            f"#{card_msg.get('id')} ({card_title}) to your glasses and Android app."
+        )
+        return self._public_state_locked()
 
     def reject_pending_step(self) -> dict[str, Any]:
         with self._lock:

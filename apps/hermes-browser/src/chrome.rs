@@ -193,6 +193,7 @@ pub struct XRayBox {
     pub height: f64,
     pub is_vault_secret: bool,
     pub is_frozen_target: bool,
+    pub is_focused_input: bool,
     pub freeze_fp_short: Option<String>,
 }
 
@@ -1014,8 +1015,13 @@ pub fn render(state: &ChromeState<'_>) -> String {
                     r#"<div class="sup-btn sup-stop" id="sup-stop">{pill_red_svg}<span class="sup-btn-lbl">Stop</span></div>"#
                 ));
             }
+            let state_cls = if sup.state == "human" {
+                "sup-state sup-state-human"
+            } else {
+                "sup-state"
+            };
             format!(
-                r#"<div class="supbar" id="sup-bar">{sup_rib_bg}<div class="sup-title">{}</div><div class="sup-state">{}</div><div class="sup-detail">{}</div>{}</div>"#,
+                r#"<div class="supbar" id="sup-bar">{sup_rib_bg}<div class="sup-title">{}</div><div class="{state_cls}">{}</div><div class="sup-detail">{}</div>{}</div>"#,
                 escape_html(sup.title),
                 escape_html(sup.state),
                 escape_html(sup.detail),
@@ -1050,6 +1056,17 @@ pub fn render(state: &ChromeState<'_>) -> String {
                         h = h,
                         id = escape_html(&b.id),
                         fp = escape_html(fp),
+                    ));
+                } else if b.is_focused_input {
+                    items.push_str(&format!(
+                        r#"<div class="xray-box xray-focus" id="xray-focus-box" style="left:{page_x:.1}px;top:{page_y:.1}px;width:{w:.1}px;height:{h:.1}px;">
+                             <div class="xray-pill xray-pill-focus" id="xray-tag-{id}">[EDITING {id} &#8212; Type now]</div>
+                           </div>"#,
+                        page_x = page_x,
+                        page_y = page_y,
+                        w = w,
+                        h = h,
+                        id = escape_html(&b.id),
                     ));
                 } else if b.is_vault_secret {
                     items.push_str(&format!(
@@ -1857,6 +1874,11 @@ pub fn render(state: &ChromeState<'_>) -> String {
     line-height: 18px;
     white-space: nowrap;
   }}
+  .sup-state-human {{
+    background-color: #115822;
+    border: 1px solid #2EA043;
+    color: #7EE787;
+  }}
   .sup-detail {{
     position: relative;
     flex: 1;
@@ -1904,18 +1926,26 @@ pub fn render(state: &ChromeState<'_>) -> String {
   .xray-box {{
     position: absolute;
     border: 1.5px solid #0A84FF;
-    background-color: rgba(10, 132, 255, 0.06);
+    background-color: rgba(10, 132, 255, 0.04);
+    pointer-events: none;
+  }}
+  .xray-focus {{
+    border: 2px solid #0A84FF;
+    background-color: rgba(10, 132, 255, 0.08);
     pointer-events: none;
   }}
   .xray-vault {{
     border: 2px solid #FF3B30;
-    background-color: rgba(255, 59, 48, 0.14);
+    background-color: rgba(255, 59, 48, 0.10);
   }}
   .xray-freeze {{
     border: 2px solid #30D158;
     background-color: rgba(48, 209, 88, 0.14);
   }}
   .xray-pill {{
+    position: absolute;
+    right: 0;
+    top: -14px;
     display: inline-block;
     background-color: #0A84FF;
     color: #FFFFFF;
@@ -1924,6 +1954,11 @@ pub fn render(state: &ChromeState<'_>) -> String {
     line-height: 13px;
     padding: 0 4px;
     white-space: nowrap;
+    pointer-events: none;
+  }}
+  .xray-pill-focus {{
+    background-color: #0A84FF;
+    color: #FFFFFF;
   }}
   .xray-pill-vault {{
     background-color: #FF3B30;
@@ -1945,6 +1980,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
     align-items: center;
     padding: 0 12px;
     gap: 14px;
+    pointer-events: none;
   }}
   .xray-hud-brand {{
     color: #5AC8FA;

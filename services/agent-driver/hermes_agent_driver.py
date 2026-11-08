@@ -149,13 +149,36 @@ def plan_validation_repair_with_local_llm(
     raw_output = res["output"]
     field_values = _extract_json_object(raw_output)
 
+    parsed_url = urlparse(snapshot.get("url") or "")
+    origin_str = (
+        f"{parsed_url.scheme}://{parsed_url.netloc}"
+        if parsed_url.scheme and parsed_url.netloc
+        else "http://127.0.0.1:8795"
+    )
+    username_str = str(
+        field_values.get("email")
+        or field_values.get("username")
+        or speaker_profile.get("email")
+        or "ryan@zunftmax.secure.build"
+    )
+
     fields_ops = []
     for field_name, val in field_values.items():
         if field_name not in by_key:
             continue
         el = by_key[field_name]
-        tag = el.get("tag")
-        input_type = el.get("input_type")
+        tag = (el.get("tag") or "").lower()
+        input_type = (el.get("input_type") or "").lower()
+        if input_type == "password":
+            fields_ops.append(
+                {
+                    "target_ref": el["node_ref"],
+                    "action": "fill_secret",
+                    "origin": origin_str,
+                    "username": username_str,
+                }
+            )
+            continue
         if tag == "select":
             action = "select"
         elif tag == "input" and input_type in {"checkbox", "radio"}:
@@ -385,12 +408,22 @@ def plan_general_web_form_with_local_llm(
     raw_output = res["output"]
     field_values = _extract_json_object(raw_output)
 
+    parsed_url = urlparse(snapshot.get("url") or "")
+    origin_str = (
+        f"{parsed_url.scheme}://{parsed_url.netloc}"
+        if parsed_url.scheme and parsed_url.netloc
+        else "http://127.0.0.1:8795"
+    )
+    username_str = str(
+        field_values.get("email")
+        or field_values.get("username")
+        or profile.get("email")
+        or "ryan@zunftmax.secure.build"
+    )
+
     fields_ops = []
     fields_preview = []
-    for field_key, val in field_values.items():
-        if field_key not in by_key:
-            continue
-        el = by_key[field_key]
+    for field_key, el in by_key.items():
         tag = (el.get("tag") or "").lower()
         input_type = (el.get("input_type") or "").lower()
         if input_type == "password":
@@ -398,11 +431,40 @@ def plan_general_web_form_with_local_llm(
                 {
                     "target_ref": el["node_ref"],
                     "action": "fill_secret",
-                    "vault_key": "default_site_secret",
+                    "origin": origin_str,
+                    "username": username_str,
                 }
             )
             fields_preview.append(f"{field_key}=[VAULT_SECRET]")
             continue
+
+        val = field_values.get(field_key)
+        if val is None or str(val).strip() == "":
+            # Check profile fallback for standard speaker/user keys if omitted by model
+            raw_name = (el.get("name") or el.get("dom_id") or "").lower()
+            if raw_name in {"speaker_name", "full_name", "name", "custname", "author"}:
+                val = profile.get("full_name")
+            elif raw_name in {"email", "custemail", "user_email"}:
+                val = profile.get("email")
+            elif raw_name in {"phone", "tel", "custtel"}:
+                val = profile.get("phone")
+            elif raw_name in {"talk_title", "title"}:
+                val = profile.get("talk_title")
+            elif raw_name in {"abstract_summary", "abstract", "bio"}:
+                val = profile.get("abstract_summary")
+            elif raw_name == "tshirt_size":
+                val = profile.get("tshirt_size")
+            elif tag == "select" and el.get("options"):
+                non_empty_opts = [
+                    o.get("value")
+                    for o in (el.get("options") or [])
+                    if isinstance(o, dict) and str(o.get("value") or "").strip()
+                ]
+                if non_empty_opts:
+                    val = non_empty_opts[0]
+        if val is None:
+            continue
+
         if tag == "select":
             action = "select"
         elif tag == "input" and input_type in {"checkbox", "radio"}:

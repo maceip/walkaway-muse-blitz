@@ -1295,7 +1295,9 @@ impl BrowserApp {
                 .action_required_kind
                 .as_deref()
                 .unwrap_or("Action required"),
-            ControlState::Human => "You are in control",
+            ControlState::Human => {
+                "You are in control — click any field to type (Tab to switch), then click Done"
+            }
             ControlState::Agent => "Agent is working",
             ControlState::Done => "Task complete",
             ControlState::Stopped => "Stopped",
@@ -3588,6 +3590,22 @@ impl BrowserApp {
             session.state = ControlState::Human;
             session.snapshot_valid = false;
         }
+        if let Some(w) = &self.window {
+            w.focus_window();
+        }
+        if self
+            .tab()
+            .instance
+            .page
+            .doc()
+            .get_focussed_node_id()
+            .is_none()
+        {
+            let tab = self.tab_mut();
+            if focus_adjacent_form_control(tab.instance.page.doc_mut(), false).is_some() {
+                tab.instance.page.resolve();
+            }
+        }
         self.audit(
             "control_take",
             "control.take",
@@ -4222,7 +4240,12 @@ impl BrowserApp {
 
     /// Regenerate the chrome document from state.
     fn sync_chrome(&mut self) {
-        let telemetry = if self.xray_enabled {
+        let in_human_control = self
+            .control
+            .as_ref()
+            .is_some_and(|s| s.state == ControlState::Human);
+        let focused_nid = self.tab().instance.page.doc().get_focussed_node_id();
+        let telemetry = if self.xray_enabled || (in_human_control && focused_nid.is_some()) {
             let active_tab_id = self.tab().canonical.id;
             if self.tab().instance.last_snapshot.is_none() {
                 let _ = self.observe_tab(active_tab_id);
@@ -4265,11 +4288,17 @@ impl BrowserApp {
                         if !el.visible {
                             continue;
                         }
+                        let is_focused_input = Some(el.node_id) == focused_nid
+                            && matches!(el.tag.as_str(), "input" | "textarea" | "select");
+                        if in_human_control && !is_focused_input {
+                            continue;
+                        }
                         let is_vault_secret = el.value_state == observe::ValueState::Sensitive
                             || el.input_type.as_deref() == Some("password");
                         let is_frozen_target = pending_target_ids.iter().any(|id| id == &el.id);
                         if !is_frozen_target
                             && !is_vault_secret
+                            && !is_focused_input
                             && !matches!(
                                 el.tag.as_str(),
                                 "input" | "select" | "textarea" | "button" | "a"
@@ -4294,6 +4323,7 @@ impl BrowserApp {
                             height: el.bounds.height,
                             is_vault_secret,
                             is_frozen_target,
+                            is_focused_input,
                             freeze_fp_short: if is_frozen_target {
                                 freeze_fp_short.clone()
                             } else {
@@ -4882,6 +4912,19 @@ impl BrowserApp {
 
     fn handle_chrome_click(&mut self, x: f32, y: f32) {
         let Some(hit) = self.chrome_doc.hit(x, y) else {
+            if self.passkey_prompt.is_some() {
+                return;
+            }
+            if self.menu_open {
+                self.menu_open = false;
+                self.sync_chrome();
+                self.request_redraw();
+            }
+            let top_h = self.top_chrome_height() as f32;
+            let left_w = self.left_chrome_width() as f32;
+            if y >= top_h && x >= left_w {
+                self.handle_page_click(x, y);
+            }
             return;
         };
         let target = dom_ffi::bubble_target(&self.chrome_doc, hit.node_id);
@@ -5268,13 +5311,27 @@ impl BrowserApp {
         }
         let local_x = (x - self.left_chrome_width() as f32).max(0.0);
         let local_y = (y - self.top_chrome_height() as f32).max(0.0);
-        let Some(hit) = self.tab().instance.page.doc().hit(local_x, local_y) else {
+        let hit_node_id = self
+            .tab()
+            .instance
+            .page
+            .doc()
+            .hit(local_x, local_y)
+            .map(|h| h.node_id)
+            .or_else(|| {
+                find_node_at_viewport_point(
+                    self.tab().instance.page.doc(),
+                    local_x as f64,
+                    local_y as f64,
+                )
+            });
+        let Some(hit_node_id) = hit_node_id else {
             self.sync_chrome();
             self.request_redraw();
             return;
         };
 
-        if let Some(href) = link_target(self.tab().instance.page.doc(), hit.node_id) {
+        if let Some(href) = link_target(self.tab().instance.page.doc(), hit_node_id) {
             let trimmed_href = href.trim();
             if trimmed_href.starts_with('#') {
                 let frag = trimmed_href.trim_start_matches('#');
@@ -5313,7 +5370,7 @@ impl BrowserApp {
             }
         }
 
-        let target = dom_ffi::bubble_target(self.tab().instance.page.doc(), hit.node_id);
+        let target = dom_ffi::bubble_target(self.tab().instance.page.doc(), hit_node_id);
         let hermes = self.tab().instance.page.hermes;
         unsafe {
             hermes_app_dispatch_event(
@@ -5336,9 +5393,20 @@ impl BrowserApp {
             return;
         }
 
-        if let Some((control_id, tag, input_type, clicked_option_id)) =
-            find_interactive_form_control(self.tab().instance.page.doc(), hit.node_id)
-        {
+        let control_match =
+            find_interactive_form_control(self.tab().instance.page.doc(), hit_node_id).or_else(
+                || {
+                    find_node_at_viewport_point(
+                        self.tab().instance.page.doc(),
+                        local_x as f64,
+                        local_y as f64,
+                    )
+                    .and_then(|nid| {
+                        find_interactive_form_control(self.tab().instance.page.doc(), nid)
+                    })
+                },
+            );
+        if let Some((control_id, tag, input_type, clicked_option_id)) = control_match {
             let is_disabled = self
                 .tab()
                 .instance
@@ -5705,7 +5773,11 @@ impl BrowserApp {
                 }
                 _ => {
                     if !cmd {
-                        if let Some(text) = text {
+                        let key_text = text.filter(|s| !s.is_empty()).or_else(|| match logical_key {
+                            Key::Character(s) => Some(s.as_str()),
+                            _ => None,
+                        });
+                        if let Some(text) = key_text {
                             let filtered: String =
                                 text.chars().filter(|c| !c.is_control()).collect();
                             if !filtered.is_empty() {
@@ -5879,7 +5951,12 @@ impl BrowserApp {
                                 mutated = true;
                             }
                             _ => {
-                                if let Some(text) = text {
+                                let key_text =
+                                    text.filter(|s| !s.is_empty()).or_else(|| match logical_key {
+                                        Key::Character(s) => Some(s.as_str()),
+                                        _ => None,
+                                    });
+                                if let Some(text) = key_text {
                                     let filtered: String =
                                         text.chars().filter(|c| !c.is_control()).collect();
                                     if !filtered.is_empty() {
@@ -6186,7 +6263,7 @@ impl ApplicationHandler<UserEvent> for BrowserApp {
         let attrs = Window::default_attributes()
             .with_title("Muse Blitz — Supervised Agent Browser")
             .with_visible(!hidden)
-            .with_active(false)
+            .with_active(!hidden)
             .with_inner_size(LogicalSize::new(WIDTH, HEIGHT));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.scale = window.scale_factor();
@@ -6826,6 +6903,41 @@ fn collect_form_submission(
     }
 
     (action_url, method, entries)
+}
+
+fn find_node_at_viewport_point(doc: &HtmlDocument, x: f64, y: f64) -> Option<NodeId> {
+    let mut matched = None;
+    let mut stack = vec![doc.root_node().id];
+    while let Some(nid) = stack.pop() {
+        let Some(node) = doc.get_node(nid) else {
+            continue;
+        };
+        for &child in node.children.iter().rev() {
+            stack.push(child);
+        }
+        let Some(data) = node.element_data() else {
+            continue;
+        };
+        let tag = data.name.local.to_string().to_ascii_lowercase();
+        if !matches!(
+            tag.as_str(),
+            "input" | "textarea" | "select" | "option" | "button" | "a" | "label"
+        ) {
+            continue;
+        }
+        if let Some(rect) = doc.get_client_bounding_rect(nid) {
+            if rect.width > 0.0
+                && rect.height > 0.0
+                && x >= rect.x
+                && x <= rect.x + rect.width
+                && y >= rect.y
+                && y <= rect.y + rect.height
+            {
+                matched = Some(nid);
+            }
+        }
+    }
+    matched
 }
 
 fn find_interactive_form_control(
@@ -7934,12 +8046,12 @@ fn uitest() -> i32 {
         Ok(form_html),
     );
 
-    // 1. Click #custname on the page and type "Ryan"
+    // 1. Click #custname through the full window click path (handle_chrome_click) and type "Ryan"
     if let Some((px, py)) = find_page_click(&app, "custname") {
-        app.handle_page_click(px, py);
+        app.handle_chrome_click(px, py);
     }
     for ch in ["R", "y", "a", "n"] {
-        app.handle_logical_key(&Key::Character(ch.into()), Some(ch));
+        app.handle_logical_key(&Key::Character(ch.into()), None);
     }
     let typed_val = app
         .tab()
@@ -7951,7 +8063,7 @@ fn uitest() -> i32 {
         .unwrap_or_default();
     if !check(
         !app.tab().canonical.browser.focused && typed_val == "Ryan",
-        "human page click focuses <input id='custname'> and keyboard typing updates its DOM + editor value to 'Ryan'",
+        "human page click via handle_chrome_click focuses <input id='custname'> and keyboard typing updates its DOM + editor value to 'Ryan'",
     ) {
         failures += 1;
         eprintln!("     typed_val was {:?}", typed_val);
@@ -7959,7 +8071,7 @@ fn uitest() -> i32 {
 
     // 2. Click #agree checkbox on the page to toggle it checked
     if let Some((px, py)) = find_page_click(&app, "agree") {
-        app.handle_page_click(px, py);
+        app.handle_chrome_click(px, py);
     }
     let agree_checked = app
         .tab()

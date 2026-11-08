@@ -36,14 +36,23 @@ impl FormFieldCommand {
             return None;
         }
         let value = val.get("value").and_then(Value::as_str).map(str::to_string);
+        let vault_key = val
+            .get("vault_key")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
         let origin = val
             .get("origin")
             .and_then(Value::as_str)
-            .map(str::to_string);
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| vault_key.as_ref().map(|_| "http://127.0.0.1:8795".to_string()));
         let username = val
             .get("username")
             .and_then(Value::as_str)
-            .map(str::to_string);
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or(vault_key);
         let account_id = val
             .get("account_id")
             .and_then(Value::as_str)
