@@ -62,6 +62,80 @@ interface ModalCopy {
   secondaryIcon: 'close' | 'stop' | 'clock' | 'search';
 }
 
+function parseLiveDecisionCopy(decision: PendingDecision): ModalCopy {
+  const rawTitle = decision.title.trim();
+  const commitMatch = rawTitle.match(/^COMMIT\s+([^:]+):\s*(.+)$/i);
+  const rawDomain = commitMatch ? commitMatch[1].trim() : '';
+  const cleanDomain = rawDomain.replace(/^www\./i, '');
+  const actionLabel = commitMatch ? commitMatch[2].trim() : rawTitle;
+
+  const brandName = cleanDomain.includes('linkedin.')
+    ? 'LinkedIn'
+    : cleanDomain.includes('github.')
+      ? 'GitHub'
+      : cleanDomain || 'Site';
+
+  const heading = commitMatch
+    ? `${actionLabel} on ${brandName}?`
+    : rawTitle;
+
+  const metadata: Array<{label: string; value: string}> = [];
+  if (cleanDomain) {
+    metadata.push({label: 'Site', value: cleanDomain});
+  }
+  if (commitMatch && actionLabel) {
+    metadata.push({label: 'Action', value: actionLabel});
+  }
+
+  const pairs = decision.summary
+    .split(';')
+    .map(s => s.trim())
+    .filter(Boolean);
+  for (const pair of pairs) {
+    const eqIdx = pair.indexOf('=');
+    if (eqIdx > 0) {
+      const rawKey = pair.slice(0, eqIdx).trim().toLowerCase();
+      const rawVal = pair.slice(eqIdx + 1).trim();
+      const cleanKey = rawKey.includes('email')
+        ? 'Email'
+        : rawKey.includes('pass')
+          ? 'Password'
+          : rawKey.includes('first')
+            ? 'First Name'
+            : rawKey.includes('last')
+              ? 'Last Name'
+              : rawKey.includes('user')
+                ? 'Username'
+                : rawKey.replace(/[-_]/g, ' ');
+      const cleanVal =
+        rawVal === '[VAULT_SECRET]' ? 'Vault Secret (Blind)' : rawVal;
+      if (metadata.length < 4) {
+        metadata.push({label: cleanKey, value: cleanVal});
+      }
+    }
+  }
+
+  if (metadata.length === 0) {
+    metadata.push({label: 'Summary', value: decision.summary.slice(0, 36)});
+  }
+
+  return {
+    badgeLabel: (cleanDomain || 'COMMIT GATE').toUpperCase().slice(0, 18),
+    badgeVariant: 'info',
+    dotVariant: 'accent',
+    heading,
+    subtitle: cleanDomain
+      ? `Supervised commit gated on ${cleanDomain}.`
+      : decision.summary,
+    metadata,
+    primaryLabel: `Approve ${actionLabel}`.slice(0, 22),
+    primaryIcon: 'check',
+    secondaryLabel: 'Deny',
+    secondaryVariant: 'destructive',
+    secondaryIcon: 'close',
+  };
+}
+
 export function AuthorizationCard({
   mode,
   onModeChange,
@@ -157,7 +231,10 @@ export function AuthorizationCard({
     },
   };
 
-  const active = copyByMode[mode];
+  const active =
+    pendingDecision && mode === 'start'
+      ? parseLiveDecisionCopy(pendingDecision)
+      : copyByMode[mode];
 
   return (
     <Card
