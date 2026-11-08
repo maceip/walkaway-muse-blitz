@@ -5550,6 +5550,13 @@ impl BrowserApp {
                     "nav.committed",
                     json!({"tab_id": tab_id.0, "url": final_url.to_string()}),
                 );
+                if self
+                    .control
+                    .as_ref()
+                    .is_some_and(|s| s.state == ControlState::Human)
+                {
+                    let _ = self.control_release("user", "desktop-submit");
+                }
             }
             Err(e) => {
                 let broker = self.passkey_broker.clone();

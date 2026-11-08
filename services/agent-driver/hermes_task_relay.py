@@ -165,7 +165,23 @@ class HermesTaskManager:
         self.preview_b64: str | None = None
         self.pending_decision: dict[str, Any] | None = None
         self.last_decision_receipt: dict[str, Any] | None = None
+        self.takeover_decision_idx: int = 0
         self.say: str = "No active browser task."
+        self._watcher_stop = threading.Event()
+        self._watcher_thread = threading.Thread(target=self._watcher_loop, daemon=True)
+        self._watcher_thread.start()
+
+    def _watcher_loop(self) -> None:
+        while not self._watcher_stop.is_set():
+            time.sleep(0.15)
+            if self.session_id and self.status in {"awaiting_approval", "human_control"}:
+                if self._lock.acquire(blocking=False):
+                    try:
+                        self._sync_bridge_decisions_locked()
+                    except Exception:
+                        pass
+                    finally:
+                        self._lock.release()
 
     def _bus_headers(self) -> dict[str, str]:
         return {"X-Bus-Token": self.bus_token} if self.bus_token else {}
@@ -280,11 +296,8 @@ class HermesTaskManager:
         raise TimeoutError(f"Timed out waiting for observe.result ({req_id})")
 
     def _sync_bridge_decisions_locked(self) -> None:
-        """Check if a pending proposal was approved or rejected on glasses_dat or android_app."""
-        if not self.pending_decision:
-            return
-        prop_id = self.pending_decision.get("proposal_id")
-        if not prop_id:
+        """Check if a pending proposal was approved/rejected or if human control completed."""
+        if not self.pending_decision and self.status != "human_control":
             return
         try:
             dec_resp = _http_json(
@@ -296,6 +309,59 @@ class HermesTaskManager:
             return
 
         decisions_list = dec_resp.get("decisions") or []
+
+        if self.status == "human_control":
+            human_nav = False
+            returned_to_agent = False
+            stopped = False
+            for idx in range(self.takeover_decision_idx, len(decisions_list)):
+                receipt = decisions_list[idx].get("receipt") or {}
+                if str(receipt.get("session_id") or self.session_id) != str(self.session_id):
+                    continue
+                rtype = receipt.get("type")
+                if rtype == "nav.committed":
+                    human_nav = True
+                elif rtype == "session.state":
+                    st = receipt.get("state")
+                    if st == "agent":
+                        returned_to_agent = True
+                    elif st == "stopped":
+                        stopped = True
+            if stopped:
+                self.takeover_decision_idx = len(decisions_list)
+                self.status = "stopped"
+                self.say = "Stopped by human in desktop browser."
+                return
+            if returned_to_agent:
+                self.takeover_decision_idx = len(decisions_list)
+                if human_nav:
+                    try:
+                        self._observe_locked("post-human-submit", with_screenshot=True)
+                    except Exception:
+                        pass
+                    self.steps_acted += 1
+                    self.last_decision_receipt = {
+                        "proposal_id": "human-direct-submit",
+                        "decision": "approve",
+                        "via": "human_direct",
+                        "surface": "desktop-browser",
+                        "message_id": None,
+                        "receipt": {"type": "executed", "surface": "desktop-submit"},
+                    }
+                    self.status = "committed"
+                    title = self.last_snapshot.get("title") or self.last_snapshot.get("url") or ""
+                    self.say = f"Human edited and submitted directly on {title}."
+                    return
+                try:
+                    self._predict_next_step_locked(preserve_existing=True, skip_sync=True)
+                except Exception:
+                    pass
+                return
+            return
+
+        prop_id = (self.pending_decision or {}).get("proposal_id")
+        if not prop_id:
+            return
         human_entry: dict[str, Any] = {}
         for d in decisions_list:
             if (
@@ -305,7 +371,7 @@ class HermesTaskManager:
             ):
                 human_entry = d
 
-        for entry in decisions_list:
+        for idx, entry in enumerate(decisions_list):
             receipt = entry.get("receipt") or {}
             if str(entry.get("proposal_id") or receipt.get("proposal_id")) != str(prop_id):
                 continue
@@ -333,10 +399,7 @@ class HermesTaskManager:
                 self.say = f"Approved via {via} and committed on {title}."
                 return
             if rtype == "proposal.invalidated" and receipt.get("reason") == "takeover":
-                try:
-                    self._observe_locked("post-takeover", with_screenshot=True)
-                except Exception:
-                    pass
+                self.takeover_decision_idx = idx + 1
                 self.pending_decision = None
                 self.status = "human_control"
                 self.say = "Human took control in desktop browser; edit form fields and click Done or Submit."
@@ -468,8 +531,13 @@ class HermesTaskManager:
         with self._lock:
             return self._predict_next_step_locked()
 
-    def _predict_next_step_locked(self) -> dict[str, Any]:
-        self._sync_bridge_decisions_locked()
+    def _predict_next_step_locked(
+        self,
+        preserve_existing: bool = False,
+        skip_sync: bool = False,
+    ) -> dict[str, Any]:
+        if not skip_sync:
+            self._sync_bridge_decisions_locked()
         if self.pending_decision is not None:
             return self._public_state_locked()
         if self.agent_client is None or not self.session_id:
@@ -480,6 +548,7 @@ class HermesTaskManager:
             snapshot=snap,
             goal=self.goal,
             user_profile=self.user_profile,
+            preserve_existing=preserve_existing,
         )
         self.decision_model = plan.get("model_id") or "FormRecipe"
 

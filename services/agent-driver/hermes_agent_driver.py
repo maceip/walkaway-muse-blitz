@@ -280,6 +280,7 @@ def plan_general_web_form_with_local_llm(
     snapshot: dict[str, Any],
     goal: str,
     user_profile: dict[str, str] | None = None,
+    preserve_existing: bool = False,
 ) -> dict[str, Any]:
     """Use local Qwen3-4B on Apple Silicon to map any real webpage's form controls to the user's goal."""
     if not MLX_PYTHON.exists():
@@ -359,6 +360,43 @@ def plan_general_web_form_with_local_llm(
             "card_title": title,
             "card_body": body,
             "fields_preview": [],
+        }
+
+    if preserve_existing:
+        fields_preview = []
+        for field_key, el in by_key.items():
+            tag = (el.get("tag") or "").lower()
+            input_type = (el.get("input_type") or "").lower()
+            name_or_key = el.get("name") or field_key
+            if input_type == "password" or el.get("value_state") == "sensitive":
+                fields_preview.append(f"{name_or_key}=[VAULT_SECRET]")
+            elif tag == "input" and input_type in {"checkbox", "radio"}:
+                if el.get("checked"):
+                    fields_preview.append(f"{name_or_key}=true")
+            else:
+                cur_val = str(el.get("value") or "").strip()
+                if cur_val:
+                    fields_preview.append(f"{name_or_key}={cur_val[:28]}")
+        commit_op = (
+            {
+                "kind": "submit",
+                "target_ref": submit_el["node_ref"],
+            }
+            if submit_el is not None
+            else None
+        )
+        action_label = (submit_el.get("label") if submit_el else None) or "Submit Form"
+        title, body = format_domain_card(snapshot.get("url", ""), action_label, fields_preview)
+        return {
+            "llm_calls": 0,
+            "model_id": "HumanEditedDOM",
+            "latency_ms": 0.0,
+            "stage_operation": None,
+            "commit_operation": commit_op,
+            "submit_target": submit_el,
+            "card_title": title,
+            "card_body": body,
+            "fields_preview": fields_preview,
         }
 
     messages = [

@@ -188,10 +188,17 @@ class Bridge:
             client.session_id = frame.get("session_id")
             log(f"session.opened {client.session_id} on {client.sock_path}")
             return
-        if ftype in ("executed", "proposal.invalidated", "refused"):
+        if ftype in ("executed", "proposal.invalidated", "refused", "session.state", "nav.committed"):
             with self.lock:
                 self.decisions.append({"at": now(), "receipt": frame})
-            log(f"receipt {ftype} proposal={frame.get('proposal_id')}")
+                pid = frame.get("proposal_id")
+                sid = frame.get("session_id") or client.session_id
+                if pid and sid and ftype in ("executed", "proposal.invalidated"):
+                    self.pending.pop((sid, pid), None)
+                    for card in self.cards.values():
+                        if (sid, pid) in card.get("keys", []):
+                            card["consumed"] = True
+            log(f"receipt {ftype} proposal={frame.get('proposal_id')} state={frame.get('state')}")
             return
         if ftype != "proposal.pending":
             return
