@@ -482,22 +482,11 @@ class WalkawayDat(private val appContext: Context) {
   }
 
   /**
-   * Renders an Astryx-tokenized (`walkawayGlassesTheme`) smoked-slate authorization card
-   * (`#282C35` surface, `#343944` muted inlay, 26px radius, status dot + domain badge,
-   * human-readable `<Heading level={1}>`, and 2-column `<MetadataList>` rows) so no approval
-   * modal ever renders raw unbacked text on the glasses waveguide.
+   * Formats raw bus title/body ("COMMIT www.linkedin.com: Agree & Join",
+   * "email-address=ryan@...; password=[VAULT_SECRET]") into a concise 3-5 word
+   * headline and a single clean secondary line for the flat native DAT card.
    */
-  private fun composeAstryxApprovalCard(title: String, body: String): Bitmap {
-    val w = 540
-    val h = 232
-    val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(out)
-    canvas.drawColor(Color.BLACK)
-
-    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-
-    // Parse raw "COMMIT www.linkedin.com: Agree & Join" and "email-address=...; password=[VAULT_SECRET]"
+  private fun formatCleanCardCopy(title: String, body: String): Pair<String, String> {
     val rawTitle = title.trim()
     val commitRegex = Regex("^COMMIT\\s+([^:]+):\\s*(.+)$", RegexOption.IGNORE_CASE)
     val match = commitRegex.find(rawTitle)
@@ -508,117 +497,37 @@ class WalkawayDat(private val appContext: Context) {
       cleanDomain.contains("linkedin.", ignoreCase = true) -> "LinkedIn"
       cleanDomain.contains("github.", ignoreCase = true) -> "GitHub"
       cleanDomain.isNotEmpty() -> cleanDomain
-      else -> "Site"
+      else -> ""
     }
-    val headingText = if (match != null) {
+    val heading = if (match != null && brandName.isNotEmpty()) {
       "$actionLabel on $brandName?"
     } else {
-      rawTitle.take(36)
+      rawTitle.take(40)
     }
-    val badgeText = (cleanDomain.ifEmpty { "COMMIT GATE" }).uppercase().take(18)
 
-    val metadataRows = mutableListOf<Pair<String, String>>()
-    if (cleanDomain.isNotEmpty()) {
-      metadataRows.add("Site" to cleanDomain.take(26))
-    }
+    val parts = mutableListOf<String>()
+    var hasVaultSecret = false
     body.split(";").map { it.trim() }.filter { it.isNotEmpty() }.forEach { pair ->
       val eq = pair.indexOf('=')
-      if (eq > 0 && metadataRows.size < 3) {
+      if (eq > 0) {
         val rawK = pair.substring(0, eq).trim().lowercase()
         val rawV = pair.substring(eq + 1).trim()
-        val cleanK = when {
-          rawK.contains("email") -> "Email"
-          rawK.contains("pass") -> "Password"
-          rawK.contains("first") -> "First Name"
-          rawK.contains("last") -> "Last Name"
-          rawK.contains("user") -> "Username"
-          else -> rawK.replace('-', ' ').replace('_', ' ').replaceFirstChar { it.uppercase() }
+        if (rawV == "[VAULT_SECRET]" || rawK.contains("pass")) {
+          hasVaultSecret = true
+        } else if (rawV.isNotEmpty() && rawV != "true" && parts.size < 2) {
+          parts.add(rawV)
         }
-        val cleanV = if (rawV == "[VAULT_SECRET]") "Vault Secret (Blind)" else rawV.take(26)
-        metadataRows.add(cleanK to cleanV)
       }
     }
-    if (metadataRows.isEmpty() && body.isNotBlank()) {
-      metadataRows.add("Detail" to body.take(28))
+    if (hasVaultSecret) {
+      parts.add("Vault password ready")
     }
-
-    // 1. Outer Astryx Card container (#282C35 smoked slate, 26px radius, #525A68 hairline)
-    val cardRect = RectF(8f, 6f, w - 8f, h - 6f)
-    fillPaint.color = Color.rgb(40, 44, 53)
-    canvas.drawRoundRect(cardRect, 26f, 26f, fillPaint)
-    strokePaint.color = Color.rgb(82, 90, 104)
-    strokePaint.strokeWidth = 2f
-    canvas.drawRoundRect(cardRect, 26f, 26f, strokePaint)
-
-    // 2. Top Astryx Status Bar: StatusDot (#38BDF8) + "Walkaway • Astryx HUD" + Domain Badge pill
-    fillPaint.color = Color.rgb(56, 189, 248)
-    canvas.drawCircle(34f, 34f, 6f, fillPaint)
-
-    val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.rgb(163, 172, 185)
-      textSize = 16.5f
-      typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-      textAlign = Paint.Align.LEFT
+    val subtitle = if (parts.isNotEmpty()) {
+      parts.joinToString(" · ").take(80)
+    } else {
+      body.take(80)
     }
-    canvas.drawText("Walkaway • Astryx HUD", 48f, 40f, labelPaint)
-
-    val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.rgb(96, 165, 250)
-      textSize = 14.5f
-      typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-      textAlign = Paint.Align.CENTER
-    }
-    val badgeWidth = (badgeTextPaint.measureText(badgeText) + 28f).coerceAtLeast(96f)
-    val badgeRect = RectF(w - 28f - badgeWidth, 20f, w - 28f, 48f)
-    fillPaint.color = Color.rgb(30, 58, 95)
-    canvas.drawRoundRect(badgeRect, 14f, 14f, fillPaint)
-    strokePaint.color = Color.rgb(59, 130, 246)
-    strokePaint.strokeWidth = 1.2f
-    canvas.drawRoundRect(badgeRect, 14f, 14f, strokePaint)
-    val badgeTextY = badgeRect.centerY() - (badgeTextPaint.descent() + badgeTextPaint.ascent()) / 2f
-    canvas.drawText(badgeText, badgeRect.centerX(), badgeTextY, badgeTextPaint)
-
-    // 3. Astryx Heading level={1} (25px bold #FFFFFF)
-    val headingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.WHITE
-      textSize = 24.5f
-      typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-      textAlign = Paint.Align.LEFT
-    }
-    canvas.drawText(headingText.take(32), 28f, 80f, headingPaint)
-
-    // 4. Elevated inner Astryx <Card variant="muted"> (#343944, 18px radius, #4A5160 hairline)
-    val inlayRect = RectF(24f, 96f, w - 24f, h - 18f)
-    fillPaint.color = Color.rgb(52, 57, 68)
-    canvas.drawRoundRect(inlayRect, 18f, 18f, fillPaint)
-    strokePaint.color = Color.rgb(78, 86, 102)
-    strokePaint.strokeWidth = 1.5f
-    canvas.drawRoundRect(inlayRect, 18f, 18f, strokePaint)
-
-    // 5. Astryx <MetadataList> 2-column rows
-    val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.rgb(163, 172, 185)
-      textSize = 18.5f
-      typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
-      textAlign = Paint.Align.LEFT
-    }
-    val valPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.rgb(243, 245, 248)
-      textSize = 18.5f
-      typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-      textAlign = Paint.Align.RIGHT
-    }
-    metadataRows.take(3).forEachIndexed { idx, (k, v) ->
-      val ry = 128f + idx * 34f
-      canvas.drawText(k, 42f, ry, keyPaint)
-      valPaint.color = if (v.contains("Vault Secret", ignoreCase = true)) {
-        Color.rgb(63, 212, 107)
-      } else {
-        Color.rgb(243, 245, 248)
-      }
-      canvas.drawText(v, w - 42f, ry, valPaint)
-    }
-    return out
+    return heading to subtitle
   }
 
   private suspend fun renderCardContent(
@@ -635,8 +544,9 @@ class WalkawayDat(private val appContext: Context) {
     val frameBitmap = if (isFullGraphic && iconBitmap != null) {
       composeHudFrame(iconBitmap, approveLabel, pulseRedHigh, approvedFlash)
     } else {
-      composeAstryxApprovalCard(title, body)
+      null
     }
+    val (cleanHeading, cleanSubtitle) = formatCleanCardCopy(title, body)
     readyDisplay.sendContent {
       if (isFullGraphic && frameBitmap != null) {
         flexBox(
@@ -658,15 +568,14 @@ class WalkawayDat(private val appContext: Context) {
         }
       } else {
         flexBox(
-          gap = 10,
-          padding = 18,
+          gap = 12,
+          padding = 24,
           background = FlexBoxBackground.CARD
         ) {
-          image(
-            bitmap = frameBitmap,
-            sizePreset = ImageSize.FILL,
-            cornerRadius = CornerRadius.MEDIUM
-          )
+          text(cleanHeading, style = TextStyle.HEADING, color = TextColor.PRIMARY)
+          if (cleanSubtitle.isNotBlank()) {
+            text(cleanSubtitle, style = TextStyle.BODY, color = TextColor.SECONDARY)
+          }
           button(approveLabel, ButtonStyle.PRIMARY, IconName.CHECKMARK, onClick = {
             if (!awaitingAction) return@button
             awaitingAction = false

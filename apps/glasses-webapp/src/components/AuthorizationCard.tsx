@@ -283,18 +283,16 @@ export function AuthorizationCard({
           </Text>
         </VStack>
 
-        {/* Elevated inner smoked-slate context card (#343944) */}
-        <Card variant="muted" padding={3}>
-          <MetadataList columns={2} label={{position: 'top'}}>
-            {active.metadata.map(item => (
-              <MetadataListItem key={item.label} label={item.label}>
-                <Text type="body" weight="semibold" maxLines={1}>
-                  {item.value}
-                </Text>
-              </MetadataListItem>
-            ))}
-          </MetadataList>
-        </Card>
+        {/* Flat metadata list directly on the single card surface */}
+        <MetadataList columns={2} label={{position: 'top'}}>
+          {active.metadata.map(item => (
+            <MetadataListItem key={item.label} label={item.label}>
+              <Text type="body" weight="semibold" maxLines={1}>
+                {item.value}
+              </Text>
+            </MetadataListItem>
+          ))}
+        </MetadataList>
 
         {/* Single non-wrapping 1D horizontal action pill row */}
         <VStack gap={2}>
