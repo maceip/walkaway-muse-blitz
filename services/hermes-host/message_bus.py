@@ -61,6 +61,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(content)
 
@@ -81,7 +82,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 after = 0
             with LOCK:
-                message = next((m for m in MESSAGES if m["id"] > after), None)
+                effective_after = 0 if (MESSAGES and after >= NEXT_ID) else after
+                message = next((m for m in MESSAGES if m["id"] > effective_after), None)
             return self.send_json(200, {"message": message})
         if parsed.path == "/acks":
             with LOCK:

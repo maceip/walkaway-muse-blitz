@@ -197,7 +197,7 @@ class HermesTaskManager:
             bus_port = parsed_bus.port or 19099
             b_env = os.environ.copy()
             b_env["WALKAWAY_BUS_TOKEN"] = self.bus_token
-            b_env["WALKAWAY_BUS_STATE"] = str(self.work_dir / f"bus-state-{bus_port}.json")
+            b_env.setdefault("WALKAWAY_BUS_STATE", "/tmp/walkaway-bus-state.json")
             self.bus_proc = subprocess.Popen(
                 [
                     sys.executable,
