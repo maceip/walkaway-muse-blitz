@@ -1,0 +1,29 @@
+{
+  "name": "glasses-webapp",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "^0.7.11",
+    "@astryxdesign/theme-neutral": "^0.7.11",
+    "@stylexjs/stylex": "^0.19.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@astryxdesign/cli": "^0.7.11",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.1.1",
+    "playwright": "1.55.0",
+    "sharp": "0.35.4",
+    "typescript": "5.9.3",
+    "vite": "8.0.0"
+  }
+}
