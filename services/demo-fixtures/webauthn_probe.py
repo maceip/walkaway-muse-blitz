@@ -63,6 +63,7 @@ PROBE_HTML = """<!DOCTYPE html>
     </div>
     <div class="grid" id="summary-grid"></div>
     <div class="btns">
+      <a id="btn-install-glasses" href="fb-viewapp://web_app_deep_link?appName=Walkaway%20Probe&amp;appUrl=https%3A%2F%2Fleo-parallel-twiki-integral.trycloudflare.com%2F" style="flex:1;min-width:220px;padding:12px 16px;border-radius:10px;border:1px solid #f472b6;background:#be185d;color:#ffffff;font-size:14px;font-weight:700;text-align:center;text-decoration:none;display:inline-block;">Install Web App on Glasses (fb-viewapp://)</a>
       <button class="primary" id="btn-create" type="button">Test credentials.create() (Register)</button>
       <button class="success" id="btn-get" type="button">Test credentials.get() (Sign In)</button>
       <button id="btn-rerun" type="button">Re-Run Probe</button>
@@ -270,6 +271,48 @@ PROBE_HTML = """<!DOCTYPE html>
 
 class ProbeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path in {"/.well-known/meta-wearables-manifest.json", "/manifest.json"}:
+            manifest = {
+                "name": "Walkaway Probe",
+                "short_name": "Walkaway",
+                "description": "WebAuthn & window.credentials capability probe for Meta Ray-Ban Display",
+                "start_url": "/",
+                "scope": "/",
+                "display": "standalone",
+                "theme_color": "#000000",
+                "background_color": "#000000",
+                "icon": {
+                    "src": "/icon.svg",
+                    "type": "image/svg+xml",
+                },
+                "icon_background": {
+                    "gradient": ["#1f2937", "#000000"],
+                },
+            }
+            body = json.dumps(manifest, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/icon.svg":
+            svg = (
+                b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">'
+                b'<circle cx="64" cy="64" r="52" fill="none" stroke="#ffffff" stroke-width="10"/>'
+                b'<path d="M44 64l14 14 26-28" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>'
+                b"</svg>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(svg)))
+            self.end_headers()
+            self.wfile.write(svg)
+            return
+
         if self.path == "/reports":
             rows = []
             if REPORTS_PATH.exists():
