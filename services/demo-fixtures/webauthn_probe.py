@@ -267,6 +267,41 @@ PROBE_HTML = """<!DOCTYPE html>
       });
 
       runProbe();
+
+      var focusables = [
+        document.getElementById('btn-install-glasses'),
+        document.getElementById('btn-create'),
+        document.getElementById('btn-get'),
+        document.getElementById('btn-rerun')
+      ];
+      var focusIdx = 1;
+      function applyFocus(idx) {
+        focusIdx = (idx + focusables.length) % focusables.length;
+        for (var i = 0; i < focusables.length; i++) {
+          if (!focusables[i]) continue;
+          if (i === focusIdx) {
+            focusables[i].classList.add('focused');
+            focusables[i].focus();
+          } else {
+            focusables[i].classList.remove('focused');
+          }
+        }
+      }
+      window.addEventListener('keydown', function(e) {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          applyFocus(focusIdx + 1);
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          applyFocus(focusIdx - 1);
+        } else if (e.key === 'Enter') {
+          if (focusables[focusIdx]) {
+            e.preventDefault();
+            focusables[focusIdx].click();
+          }
+        }
+      });
+      setTimeout(function() { applyFocus(1); }, 100);
     })();
   </script>
 </body>
