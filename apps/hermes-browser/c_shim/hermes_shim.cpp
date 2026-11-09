@@ -49,6 +49,21 @@ int blitz_dom_scratch_bytes_get(void *ctx, size_t index);
 void blitz_dom_set_allow_credentials(void *ctx, const char *json);
 void blitz_dom_submit_form(void *ctx, uint64_t node);
 void blitz_dom_mark_dirty(void *ctx);
+int blitz_dom_get_cookie(void *ctx);
+void blitz_dom_set_cookie(void *ctx, const char *cookie);
+int blitz_dom_get_location_url(void *ctx);
+void blitz_dom_set_location_url(void *ctx, const char *url, int push_only);
+int blitz_dom_storage_get(void *ctx, int is_session, const char *key);
+void blitz_dom_storage_set(void *ctx, int is_session, const char *key, const char *value);
+void blitz_dom_storage_remove(void *ctx, int is_session, const char *key);
+void blitz_dom_storage_clear(void *ctx, int is_session);
+int blitz_dom_http_fetch(
+    void *ctx,
+    const char *method,
+    const char *url,
+    const char *headers_json,
+    const char *body_utf8);
+void blitz_dom_console_log(void *ctx, const char *level, const char *message);
 }
 
 struct HermesAppRuntime {
@@ -200,6 +215,60 @@ extern "C" void blitz_mark_dirty(void) {
   blitz_dom_mark_dirty(g_app->blitz_ctx);
 }
 
+extern "C" int blitz_get_cookie(void) {
+  if (!g_app) return -1;
+  return blitz_dom_get_cookie(g_app->blitz_ctx);
+}
+
+extern "C" void blitz_set_cookie(const char *cookie) {
+  if (!g_app) return;
+  blitz_dom_set_cookie(g_app->blitz_ctx, cookie);
+}
+
+extern "C" int blitz_get_location_url(void) {
+  if (!g_app) return -1;
+  return blitz_dom_get_location_url(g_app->blitz_ctx);
+}
+
+extern "C" void blitz_set_location_url(const char *url, int push_only) {
+  if (!g_app) return;
+  blitz_dom_set_location_url(g_app->blitz_ctx, url, push_only);
+}
+
+extern "C" int blitz_storage_get(int is_session, const char *key) {
+  if (!g_app) return -1;
+  return blitz_dom_storage_get(g_app->blitz_ctx, is_session, key);
+}
+
+extern "C" void blitz_storage_set(int is_session, const char *key, const char *value) {
+  if (!g_app) return;
+  blitz_dom_storage_set(g_app->blitz_ctx, is_session, key, value);
+}
+
+extern "C" void blitz_storage_remove(int is_session, const char *key) {
+  if (!g_app) return;
+  blitz_dom_storage_remove(g_app->blitz_ctx, is_session, key);
+}
+
+extern "C" void blitz_storage_clear(int is_session) {
+  if (!g_app) return;
+  blitz_dom_storage_clear(g_app->blitz_ctx, is_session);
+}
+
+extern "C" int blitz_http_fetch(
+    const char *method,
+    const char *url,
+    const char *headers_json,
+    const char *body_utf8) {
+  if (!g_app) return -1;
+  return blitz_dom_http_fetch(g_app->blitz_ctx, method, url, headers_json, body_utf8);
+}
+
+extern "C" void blitz_console_log(const char *level, const char *message) {
+  if (!g_app) return;
+  blitz_dom_console_log(g_app->blitz_ctx, level, message);
+}
+
 /* ------------------------------------------------------------------------- */
 /* Runtime lifecycle                                                          */
 /* ------------------------------------------------------------------------- */
@@ -284,12 +353,15 @@ extern "C" bool hermes_app_dispatch_event(
     return true;
   } catch (const facebook::jsi::JSIException &e) {
     std::fprintf(stderr, "[hermes] event dispatch threw JSIException: %s\n", e.what());
+    blitz_dom_console_log(app->blitz_ctx, "error", e.what());
     return false;
   } catch (const std::exception &e) {
     std::fprintf(stderr, "[hermes] event dispatch threw std::exception: %s\n", e.what());
+    blitz_dom_console_log(app->blitz_ctx, "error", e.what());
     return false;
   } catch (...) {
     std::fprintf(stderr, "[hermes] event dispatch threw unknown exception\n");
+    blitz_dom_console_log(app->blitz_ctx, "error", "unknown exception during event dispatch");
     return false;
   }
 }
@@ -308,12 +380,45 @@ extern "C" bool hermes_app_eval_script(
     return true;
   } catch (const facebook::jsi::JSIException &e) {
     std::fprintf(stderr, "[hermes] eval threw JSIException: %s\n", e.what());
+    blitz_dom_console_log(app->blitz_ctx, "error", e.what());
     return false;
   } catch (const std::exception &e) {
     std::fprintf(stderr, "[hermes] eval threw std::exception: %s\n", e.what());
+    blitz_dom_console_log(app->blitz_ctx, "error", e.what());
     return false;
   } catch (...) {
     std::fprintf(stderr, "[hermes] eval threw unknown exception\n");
+    blitz_dom_console_log(app->blitz_ctx, "error", "unknown exception during script eval");
+    return false;
+  }
+}
+
+extern "C" bool hermes_app_eval_console(
+    HermesAppRuntime *app,
+    const char *script_utf8) {
+  if (!app || !app->rt || !script_utf8) return false;
+  ScopedCurrentApp current(app);
+  facebook::jsi::Runtime &j = *app->rt;
+  std::string cmd_line = std::string("> ") + script_utf8;
+  blitz_dom_console_log(app->blitz_ctx, "input", cmd_line.c_str());
+  try {
+    auto buf = std::make_shared<facebook::jsi::StringBuffer>(script_utf8);
+    facebook::jsi::Value val = j.evaluateJavaScript(buf, "<console>");
+    j.drainMicrotasks();
+    facebook::jsi::Function string_ctor =
+        j.global().getPropertyAsFunction(j, "String");
+    std::string out_str =
+        string_ctor.call(j, val).asString(j).utf8(j);
+    blitz_dom_console_log(app->blitz_ctx, "result", out_str.c_str());
+    return true;
+  } catch (const facebook::jsi::JSIException &e) {
+    blitz_dom_console_log(app->blitz_ctx, "error", e.what());
+    return false;
+  } catch (const std::exception &e) {
+    blitz_dom_console_log(app->blitz_ctx, "error", e.what());
+    return false;
+  } catch (...) {
+    blitz_dom_console_log(app->blitz_ctx, "error", "unknown console eval exception");
     return false;
   }
 }

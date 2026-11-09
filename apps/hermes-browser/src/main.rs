@@ -86,6 +86,7 @@ unsafe extern "C" {
         script_utf8: *const c_char,
         source_url: *const c_char,
     ) -> bool;
+    fn hermes_app_eval_console(app: *mut HermesAppRuntime, script_utf8: *const c_char) -> bool;
     fn hermes_app_destroy(app: *mut HermesAppRuntime);
 }
 
@@ -450,8 +451,17 @@ impl Page {
         // can be bound to the origin the document was actually served from.
         // Deriving it from the relying party's own `rpId` would make the
         // origin check vacuous.
-        let origin = base.as_ref().map(|url| url.origin().ascii_serialization()).unwrap_or_default();
-        let mut ctx = Box::new(BlitzHostContext::with_origin_and_broker(doc, &origin, broker));
+        let doc_url = base
+            .as_ref()
+            .map(|url| url.to_string())
+            .unwrap_or_default();
+        let origin = base
+            .as_ref()
+            .map(|url| url.origin().ascii_serialization())
+            .unwrap_or_default();
+        let mut ctx = Box::new(BlitzHostContext::with_url_and_broker(
+            doc, &doc_url, &origin, broker,
+        ));
         let hermes =
             unsafe { hermes_app_init((&mut *ctx as *mut BlitzHostContext).cast::<c_void>()) };
         let mut page = Self { ctx, hermes };
@@ -583,6 +593,7 @@ impl Page {
             .and_then(|u| u.host_str())
             .is_some_and(|h| h == "127.0.0.1" || h == "localhost");
 
+        let script_count = script_nodes.len();
         for nid in script_nodes {
             let (script_type, src_attr, inline_code) = {
                 let Some(node) = self.ctx.doc.get_node(nid) else {
@@ -619,17 +630,27 @@ impl Page {
             }
 
             if let Some(src_raw) = src_attr {
-                if !is_local_base {
-                    // Skip blocking main-thread fetches of third-party external script bundles on remote pages.
-                    continue;
-                }
-                let (Some(base_url), Some(prov)) = (base.as_ref(), provider.as_ref()) else {
+                let Some(base_url) = base.as_ref() else {
                     continue;
                 };
                 let Ok(script_url) = base_url.join(&src_raw) else {
                     continue;
                 };
-                if let Ok(code) = browser::fetch(prov, &script_url) {
+                if browser::is_blocked_tracker_url(&script_url) {
+                    continue;
+                }
+                let is_same_origin = script_url.origin() == base_url.origin();
+                if !is_local_base && (!is_same_origin || script_count > 8) {
+                    // Skip blocking main-thread fetches of third-party or massive portal script bundles.
+                    continue;
+                }
+                let fetched = if let Some(prov) = provider.as_ref() {
+                    browser::fetch(prov, &script_url)
+                } else {
+                    browser::execute_http("GET", &script_url, &[], None)
+                        .map(|ex| String::from_utf8_lossy(&ex.body).into_owned())
+                };
+                if let Ok(code) = fetched {
                     if !code.trim().is_empty() && code.len() <= 512_000 {
                         if let (Ok(c_code), Ok(c_url)) = (
                             std::ffi::CString::new(code),
@@ -1615,7 +1636,10 @@ impl BrowserApp {
             "submit": "supported",
             "vault": "supported",
             "recall": "supported",
-            "cookies_persistent": "unsupported",
+            "cookies_persistent": "supported",
+            "fetch": "supported",
+            "web_storage": "supported",
+            "js_console": "supported",
             "passkeys": "supported",
             "passkey_broker": "supported",
             "credential_broker": "supported",
@@ -1683,8 +1707,10 @@ impl BrowserApp {
                 .get("proposal_id")
                 .and_then(Value::as_str)
                 .is_some_and(|id| id.starts_with("page-passkey-"));
-        if !matches!(kind.as_str(), "ping" | "capabilities.get" | "session.open")
-            && !is_page_passkey_decision
+        if !matches!(
+            kind.as_str(),
+            "ping" | "capabilities.get" | "session.open" | "console.read" | "console.eval"
+        ) && !is_page_passkey_decision
         {
             self.activate_session_for_frame(&frame);
             match self.control.as_ref() {
@@ -1701,6 +1727,8 @@ impl BrowserApp {
                     }
                 }
             }
+        } else if matches!(kind.as_str(), "console.read" | "console.eval") {
+            self.activate_session_for_frame(&frame);
         }
         match kind.as_str() {
             "ping" => {
@@ -2042,6 +2070,82 @@ impl BrowserApp {
                     "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
                     "session_id": self.control.as_ref().map(|s| s.id.clone()),
                     "records": records, "at": control::now_iso(),
+                });
+                self.emit(OutTarget::Conn(conn_id), body);
+            }
+            "console.read" => {
+                let tab_id = self
+                    .control
+                    .as_ref()
+                    .map(|s| s.tab_id)
+                    .unwrap_or_else(|| self.tab().canonical.id);
+                let entries = self
+                    .tabs
+                    .iter()
+                    .find(|t| t.canonical.id == tab_id)
+                    .map(|t| t.instance.page.ctx.console_logs.clone())
+                    .unwrap_or_default();
+                let body = json!({
+                    "v": 1, "type": "console.result",
+                    "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                    "session_id": self.control.as_ref().map(|s| s.id.clone()),
+                    "tab_id": tab_id.0,
+                    "entries": entries,
+                    "at": control::now_iso(),
+                });
+                self.emit(OutTarget::Conn(conn_id), body);
+            }
+            "console.eval" => {
+                let Some(expr) = frame
+                    .get("expression")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                else {
+                    self.refused(conn_id, &frame, "internal");
+                    return;
+                };
+                let tab_id = self
+                    .control
+                    .as_ref()
+                    .map(|s| s.tab_id)
+                    .unwrap_or_else(|| self.tab().canonical.id);
+                let mut ok = false;
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.canonical.id == tab_id) {
+                    if let Ok(c_expr) = std::ffi::CString::new(expr) {
+                        ok = unsafe {
+                            hermes_app_eval_console(tab.instance.page.hermes, c_expr.as_ptr())
+                        };
+                    }
+                    if tab.instance.page.ctx.dirty {
+                        tab.instance.page.resolve();
+                        tab.instance.page.ctx.dirty = false;
+                        tab.bump_generation();
+                    }
+                }
+                self.follow_pending_js_navigation(tab_id);
+                let entries = self
+                    .tabs
+                    .iter()
+                    .find(|t| t.canonical.id == tab_id)
+                    .map(|t| t.instance.page.ctx.console_logs.clone())
+                    .unwrap_or_default();
+                let last_res = entries
+                    .iter()
+                    .rev()
+                    .find(|e| e.level == "result" || e.level == "error")
+                    .map(|e| e.message.clone())
+                    .unwrap_or_default();
+                self.sync_chrome();
+                self.request_redraw();
+                let body = json!({
+                    "v": 1, "type": "console.result",
+                    "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
+                    "session_id": self.control.as_ref().map(|s| s.id.clone()),
+                    "tab_id": tab_id.0,
+                    "ok": ok,
+                    "result": last_res,
+                    "entries": entries,
+                    "at": control::now_iso(),
                 });
                 self.emit(OutTarget::Conn(conn_id), body);
             }
@@ -3591,6 +3695,7 @@ impl BrowserApp {
                 {
                     self.submit_page_form(form_node);
                 }
+                self.follow_pending_js_navigation(tab_id);
             }
             PageCommand::Type {
                 target_id,
@@ -4407,9 +4512,11 @@ impl BrowserApp {
         self.flush_control_out();
 
         self.passkey_prompt = None;
+        let active_tab_id = self.tab().canonical.id;
         if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
             self.submit_page_form(form_node);
         }
+        self.follow_pending_js_navigation(active_tab_id);
         self.sync_chrome();
         self.request_redraw();
     }
@@ -4725,6 +4832,7 @@ impl BrowserApp {
             scrapbook_items: &scrapbook_items,
             favorites: &fav_items,
             history_entries: &hist_items,
+            console_entries: &self.tab().instance.page.ctx.console_logs,
             passkey_prompt: self
                 .passkey_prompt
                 .as_ref()
@@ -4895,18 +5003,173 @@ impl BrowserApp {
         self.request_redraw();
 
         std::thread::spawn(move || {
-            let result = browser::fetch(&provider, &fetch_url);
+            let (final_url, result) = match browser::fetch_with_final_url(&provider, &fetch_url) {
+                Ok((final_url, html)) => (final_url, Ok(html)),
+                Err(e) => (fetch_url, Err(e)),
+            };
             let _ = proxy.send_event(UserEvent::Navigated {
                 tab: tab_id,
                 generation,
-                url: fetch_url,
+                url: final_url,
                 result,
             });
         });
     }
 
+    fn follow_pending_js_navigation(&mut self, tab_id: TabId) {
+        for _hop in 0..4 {
+            let pending_url_str = self
+                .tabs
+                .iter_mut()
+                .find(|t| t.canonical.id == tab_id)
+                .and_then(|t| t.instance.page.ctx.pending_navigation.take());
+            let Some(raw_target) = pending_url_str else {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.canonical.id == tab_id) {
+                    let doc_url = tab.instance.page.ctx.doc_url.clone();
+                    if !doc_url.is_empty() && doc_url != tab.canonical.browser.display_url() {
+                        if let Ok(pushed_url) = Url::parse(&doc_url) {
+                            let cur_html = tab
+                                .canonical
+                                .browser
+                                .current()
+                                .map(|e| e.html.clone())
+                                .unwrap_or_default();
+                            tab.canonical.browser.commit(pushed_url, cur_html);
+                        }
+                    }
+                }
+                break;
+            };
+            let Ok(target_url) = browser::normalize_input(&raw_target) else {
+                break;
+            };
+            let viewport = self.content_viewport();
+            let theme = self.theme;
+            let provider = self.provider.clone();
+            let broker = self.passkey_broker.clone();
+            let prior_logs = self
+                .tabs
+                .iter()
+                .find(|t| t.canonical.id == tab_id)
+                .map(|t| t.instance.page.ctx.console_logs.clone())
+                .unwrap_or_default();
+            if target_url.scheme() == "muse" {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.canonical.id == tab_id) {
+                    tab.canonical
+                        .browser
+                        .commit(target_url, START_PAGE.to_string());
+                    let mut new_page = Page::load_with_broker(
+                        START_PAGE,
+                        None,
+                        None,
+                        viewport,
+                        theme,
+                        broker,
+                    );
+                    let mut combined = prior_logs;
+                    combined.extend(std::mem::take(&mut new_page.ctx.console_logs));
+                    new_page.ctx.console_logs = combined;
+                    tab.replace_page(new_page);
+                    tab.canonical.title = "New tab".to_string();
+                }
+                break;
+            }
+            match browser::fetch_with_final_url(&provider, &target_url) {
+                Ok((final_url, html)) => {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.canonical.id == tab_id) {
+                        tab.canonical
+                            .browser
+                            .commit(final_url.clone(), html.clone());
+                        let mut new_page = Page::load_with_broker(
+                            &html,
+                            Some(final_url.clone()),
+                            Some(provider),
+                            viewport,
+                            theme,
+                            broker,
+                        );
+                        let mut combined = prior_logs;
+                        combined.extend(std::mem::take(&mut new_page.ctx.console_logs));
+                        new_page.ctx.console_logs = combined;
+                        let pushed_doc_url = new_page.ctx.doc_url.clone();
+                        tab.replace_page(new_page);
+                        if pushed_doc_url != final_url.as_str() {
+                            if let Ok(pushed_url) = Url::parse(&pushed_doc_url) {
+                                tab.canonical.browser.commit(pushed_url, html);
+                            }
+                        }
+                        tab.canonical.browser.error = None;
+                        tab.canonical.title = title_for(&final_url, tab.instance.page.doc());
+                    }
+                    if self.control.as_ref().is_some_and(|s| s.tab_id == tab_id) {
+                        if let Some(session) = self.control.as_mut() {
+                            session.snapshot_valid = false;
+                        }
+                        self.session_event(
+                            OutTarget::Both,
+                            "nav.committed",
+                            json!({"tab_id": tab_id.0, "url": final_url.to_string()}),
+                        );
+                    }
+                }
+                Err(_) => {
+                    if let Some(tab) = self.tabs.iter_mut().find(|t| t.canonical.id == tab_id) {
+                        let cur_html = tab
+                            .canonical
+                            .browser
+                            .current()
+                            .map(|e| e.html.clone())
+                            .unwrap_or_default();
+                        tab.canonical.browser.commit(target_url, cur_html);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    fn eval_console_on_active_tab(&mut self, expr: &str) {
+        let trimmed = expr.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let tab_id = self.tab().canonical.id;
+        if let Ok(c_expr) = std::ffi::CString::new(trimmed) {
+            let hermes = self.tab().instance.page.hermes;
+            unsafe {
+                hermes_app_eval_console(hermes, c_expr.as_ptr());
+            }
+        }
+        if self.tab().instance.page.ctx.dirty {
+            let tab = self.tab_mut();
+            tab.instance.page.resolve();
+            tab.instance.page.ctx.dirty = false;
+            tab.bump_generation();
+        }
+        self.follow_pending_js_navigation(tab_id);
+        self.sync_chrome();
+        self.request_redraw();
+    }
+
     fn navigate(&mut self, input: &str) {
         let trimmed_input = input.trim();
+        if let Some(js_expr) = trimmed_input
+            .strip_prefix("javascript:")
+            .or_else(|| trimmed_input.strip_prefix("JAVASCRIPT:"))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let expr_owned = js_expr.to_string();
+            let tab = self.tab_mut();
+            tab.canonical.browser.focused = false;
+            tab.canonical.browser.address_select_all = false;
+            tab.canonical.browser.sync_address();
+            self.menu_open = false;
+            self.explorer_tab = Some(ExplorerTab::Console);
+            self.reflow_active_tab();
+            self.eval_console_on_active_tab(&expr_owned);
+            return;
+        }
         let agent_goal = trimmed_input
             .strip_prefix("agent:")
             .or_else(|| trimmed_input.strip_prefix("AGENT:"))
@@ -5294,6 +5557,45 @@ impl BrowserApp {
             self.toggle_explorer_tab(ExplorerTab::PageHolder);
             return;
         }
+        if id_is("exp-console") {
+            self.toggle_explorer_tab(ExplorerTab::Console);
+            return;
+        }
+
+        // JavaScript Console drawer controls.
+        if id_is("console-clear") {
+            self.tab_mut().instance.page.ctx.console_logs.clear();
+            self.sync_chrome();
+            self.request_redraw();
+            return;
+        }
+        if id_is("console-run") {
+            let addr = self.tab().canonical.browser.address.trim().to_string();
+            let committed_url = self
+                .tab()
+                .canonical
+                .browser
+                .current()
+                .map(|e| e.url.to_string())
+                .unwrap_or_default();
+            let expr = if let Some(js) = addr
+                .strip_prefix("javascript:")
+                .or_else(|| addr.strip_prefix("JAVASCRIPT:"))
+            {
+                js.trim().to_string()
+            } else if !addr.is_empty()
+                && addr != committed_url
+                && !addr.starts_with("http://")
+                && !addr.starts_with("https://")
+                && !addr.starts_with("muse://")
+            {
+                addr
+            } else {
+                "window.location.href".to_string()
+            };
+            self.eval_console_on_active_tab(&expr);
+            return;
+        }
 
         // Page Holder drawer controls & link retargeting.
         if id_is("ph-add") {
@@ -5501,6 +5803,10 @@ impl BrowserApp {
                 self.request_redraw();
                 return;
             }
+            if id_is("menu-console") {
+                self.toggle_explorer_tab(ExplorerTab::Console);
+                return;
+            }
             if id_is("menu-close-tab") {
                 let index = self.active;
                 self.close_tab(index);
@@ -5661,6 +5967,13 @@ impl BrowserApp {
         }
         if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
             self.submit_page_form(form_node);
+            return;
+        }
+        if self.tab().instance.page.ctx.pending_navigation.is_some() {
+            let tab_id = self.tab().canonical.id;
+            self.follow_pending_js_navigation(tab_id);
+            self.sync_chrome();
+            self.request_redraw();
             return;
         }
 
@@ -5841,6 +6154,7 @@ impl BrowserApp {
                 self.session_event(OutTarget::Both, "nav.failed", json!({"error": e}));
             }
         }
+        self.follow_pending_js_navigation(tab_id);
         self.sync_chrome();
         self.request_redraw();
         self.flush_control_out();
@@ -6372,6 +6686,7 @@ impl BrowserApp {
                 target.canonical.title = "Error".to_string();
             }
         }
+        self.follow_pending_js_navigation(tab_id);
         if self.control.as_ref().is_some_and(|s| s.tab_id == tab_id) {
             if let Some(session) = self.control.as_mut() {
                 session.snapshot_valid = false;
@@ -7865,6 +8180,15 @@ fn main() {
 fn prepare_test_run() {
     let _ = keychain::ensure_no_user_interaction();
     credentials::set_passkey_service_override(&test_passkey_service());
+    let cookie_path = std::env::temp_dir().join(format!(
+        "hermes_test_cookies_{}.json",
+        std::process::id()
+    ));
+    unsafe {
+        std::env::set_var("HERMES_COOKIE_JAR_PATH", &cookie_path);
+    }
+    browser::clear_cookies();
+    dom_ffi::clear_local_storage();
 }
 
 /// The Keychain service this test run uses for passkeys.
@@ -7883,6 +8207,13 @@ fn test_passkey_service() -> String {
 fn cleanup_test_run() {
     let service = test_passkey_service();
     keychain::delete_generic_item(&service, credentials::PASSKEY_KEYCHAIN_ACCOUNT);
+    browser::clear_cookies();
+    dom_ffi::clear_local_storage();
+    let cookie_path = std::env::temp_dir().join(format!(
+        "hermes_test_cookies_{}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(cookie_path);
 }
 
 /// `--uitest`: drive the real chrome click handler at coordinates obtained from
@@ -8465,6 +8796,109 @@ fn uitest() -> i32 {
         );
     }
 
+    // 5. JS Console Explorer drawer (#exp-console), live Eval (#console-run), Clear (#console-clear),
+    //    javascript: address bar evaluation, and control socket console.eval / console.read.
+    if let Some((x, y)) = find_click(&app, "exp-console") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.explorer_tab == Some(ExplorerTab::Console)
+            && app.chrome_doc.get_element_by_id("console-header").is_some()
+            && app.chrome_doc.get_element_by_id("console-run").is_some()
+            && app.chrome_doc.get_element_by_id("console-clear").is_some(),
+        "clicking #exp-console opens the JS Console drawer with Eval and Clear controls",
+    ) {
+        failures += 1;
+    }
+
+    if let Some((x, y)) = find_click(&app, "address") {
+        app.handle_chrome_click(x, y);
+    }
+    app.tab_mut().canonical.browser.address =
+        "console.log('ui_console_hello'); 21 * 2".to_string();
+    if let Some((x, y)) = find_click(&app, "console-run") {
+        app.handle_chrome_click(x, y);
+    }
+    let has_hello_and_42 = {
+        let logs = &app.tab().instance.page.ctx.console_logs;
+        logs.iter()
+            .any(|e| e.level == "log" && e.message.contains("ui_console_hello"))
+            && logs
+                .iter()
+                .any(|e| e.level == "result" && e.message == "42")
+    };
+    if !check(
+        has_hello_and_42 && app.chrome_doc.get_element_by_id("console-entry-0").is_some(),
+        "clicking #console-run evaluates JS in active tab, logs console.log + return value, and renders #console-entry-0",
+    ) {
+        failures += 1;
+    }
+
+    if let Some((x, y)) = find_click(&app, "console-clear") {
+        app.handle_chrome_click(x, y);
+    }
+    if !check(
+        app.tab().instance.page.ctx.console_logs.is_empty(),
+        "clicking #console-clear clears active tab console logs",
+    ) {
+        failures += 1;
+    }
+
+    app.navigate("javascript:console.warn('warn_from_addr')");
+    if !check(
+        app.tab()
+            .instance
+            .page
+            .ctx
+            .console_logs
+            .iter()
+            .any(|e| e.level == "warn" && e.message.contains("warn_from_addr")),
+        "navigating to javascript: URL evaluates script and records console.warn entry",
+    ) {
+        failures += 1;
+    }
+
+    app.control_connect(77, Role::Host);
+    app.handle_control(
+        77,
+        json!({
+            "v": 1,
+            "seq": 1,
+            "type": "console.eval",
+            "request_id": "ce_1",
+            "expression": "console.info('sock_info'); 100 + 23"
+        }),
+    );
+    app.handle_control(
+        77,
+        json!({
+            "v": 1,
+            "seq": 2,
+            "type": "console.read",
+            "request_id": "cr_1"
+        }),
+    );
+    let sock_out = app.drain_control_out();
+    let eval_ok = sock_out.iter().any(|(_, v)| {
+        v.get("type").and_then(Value::as_str) == Some("console.result")
+            && v.get("request_id").and_then(Value::as_str) == Some("ce_1")
+            && v.get("ok").and_then(Value::as_bool) == Some(true)
+            && v.get("result").and_then(Value::as_str) == Some("123")
+    });
+    let read_ok = sock_out.iter().any(|(_, v)| {
+        v.get("type").and_then(Value::as_str) == Some("console.result")
+            && v.get("request_id").and_then(Value::as_str) == Some("cr_1")
+            && v.get("entries")
+                .and_then(Value::as_array)
+                .is_some_and(|arr| arr.len() >= 2)
+    });
+    if !check(
+        eval_ok && read_ok,
+        "control socket console.eval and console.read evaluate JS and return structured console entries",
+    ) {
+        failures += 1;
+    }
+
     cleanup_test_run();
 
     if failures == 0 {
@@ -8806,6 +9240,269 @@ fn runtimetest() -> i32 {
         challenge_ok,
         "the pending ceremony is waiting at the broker's approval gate",
     );
+
+    // Part 4 (Steps 1–4): End-to-end RFC 6265 Cookie Jar (HttpOnly + document.cookie),
+    // 302 redirect following, external same-origin <script src="...">, window.fetch +
+    // Headers + Response.json(), URLSearchParams, setTimeout/queueMicrotask,
+    // origin-scoped localStorage + sessionStorage, window.location + history.pushState,
+    // and console.* capture across a real multi-route TCP HTTP server.
+    {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Mutex;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind part4 server");
+        let port = listener.local_addr().expect("local addr").port();
+        let seen_api_cookie = Arc::new(Mutex::new(String::new()));
+        let seen_api_csrf = Arc::new(Mutex::new(String::new()));
+        let seen_api_body = Arc::new(Mutex::new(String::new()));
+        let seen_dash_cookie = Arc::new(Mutex::new(String::new()));
+
+        let api_cookie_sink = seen_api_cookie.clone();
+        let api_csrf_sink = seen_api_csrf.clone();
+        let api_body_sink = seen_api_body.clone();
+        let dash_cookie_sink = seen_dash_cookie.clone();
+
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut buf = [0u8; 8192];
+                let mut total = Vec::new();
+                let mut header_end = None;
+                let mut content_len = 0usize;
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            total.extend_from_slice(&buf[..n]);
+                            if header_end.is_none() {
+                                if let Some(pos) = total.windows(4).position(|w| w == b"\r\n\r\n") {
+                                    let h_end = pos + 4;
+                                    header_end = Some(h_end);
+                                    let hdrs = String::from_utf8_lossy(&total[..h_end]);
+                                    for line in hdrs.lines() {
+                                        if let Some(rest) = line
+                                            .to_ascii_lowercase()
+                                            .strip_prefix("content-length:")
+                                        {
+                                            content_len = rest.trim().parse().unwrap_or(0);
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(h_end) = header_end {
+                                if total.len() >= h_end + content_len {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                let h_end = header_end.unwrap_or(total.len());
+                let head = String::from_utf8_lossy(&total[..h_end]).to_string();
+                let body = String::from_utf8_lossy(&total[h_end..]).to_string();
+                let req_line = head.lines().next().unwrap_or("");
+                let mut cookie_hdr = String::new();
+                let mut csrf_hdr = String::new();
+                for line in head.lines().skip(1) {
+                    if let Some((k, v)) = line.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("cookie") {
+                            cookie_hdr = v.trim().to_string();
+                        } else if k.trim().eq_ignore_ascii_case("x-csrf-token") {
+                            csrf_hdr = v.trim().to_string();
+                        }
+                    }
+                }
+
+                if req_line.starts_with("GET /start ") {
+                    let resp = "HTTP/1.1 302 Found\r\nLocation: /login\r\nSet-Cookie: pre_auth=step1; Path=/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if req_line.starts_with("GET /login ") {
+                    let html = r#"<!DOCTYPE html><html><head><title>Flow Login</title></head><body>
+                        <div id="login-status" data-cookie-seen="">Signing in...</div>
+                        <script src="/bundle.js"></script>
+                    </body></html>"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html.len(),
+                        html
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if req_line.starts_with("GET /bundle.js ") {
+                    let js = r#"
+                        console.info("bundle.js initialized");
+                        localStorage.setItem("oauth_pkce_verifier", "v_secret_987");
+                        sessionStorage.setItem("wizard_step", "step_two");
+                        document.cookie = "client_theme=aqua; Path=/";
+                        var usp = new URLSearchParams("client=hermes&flow=pkce");
+                        usp.append("scope", "write");
+                        queueMicrotask(function() {
+                            console.debug("microtask executed");
+                        });
+                        setTimeout(function() {
+                            fetch("/api/login", {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/x-www-form-urlencoded",
+                                    "X-CSRF-Token": "csrf_42"
+                                },
+                                body: usp.toString()
+                            }).then(function(resp) {
+                                var authHdr = resp.headers.get("x-auth-status") || "";
+                                console.log("fetch_status:" + String(resp.status) + ":" + authHdr);
+                                return resp.json();
+                            }).then(function(data) {
+                                if (data && data.redirect) {
+                                    window.location.href = data.redirect;
+                                }
+                            });
+                        }, 0);
+                    "#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/javascript; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        js.len(),
+                        js
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if req_line.starts_with("POST /api/login ") {
+                    *api_cookie_sink.lock().expect("lock") = cookie_hdr;
+                    *api_csrf_sink.lock().expect("lock") = csrf_hdr;
+                    *api_body_sink.lock().expect("lock") = body;
+                    let json_body = r#"{"redirect":"/dashboard?tab=activity#recent","user":"ada"}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Auth-Status: granted\r\nSet-Cookie: session_id=http_only_token_xyz; HttpOnly; Path=/\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        json_body.len(),
+                        json_body
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if req_line.starts_with("GET /dashboard") {
+                    *dash_cookie_sink.lock().expect("lock") = cookie_hdr;
+                    let html = r#"<!DOCTYPE html><html><head><title>Account Dashboard</title></head><body>
+                        <div id="dashboard-state">Dashboard Ready</div>
+                        <script>
+                            var st = document.getElementById("dashboard-state");
+                            st.setAttribute("data-initial-loc", window.location.pathname + "|" + window.location.search + "|" + window.location.hash);
+                            window.history.pushState(null, "", "/dashboard/profile?view=security#keys");
+                            st.setAttribute("data-pushed-loc", window.location.pathname + "|" + window.location.search + "|" + window.location.hash);
+                            st.setAttribute("data-cookie-js", document.cookie);
+                            st.setAttribute("data-pkce", String(localStorage.getItem("oauth_pkce_verifier")));
+                            st.setAttribute("data-wizard", String(sessionStorage.getItem("wizard_step")));
+                            console.log("dashboard hydrated for " + window.location.origin);
+                        </script>
+                    </body></html>"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html.len(),
+                        html
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                }
+            }
+        });
+
+        let mut flow_app = test_app();
+        let start_url = Url::parse(&format!("http://127.0.0.1:{port}/start")).expect("start url");
+        let (final_url, html) =
+            browser::fetch_with_final_url(&flow_app.provider, &start_url).expect("fetch /start");
+        check(
+            final_url.path() == "/login",
+            "302 redirect from /start follows Location header to /login and returns final_url",
+        );
+        let tab_id = flow_app.tab().canonical.id;
+        let nav_gen = flow_app.tab().canonical.browser.generation;
+        flow_app.handle_navigated(tab_id, nav_gen, final_url, Ok(html));
+
+        let api_cookie = seen_api_cookie.lock().expect("lock").clone();
+        let api_csrf = seen_api_csrf.lock().expect("lock").clone();
+        let api_body = seen_api_body.lock().expect("lock").clone();
+        let dash_cookie = seen_dash_cookie.lock().expect("lock").clone();
+
+        check(
+            api_cookie.contains("pre_auth=step1")
+                && api_cookie.contains("client_theme=aqua")
+                && api_csrf == "csrf_42"
+                && api_body == "client=hermes&flow=pkce&scope=write",
+            "external <script src='/bundle.js'> executes URLSearchParams + window.fetch POST with RFC 6265 cookies and custom headers",
+        );
+        check(
+            dash_cookie.contains("session_id=http_only_token_xyz")
+                && dash_cookie.contains("pre_auth=step1")
+                && dash_cookie.contains("client_theme=aqua"),
+            "subsequent navigation to /dashboard sends HttpOnly session_id cookie alongside JS and redirect cookies",
+        );
+
+        let dash_doc = flow_app.tab().instance.page.doc();
+        let dash_el = dash_doc.get_element_by_id("dashboard-state");
+        let attr_of = |name: &str| -> String {
+            dash_el
+                .and_then(|id| dash_doc.get_node(id))
+                .and_then(|n| n.attr(LocalName::from(name)))
+                .unwrap_or_default()
+                .to_string()
+        };
+        check(
+            attr_of("data-initial-loc") == "/dashboard|?tab=activity|#recent"
+                && attr_of("data-pushed-loc") == "/dashboard/profile|?view=security|#keys"
+                && flow_app
+                    .tab()
+                    .canonical
+                    .browser
+                    .display_url()
+                    .ends_with("/dashboard/profile?view=security#keys"),
+            "window.location.href navigation and window.history.pushState update pathname, search, hash, and browser display_url",
+        );
+        let cookie_js = attr_of("data-cookie-js");
+        check(
+            cookie_js.contains("pre_auth=step1")
+                && cookie_js.contains("client_theme=aqua")
+                && !cookie_js.contains("http_only_token_xyz")
+                && !cookie_js.contains("session_id="),
+            "document.cookie exposes non-HttpOnly cookies and hides HttpOnly session_id cookie from JavaScript",
+        );
+        check(
+            attr_of("data-pkce") == "v_secret_987" && attr_of("data-wizard") == "step_two",
+            "localStorage and sessionStorage persist state across same-origin multi-page navigation within the tab",
+        );
+        check(
+            flow_app
+                .tab()
+                .instance
+                .page
+                .ctx
+                .console_logs
+                .iter()
+                .any(|e| e.message.contains("dashboard hydrated")),
+            "console.log captures entries on the navigated dashboard page",
+        );
+
+        // Verify cross-origin isolation of localStorage.
+        let other_html = r#"<!DOCTYPE html><html><body>
+            <div id="iso"></div>
+            <script>
+                document.getElementById("iso").setAttribute("data-leak", String(localStorage.getItem("oauth_pkce_verifier")));
+            </script>
+        </body></html>"#;
+        let other_page = Page::load(
+            other_html,
+            Url::parse("https://isolated-origin.example/").ok(),
+            None,
+            page_viewport((WIDTH, HEIGHT), 1.0, Theme::Light),
+            Theme::Light,
+        );
+        let leak_val = other_page
+            .doc()
+            .get_element_by_id("iso")
+            .and_then(|id| other_page.doc().get_node(id))
+            .and_then(|n| n.attr(LocalName::from("data-leak")))
+            .unwrap_or_default()
+            .to_string();
+        check(
+            leak_val == "null",
+            "localStorage is strictly isolated by origin",
+        );
+    }
+
     cleanup_test_run();
 
     if failures == 0 {
@@ -9398,8 +10095,12 @@ fn supervisortest() -> i32 {
         caps.get("text_input").and_then(Value::as_str) == Some("supported")
             && caps.get("forms").and_then(Value::as_str) == Some("supported")
             && caps.get("passkeys").and_then(Value::as_str) == Some("supported")
-            && caps.get("passkey_broker").and_then(Value::as_str) == Some("supported"),
-        "capabilities report text input, forms, and passkeys supported",
+            && caps.get("passkey_broker").and_then(Value::as_str) == Some("supported")
+            && caps.get("cookies_persistent").and_then(Value::as_str) == Some("supported")
+            && caps.get("fetch").and_then(Value::as_str) == Some("supported")
+            && caps.get("web_storage").and_then(Value::as_str) == Some("supported")
+            && caps.get("js_console").and_then(Value::as_str) == Some("supported"),
+        "capabilities report text input, forms, passkeys, cookies_persistent, fetch, web_storage, and js_console supported",
     );
 
     // Observe, propose, and approve through the native supervision bar.
@@ -10704,6 +11405,7 @@ fn selftest() -> i32 {
             scrapbook_items: &[],
             favorites: &[],
             history_entries: &[],
+            console_entries: &[],
             passkey_prompt: None,
         });
         let mut chrome_doc = HtmlDocument::from_html(
@@ -10738,6 +11440,7 @@ fn selftest() -> i32 {
             "exp-search".to_string(),
             "exp-scrapbook".to_string(),
             "exp-pageholder".to_string(),
+            "exp-console".to_string(),
         ];
         if menu_open {
             ids.push("menu-home".into());
@@ -11037,6 +11740,7 @@ fn render_to_png(
         scrapbook_items: &demo_sb,
         favorites: &demo_favs,
         history_entries: &[],
+        console_entries: &[],
         passkey_prompt: None,
     });
     let mut chrome_doc = HtmlDocument::from_html(

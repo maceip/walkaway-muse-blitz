@@ -150,10 +150,12 @@ class HermesTaskManager:
         self.vault_path = Path(os.environ.get("HERMES_VAULT_PATH", str(self.work_dir / "vault.json")))
         self.recall_path = Path(os.environ.get("HERMES_RECALL_PATH", str(self.work_dir / "recall.json")))
         self.audit_path = Path(os.environ.get("HERMES_AUDIT_PATH", str(self.work_dir / "audit.jsonl")))
+        self.cookie_jar_path = Path(os.environ.get("HERMES_COOKIE_JAR_PATH", str(self.work_dir / "cookies.json")))
 
         self.bus_proc: subprocess.Popen[str] | None = None
         self.bridge_proc: subprocess.Popen[str] | None = None
         self.browser_proc: subprocess.Popen[str] | None = None
+        self.sock_path: Path | None = None
         self.agent_client: ControlSocketClient | None = None
 
         self.host_token = os.environ.get("HERMES_HOST_TOKEN") or secrets.token_urlsafe(18)
@@ -273,6 +275,7 @@ class HermesTaskManager:
                 self.browser_proc.kill()
                 self.browser_proc.communicate()
             self.browser_proc = None
+        self.sock_path = None
         self.session_id = None
         self.pending_decision = None
 
@@ -425,9 +428,14 @@ class HermesTaskManager:
                 self.say = f"Rejected proposal {prop_id} via {via}; browser took no action."
                 return
 
-    def start_task(self, goal: str, url: str | None = None, profile: dict[str, str] | None = None) -> dict[str, Any]:
+    def start_task(
+        self,
+        goal: str,
+        url: str | None = None,
+        profile: dict[str, str] | None = None,
+        background: bool = False,
+    ) -> dict[str, Any]:
         with self._lock:
-            self._stop_browser_locked()
             self.ensure_bus_and_bridge()
             if profile:
                 self.user_profile.update(profile)
@@ -442,13 +450,25 @@ class HermesTaskManager:
 
             attach_sock_env = os.environ.get("WALKAWAY_ATTACH_SOCK_PATH", "").strip()
             reuse_active = False
+            warm_browser_alive = (
+                self.browser_proc is not None
+                and self.browser_proc.poll() is None
+                and self.sock_path is not None
+                and self.sock_path.exists()
+            )
             if attach_sock_env and Path(attach_sock_env).exists():
                 sock_path = Path(attach_sock_env)
+                self.sock_path = sock_path
                 self.host_token = os.environ.get("HERMES_HOST_TOKEN") or self.host_token
                 self.agent_token = os.environ.get("HERMES_AGENT_TOKEN") or self.agent_token
-                reuse_active = True
+                reuse_active = not background
+            elif warm_browser_alive and self.sock_path is not None:
+                sock_path = self.sock_path
+                reuse_active = not background
             else:
+                self._stop_browser_locked()
                 sock_path = self.work_dir / f"hermes-{int(time.time() * 1000)}.sock"
+                self.sock_path = sock_path
                 self.host_token = secrets.token_urlsafe(18)
                 self.agent_token = secrets.token_urlsafe(18)
 
@@ -458,6 +478,7 @@ class HermesTaskManager:
                 env["HERMES_VAULT_PATH"] = str(self.vault_path)
                 env["HERMES_RECALL_PATH"] = str(self.recall_path)
                 env["HERMES_AUDIT_PATH"] = str(self.audit_path)
+                env["HERMES_COOKIE_JAR_PATH"] = str(self.cookie_jar_path)
                 if self.show_window:
                     env["HERMES_SHOW_WINDOW"] = "1"
                 else:
@@ -488,6 +509,13 @@ class HermesTaskManager:
                 if not sock_path.exists():
                     raise RuntimeError("Hermes browser did not create control socket")
 
+            if self.agent_client is not None:
+                try:
+                    self.agent_client.close()
+                except Exception:
+                    pass
+                self.agent_client = None
+
             attach_resp = _http_json(
                 f"{self.bridge_url}/sockets",
                 payload={
@@ -497,6 +525,7 @@ class HermesTaskManager:
                     "session_title": f"Walkaway: {self.goal[:60]}",
                     "reuse_active_tab": reuse_active,
                     "force_replace": reuse_active,
+                    "background": bool(background),
                 },
                 headers=self._bus_headers(),
                 timeout_s=10.0,
@@ -825,6 +854,7 @@ def make_handler(manager: HermesTaskManager):
                         goal=str(body.get("goal") or ""),
                         url=body.get("url"),
                         profile=body.get("profile"),
+                        background=bool(body.get("background", False)),
                     )
                     self._send_json(200, state)
                     return

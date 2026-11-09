@@ -55,6 +55,7 @@ pub enum ExplorerTab {
     Search,
     Scrapbook,
     PageHolder,
+    Console,
 }
 
 pub struct HeldLinkInfo<'a> {
@@ -256,6 +257,8 @@ pub struct ChromeState<'a> {
     pub favorites: &'a [NavEntryInfo<'a>],
     /// Active tab navigation history list.
     pub history_entries: &'a [NavEntryInfo<'a>],
+    /// Per-tab JavaScript console & exception log entries.
+    pub console_entries: &'a [crate::dom_ffi::ConsoleEntry],
     /// A page-initiated passkey ceremony waiting for a human.
     pub passkey_prompt: Option<PasskeyPrompt>,
 }
@@ -645,12 +648,14 @@ pub fn render(state: &ChromeState<'_>) -> String {
     let is_srch = state.explorer_tab == Some(ExplorerTab::Search);
     let is_scrp = state.explorer_tab == Some(ExplorerTab::Scrapbook);
     let is_ph = state.explorer_tab == Some(ExplorerTab::PageHolder);
+    let is_cons = state.explorer_tab == Some(ExplorerTab::Console);
 
     let fav_cls = exp_tab_class(is_fav);
     let hist_cls = exp_tab_class(is_hist);
     let srch_cls = exp_tab_class(is_srch);
     let scrp_cls = exp_tab_class(is_scrp);
-    let ph_cls = if is_ph {
+    let ph_cls = exp_tab_class(is_ph);
+    let cons_cls = if is_cons {
         "exp-tab exp-tab-last exp-tab-active"
     } else {
         "exp-tab exp-tab-last"
@@ -699,6 +704,16 @@ pub fn render(state: &ChromeState<'_>) -> String {
     let ph_bg = folder_tab_svg(
         false,
         is_ph,
+        is_cons,
+        drawer_open,
+        p.rib_base,
+        p.rib_hi,
+        p.rib_lo,
+        p.drawer_bg,
+    );
+    let cons_bg = folder_tab_svg(
+        false,
+        is_cons,
         false,
         drawer_open,
         p.rib_base,
@@ -725,6 +740,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
              <div class="{srch_cls}" id="exp-search">{srch_bg}<div class="exp-tab-label">Search</div></div>
              <div class="{scrp_cls}" id="exp-scrapbook">{scrp_bg}<div class="exp-tab-label">Scrapbook</div></div>
              <div class="{ph_cls}" id="exp-pageholder">{ph_bg}<div class="exp-tab-label">Page Holder</div></div>
+             <div class="{cons_cls}" id="exp-console">{cons_bg}<div class="exp-tab-label">Console</div></div>
              <div class="{rail_bottom_border_cls}"></div>
            </div>"##,
     );
@@ -964,6 +980,40 @@ pub fn render(state: &ChromeState<'_>) -> String {
                    </div>"#,
             )
         }
+        Some(ExplorerTab::Console) => {
+            let mut rows = String::new();
+            if state.console_entries.is_empty() {
+                rows.push_str(
+                    r#"<div class="drawer-empty" id="console-empty">No console output yet. Type a JS expression in the Address bar and click Eval, or load a page that logs to console.</div>"#,
+                );
+            } else {
+                for (i, entry) in state.console_entries.iter().enumerate() {
+                    rows.push_str(&format!(
+                        r#"<div class="sb-row" id="console-entry-{i}" data-level="{level}">
+                             <span class="sb-row-title">[{level}] {msg}</span>
+                           </div>"#,
+                        i = i,
+                        level = escape_html(&entry.level),
+                        msg = escape_html(&entry.message),
+                    ));
+                }
+            }
+            format!(
+                r#"<div class="exp-drawer" id="exp-drawer" style="top:{top_chrome_h:.1}px;">
+                     {drawer_rib_bg}
+                     <div class="drawer-frame">
+                       <div class="drawer-inner">
+                         <div class="drawer-header" id="console-header">
+                           <div class="drawer-brand"><div>JavaScript</div><div>Console</div></div>
+                           <div class="mac-btn" id="console-run">Eval</div>
+                           <div class="mac-btn" id="console-clear">Clear</div>
+                         </div>
+                         <div class="drawer-body drawer-body-white" id="console-list">{rows}</div>
+                       </div>
+                     </div>
+                   </div>"#,
+            )
+        }
     };
 
     // Arrow 4 Target: Mac OS X Aqua 15px Right & Bottom Scrollbar Tracks + 15x15 Bottom-Right Diagonal Resize Grip Box (`media_1794020340993_5f6a11ae.jpg`)
@@ -1136,6 +1186,7 @@ pub fn render(state: &ChromeState<'_>) -> String {
                  <div class="menu-item" id="menu-forward">{at_swirl_svg}<span>Forward</span></div>
                  <div class="menu-sep"></div>
                  <div class="menu-item" id="menu-xray">{at_swirl_svg}<span>Toggle X-Ray HUD (F12)</span></div>
+                 <div class="menu-item" id="menu-console">{at_swirl_svg}<span>JS Console</span></div>
                  <div class="menu-sep"></div>
                  <div class="menu-item" id="menu-close-tab">{at_swirl_svg}<span>Close tab</span></div>
                </div>"#,

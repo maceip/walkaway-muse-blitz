@@ -136,6 +136,49 @@
   const _submit_form = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_submit_form(
     node: c_size_t
   ): void {});
+  const _get_cookie = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_get_cookie(): c_int {
+    throw 0;
+  });
+  const _set_cookie = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_set_cookie(
+    cookie: c_ptr
+  ): void {});
+  const _get_location_url = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_get_location_url(): c_int {
+    throw 0;
+  });
+  const _set_location_url = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_set_location_url(
+    url: c_ptr,
+    push_only: c_int
+  ): void {});
+  const _storage_get = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_storage_get(
+    is_session: c_int,
+    key: c_ptr
+  ): c_int {
+    throw 0;
+  });
+  const _storage_set = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_storage_set(
+    is_session: c_int,
+    key: c_ptr,
+    value: c_ptr
+  ): void {});
+  const _storage_remove = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_storage_remove(
+    is_session: c_int,
+    key: c_ptr
+  ): void {});
+  const _storage_clear = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_storage_clear(
+    is_session: c_int
+  ): void {});
+  const _http_fetch = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_http_fetch(
+    method: c_ptr,
+    url: c_ptr,
+    headers_json: c_ptr,
+    body_utf8: c_ptr
+  ): c_int {
+    throw 0;
+  });
+  const _console_log = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_console_log(
+    level: c_ptr,
+    message: c_ptr
+  ): void {});
 
   /* Allocate a NUL-terminated UTF-8 copy of `s`. Caller frees.
    * Supports full Unicode (1-, 2-, 3-, and 4-byte UTF-8 sequences including
@@ -726,8 +769,404 @@
     };
     docElDesc.configurable = true;
     defineProp(docObj, "documentElement", docElDesc);
+
+    let cookieDesc: any = new ObjectCtor();
+    cookieDesc.get = function (): string {
+      let len: number = _get_cookie();
+      if (len <= 0) return "";
+      return readScratchUtf8(len);
+    };
+    cookieDesc.set = function (v: any): void {
+      let c: c_ptr = toUtf8z(String(v === null || v === undefined ? "" : v));
+      _set_cookie(c);
+      _free(c);
+    };
+    cookieDesc.configurable = true;
+    defineProp(docObj, "cookie", cookieDesc);
   }
+  docObj.addEventListener = function (type: string, listener: any): void {
+    let rootId: c_size_t = querySelector("html");
+    if ((rootId as any) !== 0) {
+      let rootEl: any = wrapElement(rootId);
+      if (rootEl) rootEl.addEventListener(type, listener);
+    }
+  };
   (globalThis as any).document = docObj;
+
+  /* ---- window.location & window.history ---- */
+  function currentHref(): string {
+    let len: number = _get_location_url();
+    if (len <= 0) return "muse://start";
+    return readScratchUtf8(len);
+  }
+
+  function navigateTo(url: any, pushOnly: number): void {
+    let c: c_ptr = toUtf8z(String(url === null || url === undefined ? "" : url));
+    _set_location_url(c, pushOnly);
+    _free(c);
+  }
+
+  let locObj: any = new ObjectCtor();
+  locObj.assign = function (url: any): void {
+    navigateTo(url, 0);
+  };
+  locObj.replace = function (url: any): void {
+    navigateTo(url, 0);
+  };
+  locObj.reload = function (): void {
+    navigateTo(currentHref(), 0);
+  };
+  locObj.toString = function (): string {
+    return currentHref();
+  };
+  if (defineProp) {
+    let hrefDesc: any = new ObjectCtor();
+    hrefDesc.get = function (): string {
+      return currentHref();
+    };
+    hrefDesc.set = function (v: any): void {
+      navigateTo(v, 0);
+    };
+    hrefDesc.configurable = true;
+    defineProp(locObj, "href", hrefDesc);
+
+    let originDesc: any = new ObjectCtor();
+    originDesc.get = function (): string {
+      let h: string = currentHref();
+      let schemeIdx: number = h.indexOf("://");
+      if (schemeIdx < 0) return h;
+      let pathIdx: number = h.indexOf("/", schemeIdx + 3);
+      return pathIdx < 0 ? h : h.substring(0, pathIdx);
+    };
+    originDesc.configurable = true;
+    defineProp(locObj, "origin", originDesc);
+
+    let protocolDesc: any = new ObjectCtor();
+    protocolDesc.get = function (): string {
+      let h: string = currentHref();
+      let idx: number = h.indexOf(":");
+      return idx < 0 ? "https:" : h.substring(0, idx + 1);
+    };
+    protocolDesc.configurable = true;
+    defineProp(locObj, "protocol", protocolDesc);
+
+    let hostDesc: any = new ObjectCtor();
+    hostDesc.get = function (): string {
+      let h: string = currentHref();
+      let schemeIdx: number = h.indexOf("://");
+      if (schemeIdx < 0) return "";
+      let rest: string = h.substring(schemeIdx + 3);
+      let slashIdx: number = rest.indexOf("/");
+      let qIdx: number = rest.indexOf("?");
+      let end: number = slashIdx >= 0 ? slashIdx : qIdx >= 0 ? qIdx : rest.length;
+      return rest.substring(0, end);
+    };
+    hostDesc.configurable = true;
+    defineProp(locObj, "host", hostDesc);
+
+    let hostnameDesc: any = new ObjectCtor();
+    hostnameDesc.get = function (): string {
+      let hostStr: string = locObj.host;
+      let colonIdx: number = hostStr.indexOf(":");
+      return colonIdx < 0 ? hostStr : hostStr.substring(0, colonIdx);
+    };
+    hostnameDesc.configurable = true;
+    defineProp(locObj, "hostname", hostnameDesc);
+
+    let pathnameDesc: any = new ObjectCtor();
+    pathnameDesc.get = function (): string {
+      let h: string = currentHref();
+      let schemeIdx: number = h.indexOf("://");
+      if (schemeIdx < 0) return "/";
+      let slashIdx: number = h.indexOf("/", schemeIdx + 3);
+      if (slashIdx < 0) return "/";
+      let rest: string = h.substring(slashIdx);
+      let qIdx: number = rest.indexOf("?");
+      let hashIdx: number = rest.indexOf("#");
+      let end: number =
+        qIdx >= 0 && hashIdx >= 0
+          ? Math.min(qIdx, hashIdx)
+          : qIdx >= 0
+          ? qIdx
+          : hashIdx >= 0
+          ? hashIdx
+          : rest.length;
+      return rest.substring(0, end);
+    };
+    pathnameDesc.set = function (v: any): void {
+      navigateTo(v, 0);
+    };
+    pathnameDesc.configurable = true;
+    defineProp(locObj, "pathname", pathnameDesc);
+
+    let searchDesc: any = new ObjectCtor();
+    searchDesc.get = function (): string {
+      let h: string = currentHref();
+      let qIdx: number = h.indexOf("?");
+      if (qIdx < 0) return "";
+      let hashIdx: number = h.indexOf("#", qIdx);
+      return hashIdx < 0 ? h.substring(qIdx) : h.substring(qIdx, hashIdx);
+    };
+    searchDesc.configurable = true;
+    defineProp(locObj, "search", searchDesc);
+
+    let hashDesc: any = new ObjectCtor();
+    hashDesc.get = function (): string {
+      let h: string = currentHref();
+      let hashIdx: number = h.indexOf("#");
+      return hashIdx < 0 ? "" : h.substring(hashIdx);
+    };
+    hashDesc.configurable = true;
+    defineProp(locObj, "hash", hashDesc);
+  }
+  (globalThis as any).location = locObj;
+  docObj.location = locObj;
+
+  let histObj: any = new ObjectCtor();
+  histObj.pushState = function (_state: any, _title: any, url: any): void {
+    if (url !== undefined && url !== null && String(url) !== "") {
+      navigateTo(url, 1);
+    }
+  };
+  histObj.replaceState = function (_state: any, _title: any, url: any): void {
+    if (url !== undefined && url !== null && String(url) !== "") {
+      navigateTo(url, 1);
+    }
+  };
+  (globalThis as any).history = histObj;
+
+  /* ---- localStorage & sessionStorage ---- */
+  function makeStorage(isSession: number): any {
+    let st: any = new ObjectCtor();
+    st.getItem = function (key: any): any {
+      let k: c_ptr = toUtf8z(String(key));
+      let len: number = _storage_get(isSession, k);
+      _free(k);
+      if (len < 0) return null;
+      return readScratchUtf8(len);
+    };
+    st.setItem = function (key: any, val: any): void {
+      let k: c_ptr = toUtf8z(String(key));
+      let v: c_ptr = toUtf8z(String(val));
+      _storage_set(isSession, k, v);
+      _free(k);
+      _free(v);
+    };
+    st.removeItem = function (key: any): void {
+      let k: c_ptr = toUtf8z(String(key));
+      _storage_remove(isSession, k);
+      _free(k);
+    };
+    st.clear = function (): void {
+      _storage_clear(isSession);
+    };
+    return st;
+  }
+  (globalThis as any).localStorage = makeStorage(0);
+  (globalThis as any).sessionStorage = makeStorage(1);
+
+  /* ---- console.log / info / warn / error ---- */
+  function emitConsole(level: string, args: any): void {
+    let parts: string = "";
+    let n: number = args ? args.length : 0;
+    for (let i: number = 0; i < n; i = i + 1) {
+      if (i > 0) parts = parts + " ";
+      let a: any = args[i];
+      if (typeof a === "string") {
+        parts = parts + a;
+      } else if (a && typeof a === "object") {
+        try {
+          parts = parts + (globalThis as any).JSON.stringify(a);
+        } catch (_e) {
+          parts = parts + String(a);
+        }
+      } else {
+        parts = parts + String(a);
+      }
+    }
+    let lPtr: c_ptr = toUtf8z(level);
+    let mPtr: c_ptr = toUtf8z(parts);
+    _console_log(lPtr, mPtr);
+    _free(lPtr);
+    _free(mPtr);
+  }
+  let consoleObj: any = new ObjectCtor();
+  consoleObj.log = function (...args: any[]): void {
+    emitConsole("log", args);
+  };
+  consoleObj.info = function (...args: any[]): void {
+    emitConsole("info", args);
+  };
+  consoleObj.warn = function (...args: any[]): void {
+    emitConsole("warn", args);
+  };
+  consoleObj.error = function (...args: any[]): void {
+    emitConsole("error", args);
+  };
+  consoleObj.debug = function (...args: any[]): void {
+    emitConsole("debug", args);
+  };
+  (globalThis as any).console = consoleObj;
+
+  /* ---- window.fetch + Headers + Response ---- */
+  function makeHeaders(raw: any): any {
+    let map: any = new ObjectCtor();
+    if (raw && typeof raw === "object") {
+      let keys: any = ObjectCtor.keys(raw);
+      for (let i: number = 0; i < keys.length; i = i + 1) {
+        let k: string = String(keys[i]);
+        map[k.toLowerCase()] = String(raw[k]);
+      }
+    }
+    let h: any = new ObjectCtor();
+    h._map = map;
+    h.get = function (name: any): any {
+      let k: string = String(name).toLowerCase();
+      let v: any = map[k];
+      return v === undefined ? null : v;
+    };
+    h.set = function (name: any, val: any): void {
+      map[String(name).toLowerCase()] = String(val);
+    };
+    h.has = function (name: any): boolean {
+      return map[String(name).toLowerCase()] !== undefined;
+    };
+    return h;
+  }
+  (globalThis as any).Headers = makeHeaders;
+
+  (globalThis as any).fetch = function (input: any, init: any): any {
+    let PromiseCtor: any = (globalThis as any).Promise;
+    let urlStr: string =
+      input && typeof input === "object" && input.url ? String(input.url) : String(input || "");
+    let methodStr: string =
+      init && init.method ? String(init.method).toUpperCase() : "GET";
+    let hdrMap: any = new ObjectCtor();
+    if (init && init.headers) {
+      let src: any = init.headers._map ? init.headers._map : init.headers;
+      if (src && typeof src === "object") {
+        let keys: any = ObjectCtor.keys(src);
+        for (let i: number = 0; i < keys.length; i = i + 1) {
+          let k: string = String(keys[i]);
+          hdrMap[k] = String(src[k]);
+        }
+      }
+    }
+    let bodyStr: string = "";
+    if (init && init.body !== undefined && init.body !== null) {
+      bodyStr = typeof init.body === "string" ? init.body : String(init.body);
+    }
+    let cMethod: c_ptr = toUtf8z(methodStr);
+    let cUrl: c_ptr = toUtf8z(urlStr);
+    let cHdrs: c_ptr = toUtf8z((globalThis as any).JSON.stringify(hdrMap));
+    let cBody: c_ptr = toUtf8z(bodyStr);
+    let len: number = _http_fetch(cMethod, cUrl, cHdrs, cBody);
+    _free(cMethod);
+    _free(cUrl);
+    _free(cHdrs);
+    _free(cBody);
+    if (len < 0) {
+      return PromiseCtor.reject(new Error("fetch failed"));
+    }
+    let rawJson: string = readScratchUtf8(len);
+    let env: any = (globalThis as any).JSON.parse(rawJson);
+    if (!env || env.error) {
+      return PromiseCtor.reject(new Error((env && env.error) || "fetch failed"));
+    }
+    let respObj: any = new ObjectCtor();
+    respObj.ok = Boolean(env.ok);
+    respObj.status = Number(env.status || 200);
+    respObj.statusText = respObj.ok ? "OK" : "Error";
+    respObj.url = String(env.url || urlStr);
+    respObj.headers = makeHeaders(env.headers || new ObjectCtor());
+    let bodyText: string = String(env.body || "");
+    respObj.text = function (): any {
+      return PromiseCtor.resolve(bodyText);
+    };
+    respObj.json = function (): any {
+      try {
+        return PromiseCtor.resolve((globalThis as any).JSON.parse(bodyText));
+      } catch (err) {
+        return PromiseCtor.reject(err);
+      }
+    };
+    return PromiseCtor.resolve(respObj);
+  };
+
+  /* ---- URLSearchParams, setTimeout, queueMicrotask ---- */
+  function makeURLSearchParams(init: any): any {
+    let pairs: any = new ObjectCtor();
+    let q: string = typeof init === "string" ? init : "";
+    if (q.charAt(0) === "?") q = q.substring(1);
+    if (q.length > 0) {
+      let parts: any = (q as any).split("&");
+      for (let i: number = 0; i < parts.length; i = i + 1) {
+        let seg: string = String(parts[i]);
+        let eq: number = seg.indexOf("=");
+        if (eq >= 0) {
+          let rawK: string = String((seg.substring(0, eq) as any).split("+").join(" "));
+          let rawV: string = String((seg.substring(eq + 1) as any).split("+").join(" "));
+          let k: string = String((globalThis as any).decodeURIComponent(rawK));
+          let v: string = String((globalThis as any).decodeURIComponent(rawV));
+          pairs[k] = v;
+        } else if (seg.length > 0) {
+          pairs[String((globalThis as any).decodeURIComponent(seg))] = "";
+        }
+      }
+    }
+    let usp: any = new ObjectCtor();
+    usp.get = function (k: any): any {
+      let v: any = pairs[String(k)];
+      return v === undefined ? null : v;
+    };
+    usp.set = function (k: any, v: any): void {
+      pairs[String(k)] = String(v);
+    };
+    usp.append = function (k: any, v: any): void {
+      pairs[String(k)] = String(v);
+    };
+    usp.delete = function (k: any): void {
+      delete pairs[String(k)];
+    };
+    usp.has = function (k: any): boolean {
+      return pairs[String(k)] !== undefined;
+    };
+    usp.toString = function (): string {
+      let keys: any = ObjectCtor.keys(pairs);
+      let out: string = "";
+      for (let i: number = 0; i < keys.length; i = i + 1) {
+        if (i > 0) out = out + "&";
+        let k: string = String(keys[i]);
+        out = out
+          + String((globalThis as any).encodeURIComponent(k))
+          + "="
+          + String((globalThis as any).encodeURIComponent(String(pairs[k])));
+      }
+      return out;
+    };
+    return usp;
+  }
+  (globalThis as any).URLSearchParams = makeURLSearchParams;
+
+  let nextTimerId: number = 1;
+  (globalThis as any).setTimeout = function (fn: any, _ms: any): number {
+    let id: number = nextTimerId;
+    nextTimerId = nextTimerId + 1;
+    if (typeof fn === "function") {
+      (globalThis as any).Promise.resolve().then(function (): void {
+        fn();
+      });
+    }
+    return id;
+  };
+  (globalThis as any).clearTimeout = function (_id: any): void {};
+  (globalThis as any).queueMicrotask = function (fn: any): void {
+    if (typeof fn === "function") {
+      (globalThis as any).Promise.resolve().then(function (): void {
+        fn();
+      });
+    }
+  };
 
   (globalThis as any).window = globalThis;
   (globalThis as any).self = globalThis;

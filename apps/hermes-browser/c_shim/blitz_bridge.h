@@ -62,6 +62,30 @@ void blitz_submit_form(uint64_t node);
 /* Mark the document as damaged so the host re-resolves layout and repaints. */
 void blitz_mark_dirty(void);
 
+/* RFC 6265 Cookie Jar (document.cookie) */
+int blitz_get_cookie(void);
+void blitz_set_cookie(const char *cookie);
+
+/* Navigation & Location (window.location / history.pushState) */
+int blitz_get_location_url(void);
+void blitz_set_location_url(const char *url, int push_only);
+
+/* Web Storage (is_session=0 -> localStorage, is_session=1 -> sessionStorage) */
+int blitz_storage_get(int is_session, const char *key);
+void blitz_storage_set(int is_session, const char *key, const char *value);
+void blitz_storage_remove(int is_session, const char *key);
+void blitz_storage_clear(int is_session);
+
+/* Cookie-aware HTTP fetch (window.fetch) */
+int blitz_http_fetch(
+    const char *method,
+    const char *url,
+    const char *headers_json,
+    const char *body_utf8);
+
+/* Per-tab JavaScript Console (console.log / warn / error) */
+void blitz_console_log(const char *level, const char *message);
+
 #ifdef __cplusplus
 }
 #endif

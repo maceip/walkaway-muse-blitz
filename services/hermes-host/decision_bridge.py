@@ -108,11 +108,11 @@ class HostClient:
             frame = {"v": 1, "seq": self.seq, **payload}
             self.sock.sendall((json.dumps(frame) + "\n").encode())
 
-    def open_session(self, title, start_url, reuse_active_tab=False, force_replace=False):
+    def open_session(self, title, start_url, reuse_active_tab=False, force_replace=False, background=False):
         self.start_url = start_url
         payload = {
             "type": "session.open",
-            "request_id": "bridge-open",
+            "request_id": f"bridge-open-{self.seq + 1}",
             "title": title,
             "start_url": start_url,
             "capabilities": {"protocol": 1},
@@ -122,6 +122,8 @@ class HostClient:
             payload["reuse_active_tab"] = True
         if force_replace:
             payload["force_replace"] = True
+        if background:
+            payload["background"] = True
         self.send(payload)
 
     def decide(self, binding, decision, decided_by, surface):
@@ -342,6 +344,7 @@ class Bridge:
         session_title="Walkaway Hermes Host Bridge",
         reuse_active_tab=False,
         force_replace=False,
+        background=False,
     ):
         """Attach a Hermes host channel at runtime (WS1 worker sockets)."""
         existing_client = None
@@ -350,7 +353,7 @@ class Bridge:
                 if str(c.sock_path) == str(sock_path):
                     existing_client = c
                     break
-            if existing_client is not None and not (reuse_active_tab or force_replace):
+            if existing_client is not None and not (reuse_active_tab or force_replace or start_url or background):
                 raise ValueError(f"socket already attached: {sock_path}")
         if existing_client is not None:
             client = existing_client
@@ -360,12 +363,13 @@ class Bridge:
             with self.lock:
                 self.clients.append(client)
             threading.Thread(target=client.run, daemon=True).start()
-        if start_url or reuse_active_tab:
+        if start_url or reuse_active_tab or background:
             client.open_session(
                 session_title,
                 start_url or "",
                 reuse_active_tab=reuse_active_tab,
                 force_replace=force_replace,
+                background=background,
             )
             deadline = time.monotonic() + 10
             while client.session_id is None and time.monotonic() < deadline:
@@ -450,6 +454,7 @@ def make_handler(bridge):
                         session_title=str(payload.get("session_title") or "Walkaway Hermes Host Bridge"),
                         reuse_active_tab=bool(payload.get("reuse_active_tab", False)),
                         force_replace=bool(payload.get("force_replace", False)),
+                        background=bool(payload.get("background", False)),
                     )
                 except ValueError as e:
                     return self.send_json(409, {"error": str(e)})

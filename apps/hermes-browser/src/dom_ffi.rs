@@ -75,6 +75,20 @@ pub struct BlitzHostContext {
     pub next_related_origins_id: u64,
     /// A `<form>` element (or submitter) that page JS requested to submit via `form.submit()`.
     pub pending_form_submit: Option<NodeId>,
+    /// Full URL of the current document (`https://example.com/path?query#hash`).
+    pub doc_url: String,
+    /// Pending JS-initiated navigation (`window.location.href = ...` / `location.assign` / `location.reload`).
+    pub pending_navigation: Option<String>,
+    /// Per-tab `sessionStorage` map.
+    pub session_storage: std::collections::HashMap<String, String>,
+    /// Per-page JS console log ring buffer (`console.log`, `warn`, `error`, plus uncaught JSIExceptions).
+    pub console_logs: Vec<ConsoleEntry>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ConsoleEntry {
+    pub level: String,
+    pub message: String,
 }
 
 /// What kind of ceremony a page started.
@@ -189,17 +203,22 @@ impl BlitzHostContext {
             related_origins_in_flight: std::collections::HashSet::new(),
             next_related_origins_id: 1,
             pending_form_submit: None,
+            doc_url: String::new(),
+            pending_navigation: None,
+            session_storage: std::collections::HashMap::new(),
+            console_logs: Vec::new(),
         }
     }
 
-    /// Creates a context for a document served from `origin`, running its
-    /// page ceremonies in `broker`.
-    pub fn with_origin_and_broker(
+    /// Creates a context with both its full document URL and serialized origin.
+    pub fn with_url_and_broker(
         doc: HtmlDocument,
+        doc_url: &str,
         origin: &str,
         broker: std::rc::Rc<std::cell::RefCell<crate::credentials::LocalPasskeyBroker>>,
     ) -> Self {
         Self {
+            doc_url: doc_url.to_string(),
             origin: origin.to_string(),
             ..Self::with_broker(doc, broker)
         }
@@ -1448,6 +1467,348 @@ pub unsafe extern "C" fn blitz_dom_mark_dirty(ctx: *mut c_void) {
     if let Some(ctx) = unsafe { as_ctx(ctx) } {
         ctx.dirty = true;
     }
+}
+
+fn local_storage_store(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::collections::HashMap<String, String>>>
+{
+    static STORE: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+        >,
+    > = std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn session_storage_store(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::collections::HashMap<String, String>>>
+{
+    static STORE: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+        >,
+    > = std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn clear_local_storage() {
+    if let Ok(mut guard) = local_storage_store().lock() {
+        guard.clear();
+    }
+    if let Ok(mut guard) = session_storage_store().lock() {
+        guard.clear();
+    }
+}
+
+fn effective_doc_url(ctx: &BlitzHostContext) -> Option<url::Url> {
+    if !ctx.doc_url.trim().is_empty() {
+        if let Ok(u) = url::Url::parse(ctx.doc_url.trim()) {
+            return Some(u);
+        }
+    }
+    if !ctx.origin.trim().is_empty() {
+        if let Ok(u) = url::Url::parse(ctx.origin.trim()) {
+            return Some(u);
+        }
+    }
+    None
+}
+
+/// Read `document.cookie` for the document's URL (excluding `HttpOnly` cookies).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_get_cookie(ctx: *mut c_void) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    let Some(url) = effective_doc_url(ctx) else {
+        ctx.scratch_utf8.clear();
+        return 0;
+    };
+    let cookie_str = crate::browser::cookie_header_for_url(&url, true);
+    ctx.scratch_utf8.clear();
+    ctx.scratch_utf8.extend_from_slice(cookie_str.as_bytes());
+    ctx.scratch_utf8.len() as c_int
+}
+
+/// Assign `document.cookie = value` for the document's URL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_set_cookie(ctx: *mut c_void, cookie: *const c_char) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    let cookie = unsafe { as_str(cookie) };
+    if let Some(url) = effective_doc_url(ctx) {
+        crate::browser::store_set_cookie(&url, cookie, true);
+    }
+}
+
+/// Read the current document URL (`window.location.href`) into `scratch_utf8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_get_location_url(ctx: *mut c_void) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    let url_str = if !ctx.doc_url.is_empty() {
+        ctx.doc_url.clone()
+    } else if !ctx.origin.is_empty() {
+        format!("{}/", ctx.origin.trim_end_matches('/'))
+    } else {
+        "muse://start".to_string()
+    };
+    ctx.scratch_utf8.clear();
+    ctx.scratch_utf8.extend_from_slice(url_str.as_bytes());
+    ctx.scratch_utf8.len() as c_int
+}
+
+/// Navigate or pushState to `target_url` (`push_only != 0` updates `doc_url` in place;
+/// `push_only == 0` queues a real page navigation via `ctx.pending_navigation`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_set_location_url(
+    ctx: *mut c_void,
+    target_url: *const c_char,
+    push_only: c_int,
+) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    let raw = unsafe { as_str(target_url) }.trim();
+    if raw.is_empty() {
+        return;
+    }
+    let resolved = if let Some(base) = effective_doc_url(ctx) {
+        base.join(raw)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| raw.to_string())
+    } else {
+        raw.to_string()
+    };
+    if push_only != 0 {
+        ctx.doc_url = resolved;
+    } else {
+        ctx.doc_url = resolved.clone();
+        ctx.pending_navigation = Some(resolved);
+        ctx.dirty = true;
+    }
+}
+
+/// Read a key from `localStorage` (`is_session == 0`) or `sessionStorage` (`is_session != 0`).
+/// Returns `-1` when the key does not exist.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_storage_get(
+    ctx: *mut c_void,
+    is_session: c_int,
+    key: *const c_char,
+) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    let key = unsafe { as_str(key) };
+    let origin_key = if ctx.origin.is_empty() {
+        "default".to_string()
+    } else {
+        ctx.origin.clone()
+    };
+    let val = if is_session != 0 {
+        ctx.session_storage.get(key).cloned().or_else(|| {
+            session_storage_store()
+                .lock()
+                .ok()
+                .and_then(|g| g.get(&origin_key).and_then(|m| m.get(key).cloned()))
+        })
+    } else {
+        local_storage_store()
+            .lock()
+            .ok()
+            .and_then(|g| g.get(&origin_key).and_then(|m| m.get(key).cloned()))
+    };
+    match val {
+        Some(v) => {
+            ctx.scratch_utf8.clear();
+            ctx.scratch_utf8.extend_from_slice(v.as_bytes());
+            ctx.scratch_utf8.len() as c_int
+        }
+        None => -1,
+    }
+}
+
+/// Write a key/value pair into `localStorage` (`is_session == 0`) or `sessionStorage` (`is_session != 0`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_storage_set(
+    ctx: *mut c_void,
+    is_session: c_int,
+    key: *const c_char,
+    value: *const c_char,
+) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    let key = unsafe { as_str(key) }.to_string();
+    let value = unsafe { as_str(value) }.to_string();
+    let origin_key = if ctx.origin.is_empty() {
+        "default".to_string()
+    } else {
+        ctx.origin.clone()
+    };
+    if is_session != 0 {
+        ctx.session_storage.insert(key.clone(), value.clone());
+        if let Ok(mut g) = session_storage_store().lock() {
+            g.entry(origin_key).or_default().insert(key, value);
+        }
+    } else if let Ok(mut g) = local_storage_store().lock() {
+        g.entry(origin_key).or_default().insert(key, value);
+    }
+}
+
+/// Remove a key from `localStorage` or `sessionStorage`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_storage_remove(
+    ctx: *mut c_void,
+    is_session: c_int,
+    key: *const c_char,
+) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    let key = unsafe { as_str(key) };
+    let origin_key = if ctx.origin.is_empty() {
+        "default".to_string()
+    } else {
+        ctx.origin.clone()
+    };
+    if is_session != 0 {
+        ctx.session_storage.remove(key);
+        if let Ok(mut g) = session_storage_store().lock() {
+            if let Some(m) = g.get_mut(&origin_key) {
+                m.remove(key);
+            }
+        }
+    } else if let Ok(mut g) = local_storage_store().lock() {
+        if let Some(m) = g.get_mut(&origin_key) {
+            m.remove(key);
+        }
+    }
+}
+
+/// Clear all keys for this origin (`localStorage`) or tab (`sessionStorage`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_storage_clear(ctx: *mut c_void, is_session: c_int) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    let origin_key = if ctx.origin.is_empty() {
+        "default".to_string()
+    } else {
+        ctx.origin.clone()
+    };
+    if is_session != 0 {
+        ctx.session_storage.clear();
+        if let Ok(mut g) = session_storage_store().lock() {
+            g.remove(&origin_key);
+        }
+    } else if let Ok(mut g) = local_storage_store().lock() {
+        g.remove(&origin_key);
+    }
+}
+
+/// Execute an HTTP `fetch(url, { method, headers, body })` sharing the browser's RFC 6265 cookie jar.
+/// Writes a JSON response envelope `{ ok, status, url, headers, body, error }` into `scratch_utf8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_http_fetch(
+    ctx: *mut c_void,
+    method: *const c_char,
+    url_raw: *const c_char,
+    headers_json: *const c_char,
+    body_utf8: *const c_char,
+) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    let method_str = unsafe { as_str(method) };
+    let url_str = unsafe { as_str(url_raw) }.trim();
+    let headers_str = unsafe { as_str(headers_json) };
+    let body_str = unsafe { as_str(body_utf8) };
+
+    let resolved = if let Some(base) = effective_doc_url(ctx) {
+        base.join(url_str).or_else(|_| url::Url::parse(url_str))
+    } else {
+        url::Url::parse(url_str)
+    };
+    let Ok(target_url) = resolved else {
+        let err_json = serde_json::json!({ "error": format!("Invalid fetch URL: {url_str}") });
+        return write_json(ctx, &err_json);
+    };
+
+    let mut req_headers: Vec<(String, String)> = Vec::new();
+    if !headers_str.trim().is_empty() {
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(headers_str) {
+            for (k, v) in map {
+                if let Some(vs) = v.as_str() {
+                    req_headers.push((k, vs.to_string()));
+                }
+            }
+        }
+    }
+    let req_body = if method_str.eq_ignore_ascii_case("GET")
+        || method_str.eq_ignore_ascii_case("HEAD")
+        || body_str.is_empty()
+    {
+        None
+    } else {
+        Some(body_str.as_bytes().to_vec())
+    };
+
+    match crate::browser::execute_http(
+        if method_str.is_empty() { "GET" } else { method_str },
+        &target_url,
+        &req_headers,
+        req_body,
+    ) {
+        Ok(ex) => {
+            let mut hdr_obj = serde_json::Map::new();
+            for (k, v) in ex.headers {
+                hdr_obj.insert(k.to_ascii_lowercase(), serde_json::Value::String(v));
+            }
+            let body_text = String::from_utf8_lossy(&ex.body).into_owned();
+            let resp_json = serde_json::json!({
+                "ok": (200..300).contains(&ex.status),
+                "status": ex.status,
+                "url": ex.final_url.to_string(),
+                "content_type": ex.content_type,
+                "headers": hdr_obj,
+                "body": body_text,
+            });
+            write_json(ctx, &resp_json)
+        }
+        Err(e) => {
+            let err_json = serde_json::json!({ "error": e });
+            write_json(ctx, &err_json)
+        }
+    }
+}
+
+/// Append a console message (`log`, `info`, `warn`, `error`) to the page's console ring buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_console_log(
+    ctx: *mut c_void,
+    level: *const c_char,
+    message: *const c_char,
+) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    let level_str = unsafe { as_str(level) };
+    let msg_str = unsafe { as_str(message) };
+    if ctx.console_logs.len() >= 200 {
+        ctx.console_logs.remove(0);
+    }
+    ctx.console_logs.push(ConsoleEntry {
+        level: if level_str.is_empty() {
+            "log".to_string()
+        } else {
+            level_str.to_string()
+        },
+        message: msg_str.to_string(),
+    });
 }
 
 /// Walk up from the hit node to the nearest element carrying an `id`
