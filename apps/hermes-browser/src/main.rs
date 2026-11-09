@@ -15,6 +15,8 @@
 //! resolve to a link (real navigation), then fall through to Hermes.
 
 mod browser;
+#[cfg(test)]
+mod browser_tests;
 mod chrome;
 mod control;
 mod credentials;
@@ -416,11 +418,22 @@ impl Page {
         theme: Theme,
         broker: SharedPasskeyBroker,
     ) -> Self {
-        let mut doc = Self::build(html, &base, &provider, viewport.clone(), None);
+        let dark_hint = theme.is_dark() && html.to_ascii_lowercase().contains("color-scheme");
+        let mut doc = Self::build(
+            html,
+            &base,
+            &provider,
+            viewport.clone(),
+            if dark_hint {
+                Some(DARK_DEFAULT_TEXT)
+            } else {
+                None
+            },
+        );
 
         // Only override the UA default when the page itself opted into dark;
         // otherwise a light page with no explicit colour would get light text.
-        if theme.is_dark() {
+        if theme.is_dark() && !dark_hint {
             let opted_in = doc
                 .try_root_element()
                 .map(|root| {
@@ -457,10 +470,14 @@ impl Page {
         // the Tokio runtime, so the runtime context must be entered here.
         let _guard = browser::enter_runtime();
         let hydrated = hydrate_streaming_ssr(html);
-        let mut ua = vec![
-            blitz_dom::UserAgentStylesheet::default_sheet(),
-            blitz_dom::UserAgentStylesheet::parse(
-                r#"
+        static BASE_UA: std::sync::OnceLock<Vec<blitz_dom::UserAgentStylesheet>> =
+            std::sync::OnceLock::new();
+        let mut ua = BASE_UA
+            .get_or_init(|| {
+                vec![
+                    blitz_dom::UserAgentStylesheet::default_sheet(),
+                    blitz_dom::UserAgentStylesheet::parse(
+                        r#"
                 html { background-color: #FFFFFF; color: #000000; }
                 select { display: inline-block; min-width: 80px; min-height: 24px; border: 1px solid #999; padding: 2px 4px; background-color: #FFFFFF; color: #000000; }
                 select:focus { outline: 2px solid #4D90FE; }
@@ -505,8 +522,10 @@ impl Page {
                     }
                 }
                 "#,
-            ),
-        ];
+                    ),
+                ]
+            })
+            .clone();
         if let Some(css) = extra_ua {
             ua.push(blitz_dom::UserAgentStylesheet::parse(css));
         }
@@ -668,7 +687,7 @@ impl Page {
         let started = Instant::now();
         self.ctx.doc.resolve(0.0);
         while self.ctx.doc.has_pending_critical_resources() && started.elapsed() < timeout {
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(Duration::from_millis(5));
             self.ctx.doc.resolve(0.0);
         }
     }
@@ -967,6 +986,8 @@ struct ControlSession {
     audit: Vec<Value>,
     action_required_kind: Option<String>,
     last_screenshot_hash: Option<String>,
+    background: bool,
+    allow_local_network: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1058,6 +1079,11 @@ struct BrowserApp {
     /// `--force-dark`: ignore the system appearance and use the dark palette.
     force_dark: bool,
     control: Option<ControlSession>,
+    /// Multiplexed concurrent agent sessions indexed by `session_id` (e.g.,
+    /// parallel LinkedIn + Expedia + Zappos tabs running simultaneously).
+    sessions: HashMap<String, ControlSession>,
+    /// Cached offscreen Vello renderer for zero-tab-switch screenshot capture.
+    offscreen_renderer: Option<(u32, u32, anyrender_vello::VelloImageRenderer)>,
     control_conns: HashMap<u64, ControlConn>,
     control_out: Vec<(OutTarget, Value)>,
     control_hub: Option<Arc<ControlHub>>,
@@ -1143,6 +1169,8 @@ impl BrowserApp {
             theme: Theme::Light,
             force_dark: std::env::args().any(|a| a == "--force-dark"),
             control: None,
+            sessions: HashMap::new(),
+            offscreen_renderer: None,
             control_conns: HashMap::new(),
             control_out: Vec::new(),
             control_hub: None,
@@ -1278,13 +1306,71 @@ impl BrowserApp {
         Some(snapshot)
     }
 
-    // --- supervised control API (spec.md phase 2) ---
+    // --- supervised control API (spec.md phase 2 + multi-tab multiplexing) ---
+
+    fn session_for_tab(&self, tab_id: TabId) -> Option<&ControlSession> {
+        self.control
+            .as_ref()
+            .filter(|s| s.tab_id == tab_id)
+            .or_else(|| self.sessions.values().find(|s| s.tab_id == tab_id))
+    }
+
+    fn activate_session_for_tab(&mut self, tab_id: TabId) {
+        if self.control.as_ref().is_some_and(|s| s.tab_id == tab_id) {
+            return;
+        }
+        let target_sid = self
+            .sessions
+            .values()
+            .find(|s| s.tab_id == tab_id)
+            .map(|s| s.id.clone());
+        if let Some(sid) = target_sid {
+            if let Some(target_session) = self.sessions.remove(&sid) {
+                if let Some(prev) = self.control.take() {
+                    self.sessions.insert(prev.id.clone(), prev);
+                }
+                self.control = Some(target_session);
+            }
+        }
+    }
+
+    fn activate_session_for_frame(&mut self, frame: &Value) {
+        let target_sid = frame
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                let pid = frame.get("proposal_id").and_then(Value::as_str)?;
+                if self.control.as_ref().is_some_and(|s| {
+                    s.pending.as_ref().is_some_and(|p| p.proposal_id == pid)
+                        || s.used_decisions.contains(pid)
+                }) {
+                    return self.control.as_ref().map(|s| s.id.clone());
+                }
+                self.sessions
+                    .values()
+                    .find(|s| {
+                        s.pending.as_ref().is_some_and(|p| p.proposal_id == pid)
+                            || s.used_decisions.contains(pid)
+                    })
+                    .map(|s| s.id.clone())
+            });
+        let Some(target_sid) = target_sid else {
+            return;
+        };
+        if self.control.as_ref().is_some_and(|s| s.id == target_sid) {
+            return;
+        }
+        if let Some(target_session) = self.sessions.remove(&target_sid) {
+            if let Some(prev) = self.control.take() {
+                self.sessions.insert(prev.id.clone(), prev);
+            }
+            self.control = Some(target_session);
+        }
+    }
 
     fn supervision_info(&self) -> Option<SupervisionInfo<'_>> {
-        let session = self.control.as_ref()?;
-        if session.tab_id != self.tab().canonical.id {
-            return None;
-        }
+        let session = self.session_for_tab(self.tab().canonical.id)?;
         let detail: &str = match session.state {
             ControlState::AwaitingDecision => session
                 .pending
@@ -1534,6 +1620,8 @@ impl BrowserApp {
             "passkey_broker": "supported",
             "credential_broker": "supported",
             "screenshot_png": "supported",
+            "multiplex_sessions": "supported",
+            "background_tabs": "supported",
         })
     }
 
@@ -1598,6 +1686,7 @@ impl BrowserApp {
         if !matches!(kind.as_str(), "ping" | "capabilities.get" | "session.open")
             && !is_page_passkey_decision
         {
+            self.activate_session_for_frame(&frame);
             match self.control.as_ref() {
                 None => {
                     self.refused(conn_id, &frame, "wrong_state");
@@ -1965,10 +2054,24 @@ impl BrowserApp {
             .get("force_replace")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        if !force_replace
+        let reuse_active_tab = frame
+            .get("reuse_active_tab")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let background = frame
+            .get("background")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let allow_local_network = frame
+            .get("policy")
+            .and_then(|p| p.get("allow_local_network"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        if reuse_active_tab
+            && !force_replace
+            && !self.tabs.is_empty()
             && self
-                .control
-                .as_ref()
+                .session_for_tab(self.tab().canonical.id)
                 .is_some_and(|s| !s.state.is_terminal())
         {
             self.refused(conn_id, frame, "wrong_state");
@@ -1993,17 +2096,28 @@ impl BrowserApp {
                 return;
             }
         }
-        let reuse_active_tab = frame
-            .get("reuse_active_tab")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        if force_replace {
+            if reuse_active_tab && !self.tabs.is_empty() {
+                let active_tid = self.tab().canonical.id;
+                self.sessions.retain(|_, s| s.tab_id != active_tid);
+                if self.control.as_ref().is_some_and(|s| s.tab_id == active_tid) {
+                    self.control = None;
+                }
+            } else {
+                self.control = None;
+            }
+        } else if let Some(prev) = self.control.take() {
+            self.sessions.insert(prev.id.clone(), prev);
+        }
         let tab_id = if reuse_active_tab && !self.tabs.is_empty() {
             self.tab().canonical.id
         } else {
             let tab = self.create_start_tab();
             let id = tab.canonical.id;
             self.tabs.push(tab);
-            self.active = self.tabs.len() - 1;
+            if !background {
+                self.active = self.tabs.len() - 1;
+            }
             id
         };
         let session_id = format!("s_{}", self.next_session_id);
@@ -2023,6 +2137,8 @@ impl BrowserApp {
             audit: Vec::new(),
             action_required_kind: None,
             last_screenshot_hash: None,
+            background,
+            allow_local_network,
         });
         self.audit(
             "opened",
@@ -2039,13 +2155,23 @@ impl BrowserApp {
             .and_then(Value::as_str)
             .filter(|s| !s.trim().is_empty())
         {
-            let current_url = self.tab().canonical.browser.display_url();
+            let current_url = self
+                .tabs
+                .iter()
+                .find(|t| t.canonical.id == tab_id)
+                .map(|t| t.canonical.browser.display_url())
+                .unwrap_or_default();
             if !reuse_active_tab || current_url != start_url {
                 // The host's act of opening authorizes exactly this navigation.
-                self.navigate(start_url);
+                self.navigate_tab(tab_id, start_url);
             }
         }
-        let generation = self.tab().instance.document_generation;
+        let generation = self
+            .tabs
+            .iter()
+            .find(|t| t.canonical.id == tab_id)
+            .map(|t| t.instance.document_generation)
+            .unwrap_or(1);
         let body = json!({
             "v": 1, "type": "session.opened",
             "request_id": frame.get("request_id").cloned().unwrap_or(Value::Null),
@@ -2078,6 +2204,15 @@ impl BrowserApp {
         {
             self.close_tab(index);
         }
+        if self.control.is_none() && !self.tabs.is_empty() {
+            let active_tid = self.tab().canonical.id;
+            self.activate_session_for_tab(active_tid);
+            if self.control.is_none() {
+                if let Some(any_sid) = self.sessions.keys().next().cloned() {
+                    self.control = self.sessions.remove(&any_sid);
+                }
+            }
+        }
     }
 
     fn do_observe(&mut self, conn_id: u64, role: Role, frame: &Value) {
@@ -2100,9 +2235,10 @@ impl BrowserApp {
         }
         let (screenshot_b64, screenshot_hash, screenshot_frame) =
             if frame.get("include_screenshot").and_then(Value::as_bool) == Some(true) {
-                self.activate_tab(tab_id);
-                self.sync_chrome();
-                match self.capture_png() {
+                if self.tab().canonical.id == tab_id {
+                    self.sync_chrome();
+                }
+                match self.capture_tab_png(tab_id) {
                     Some((bytes, hash, frame_id)) => {
                         if let Some(session) = self.control.as_mut() {
                             session.last_screenshot_hash = Some(hash.clone());
@@ -2305,12 +2441,21 @@ impl BrowserApp {
                 }
             }
             "navigate" => {
-                let ok = operation
+                let Some(parsed_url) = operation
                     .get("url")
                     .and_then(Value::as_str)
-                    .is_some_and(|u| browser::normalize_input(u).is_ok());
-                if !ok {
+                    .and_then(|u| browser::normalize_input(u).ok())
+                else {
                     self.refused(conn_id, frame, "internal");
+                    return;
+                };
+                let allow_local = self
+                    .control
+                    .as_ref()
+                    .map(|s| s.allow_local_network)
+                    .unwrap_or(true);
+                if !allow_local && browser::is_local_or_private_url(&parsed_url) {
+                    self.refused(conn_id, frame, "local_network_forbidden");
                     return;
                 }
             }
@@ -2616,6 +2761,9 @@ impl BrowserApp {
             );
             return;
         }
+        let target_label = target.map(|e| e.label.clone());
+        let target_href = target.and_then(|e| e.href.clone());
+        let target_bounds = target.and_then(|e| serde_json::to_value(e.bounds).ok());
         self.session_event(
             OutTarget::Host,
             "proposal.pending",
@@ -2626,6 +2774,9 @@ impl BrowserApp {
                 "operation": pending.operation, "rationale": pending.rationale,
                 "classification": pending.classification,
                 "requires_glasses": pending.requires_glasses,
+                "target_label": target_label,
+                "target_href": target_href,
+                "target_bounds": target_bounds,
             }),
         );
         if let Some(session) = self.control.as_mut() {
@@ -2794,8 +2945,30 @@ impl BrowserApp {
             return Ok(());
         }
 
-        // Revalidate against the live page immediately before dispatch.
-        let Some(fresh) = self.observe_tab(tab_id) else {
+        // Revalidate against the live page immediately before dispatch, reusing
+        // the cached snapshot when neither the document generation nor the dirty
+        // flag changed since proposal creation.
+        let fresh = self
+            .tabs
+            .iter()
+            .find(|t| t.canonical.id == tab_id)
+            .and_then(|t| {
+                if !t.instance.page.ctx.dirty
+                    && !t.instance.page.doc().has_pending_critical_resources()
+                    && t.instance.document_generation == pending_gen
+                    && t.instance.page_id == pending_page
+                {
+                    t.instance
+                        .last_snapshot
+                        .as_ref()
+                        .filter(|s| s.fingerprint == pending_fp)
+                        .cloned()
+                } else {
+                    None
+                }
+            })
+            .or_else(|| self.observe_tab(tab_id));
+        let Some(fresh) = fresh else {
             return Err("internal");
         };
         if fresh.fingerprint != pending_fp
@@ -3263,12 +3436,19 @@ impl BrowserApp {
         }
         let rect = doc
             .get_client_bounding_rect(element.node_id)
-            .ok_or("target_not_visible")?;
-        if rect.width <= 0.0 || rect.height <= 0.0 {
-            return Err("target_not_visible");
-        }
-        let cx = (rect.x + rect.width / 2.0) as f32;
-        let cy = (rect.y + rect.height / 2.0) as f32;
+            .filter(|r| r.width > 0.0 && r.height > 0.0);
+        let (rx, ry, rw, rh) = match rect {
+            Some(r) => (r.x, r.y, r.width, r.height),
+            None if element.bounds.width > 0.0 && element.bounds.height > 0.0 => (
+                element.bounds.x,
+                element.bounds.y,
+                element.bounds.width,
+                element.bounds.height,
+            ),
+            None => return Err("target_not_visible"),
+        };
+        let cx = (rx + rw / 2.0) as f32;
+        let cy = (ry + rh / 2.0) as f32;
         let Some(hit) = doc.hit(cx, cy) else {
             return Err("target_not_visible");
         };
@@ -3280,6 +3460,15 @@ impl BrowserApp {
             let Some(node) = doc.get_node(current) else {
                 return Err("target_not_visible");
             };
+            if let Some(data) = node.element_data() {
+                if data.name.local.to_string().eq_ignore_ascii_case("label") {
+                    if let Some((ctrl_id, _, _, _)) = find_interactive_form_control(doc, current) {
+                        if ctrl_id == element.node_id {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
             let Some(parent) = node.parent else {
                 return Err("target_not_visible");
             };
@@ -3295,10 +3484,11 @@ impl BrowserApp {
         command: &PageCommand,
         snapshot: &observe::PageSnapshot,
     ) {
-        let Some(session) = self.control.as_ref() else {
+        let Some((tab_id, is_background)) = self.control.as_ref().map(|s| (s.tab_id, s.background))
+        else {
             return;
         };
-        let tab_id = session.tab_id;
+        let prev_active_id = self.tab().canonical.id;
         self.activate_tab(tab_id);
         match command {
             PageCommand::Click {
@@ -3313,12 +3503,18 @@ impl BrowserApp {
                     })
                     .cloned()
                 else {
+                    if is_background {
+                        self.activate_tab(prev_active_id);
+                    }
                     return;
                 };
                 if element.role == "link" {
                     if let Some(href) = element.href.clone() {
                         self.session_event(OutTarget::Both, "nav.started", json!({"url": href}));
-                        self.navigate(&href);
+                        self.navigate_tab(tab_id, &href);
+                        if is_background {
+                            self.activate_tab(prev_active_id);
+                        }
                         return;
                     }
                 }
@@ -3334,13 +3530,65 @@ impl BrowserApp {
                         cy,
                     );
                 }
-                let tab = self.tab_mut();
-                if tab.instance.page.ctx.dirty {
+                let js_dirtied = self.tab().instance.page.ctx.dirty;
+                if js_dirtied {
+                    let tab = self.tab_mut();
                     tab.instance.page.resolve();
                     tab.instance.page.ctx.dirty = false;
+                } else if let Some((ctrl_id, ctag, ctype, clicked_opt)) =
+                    find_interactive_form_control(self.tab().instance.page.doc(), element.node_id)
+                {
+                    match (ctag.as_str(), ctype.as_str()) {
+                        ("input", "checkbox") => {
+                            let cur_checked = self
+                                .tab()
+                                .instance
+                                .page
+                                .doc()
+                                .get_node(ctrl_id)
+                                .and_then(|n| n.element_data())
+                                .map(|d| {
+                                    d.checkbox_input_checked()
+                                        .unwrap_or_else(|| d.attr(local_name!("checked")).is_some())
+                                })
+                                .unwrap_or(false);
+                            let next_val = if cur_checked { "false" } else { "true" };
+                            let tab = self.tab_mut();
+                            apply_dom_field_action(
+                                tab.instance.page.doc_mut(),
+                                ctrl_id,
+                                "input",
+                                "check",
+                                Some(next_val),
+                                None,
+                                None,
+                            );
+                            tab.instance.page.resolve();
+                        }
+                        ("input", "radio") => {
+                            let tab = self.tab_mut();
+                            check_radio_group(tab.instance.page.doc_mut(), ctrl_id);
+                            tab.instance.page.resolve();
+                        }
+                        ("select", _) => {
+                            let tab = self.tab_mut();
+                            if let Some(opt_id) = clicked_opt {
+                                select_specific_option(
+                                    tab.instance.page.doc_mut(),
+                                    ctrl_id,
+                                    opt_id,
+                                );
+                            } else {
+                                cycle_select_option(tab.instance.page.doc_mut(), ctrl_id, 1);
+                            }
+                            tab.instance.page.resolve();
+                        }
+                        _ => {}
+                    }
                 }
-                tab.bump_generation();
-                if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
+                self.tab_mut().bump_generation();
+                if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take()
+                {
                     self.submit_page_form(form_node);
                 }
             }
@@ -3541,11 +3789,14 @@ impl BrowserApp {
             }
             PageCommand::Navigate { url } => {
                 self.session_event(OutTarget::Both, "nav.started", json!({"url": url}));
-                self.navigate(url);
+                self.navigate_tab(tab_id, url);
             }
             PageCommand::Back => self.go_back(),
             PageCommand::Forward => self.go_forward(),
             PageCommand::Reload => self.reload(),
+        }
+        if is_background {
+            self.activate_tab(prev_active_id);
         }
     }
 
@@ -3686,25 +3937,30 @@ impl BrowserApp {
     /// True when the active tab is agent-owned: physical page input is gated
     /// to the supervision bar until the human takes control.
     fn session_blocks_input(&self) -> bool {
-        let Some(session) = self.control.as_ref() else {
+        let Some(session) = self.session_for_tab(self.tab().canonical.id) else {
             return false;
         };
-        session.tab_id == self.tab().canonical.id
-            && matches!(
-                session.state,
-                ControlState::Agent | ControlState::AwaitingDecision | ControlState::ActionRequired
-            )
+        matches!(
+            session.state,
+            ControlState::Agent | ControlState::AwaitingDecision | ControlState::ActionRequired
+        )
     }
 
     /// Offscreen PNG of the active tab (page + chrome), through the same
     /// Vello pipeline as `--render`.
     fn capture_png(&mut self) -> Option<(Vec<u8>, String, u64)> {
+        let tab_id = self.tab().canonical.id;
+        self.capture_tab_png(tab_id)
+    }
+
+    /// Offscreen PNG of any tab `tab_id` (page + chrome) without switching
+    /// the active foreground tab, reusing a persistent `VelloImageRenderer`.
+    fn capture_tab_png(&mut self, tab_id: TabId) -> Option<(Vec<u8>, String, u64)> {
         use anyrender::ImageRenderer;
         use anyrender_vello::VelloImageRenderer;
         // Mirror render_current_frame: physical pixels at the live scale.
         let (width, height) = (self.size.0.max(1), self.size.1.max(1));
         let scale = self.scale;
-        let mut renderer = VelloImageRenderer::new(width, height);
         let mut rgba: Vec<u8> = Vec::new();
         let top_h_px = ((self.top_chrome_height() * scale) as u32).min(height);
         let left_w_px = ((self.left_chrome_width() * scale) as u32).min(width);
@@ -3723,12 +3979,19 @@ impl BrowserApp {
 
         let Self {
             tabs,
-            active,
             chrome_doc,
             page_holder,
+            offscreen_renderer,
             ..
         } = self;
-        let tab = &mut tabs[*active];
+        let tab = tabs.iter_mut().find(|t| t.canonical.id == tab_id)?;
+        let renderer = match offscreen_renderer {
+            Some((w, h, r)) if *w == width && *h == height => r,
+            _ => {
+                *offscreen_renderer = Some((width, height, VelloImageRenderer::new(width, height)));
+                &mut offscreen_renderer.as_mut().expect("renderer").2
+            }
+        };
         renderer.render_to_vec(
             |painter| {
                 blitz_paint::paint_scene(
@@ -3781,6 +4044,7 @@ impl BrowserApp {
             let mut encoder = png::Encoder::new(&mut cursor, width, height);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_compression(png::Compression::Fast);
             let mut writer = encoder.write_header().ok()?;
             writer.write_image_data(&rgba[..expected]).ok()?;
         }
@@ -4240,13 +4504,12 @@ impl BrowserApp {
 
     /// Regenerate the chrome document from state.
     fn sync_chrome(&mut self) {
+        let active_tab_id = self.tab().canonical.id;
         let in_human_control = self
-            .control
-            .as_ref()
+            .session_for_tab(active_tab_id)
             .is_some_and(|s| s.state == ControlState::Human);
         let focused_nid = self.tab().instance.page.doc().get_focussed_node_id();
         let telemetry = if self.xray_enabled || (in_human_control && focused_nid.is_some()) {
-            let active_tab_id = self.tab().canonical.id;
             if self.tab().instance.last_snapshot.is_none() {
                 let _ = self.observe_tab(active_tab_id);
             }
@@ -4254,8 +4517,7 @@ impl BrowserApp {
             let layout_observe_ms = tab.instance.last_observe_ms;
             let rss_mb = measure_process_rss_mb();
             let pending_target_ids: Vec<String> = self
-                .control
-                .as_ref()
+                .session_for_tab(active_tab_id)
                 .and_then(|s| s.pending.as_ref())
                 .map(|p| {
                     let mut ids = Vec::new();
@@ -4277,8 +4539,7 @@ impl BrowserApp {
                 })
                 .unwrap_or_default();
             let freeze_fp_short = self
-                .control
-                .as_ref()
+                .session_for_tab(active_tab_id)
                 .and_then(|s| s.pending.as_ref())
                 .map(|p| p.fingerprint.chars().take(8).collect::<String>());
             let mut overlays = Vec::new();
@@ -4474,10 +4735,7 @@ impl BrowserApp {
                     prompt: ceremony.prompt.clone(),
                 })
                 .or_else(|| {
-                    let s = self.control.as_ref()?;
-                    if s.tab_id != self.tab().canonical.id {
-                        return None;
-                    }
+                    let s = self.session_for_tab(active_tab_id)?;
                     let p = s.pending.as_ref()?;
                     let _cid = p.ceremony_id.as_ref()?;
                     let origin = p
@@ -4539,11 +4797,13 @@ impl BrowserApp {
         if index >= self.tabs.len() {
             return;
         }
+        let closing_tab_id = self.tabs[index].canonical.id;
+        self.activate_session_for_tab(closing_tab_id);
         // Closing the supervised tab ends the session with it.
         if self
             .control
             .as_ref()
-            .is_some_and(|s| s.tab_id == self.tabs[index].canonical.id)
+            .is_some_and(|s| s.tab_id == closing_tab_id)
         {
             self.invalidate_pending("tab_closed");
             if let Some(session) = self.control.as_mut() {
@@ -4564,6 +4824,7 @@ impl BrowserApp {
             self.flush_control_out();
             self.control = None;
         }
+        self.sessions.retain(|_, s| s.tab_id != closing_tab_id);
         self.tabs.remove(index);
         if self.tabs.is_empty() {
             let tab = self.create_start_tab();
@@ -4574,6 +4835,7 @@ impl BrowserApp {
         } else if index < self.active {
             self.active -= 1;
         }
+        self.activate_session_for_tab(self.tab().canonical.id);
         self.menu_open = false;
         self.sync_chrome();
         self.request_redraw();
@@ -4582,11 +4844,65 @@ impl BrowserApp {
     fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
             self.active = index;
+            self.activate_session_for_tab(self.tab().canonical.id);
             self.menu_open = false;
             self.reflow_active_tab();
             self.sync_chrome();
             self.request_redraw();
         }
+    }
+
+    fn navigate_tab(&mut self, tab_id: TabId, input: &str) {
+        let viewport = self.content_viewport();
+        let theme = self.theme;
+        let broker = self.passkey_broker.clone();
+        let provider = self.provider.clone();
+        let proxy = self.proxy.clone();
+        let Some(target) = self.tabs.iter_mut().find(|t| t.canonical.id == tab_id) else {
+            return;
+        };
+        let url = match target.canonical.browser.begin_navigation(input) {
+            Ok(u) => u,
+            Err(e) => {
+                target.canonical.browser.fail(e);
+                self.sync_chrome();
+                self.request_redraw();
+                return;
+            }
+        };
+
+        if url.scheme() == "muse" {
+            target.canonical.browser.commit(url, START_PAGE.to_string());
+            target.replace_page(Page::load_with_broker(
+                START_PAGE,
+                None,
+                None,
+                viewport,
+                theme,
+                broker,
+            ));
+            target.canonical.title = "New tab".to_string();
+            self.menu_open = false;
+            self.sync_chrome();
+            self.request_redraw();
+            return;
+        }
+
+        let generation = target.canonical.browser.generation;
+        let fetch_url = url.clone();
+        self.menu_open = false;
+        self.sync_chrome();
+        self.request_redraw();
+
+        std::thread::spawn(move || {
+            let result = browser::fetch(&provider, &fetch_url);
+            let _ = proxy.send_event(UserEvent::Navigated {
+                tab: tab_id,
+                generation,
+                url: fetch_url,
+                result,
+            });
+        });
     }
 
     fn navigate(&mut self, input: &str) {
@@ -4610,55 +4926,8 @@ impl BrowserApp {
             return;
         }
 
-        let url = match self.tab_mut().canonical.browser.begin_navigation(input) {
-            Ok(u) => u,
-            Err(e) => {
-                self.tab_mut().canonical.browser.fail(e);
-                self.sync_chrome();
-                self.request_redraw();
-                return;
-            }
-        };
-
-        if url.scheme() == "muse" {
-            let viewport = self.content_viewport();
-            let theme = self.theme;
-            let broker = self.passkey_broker.clone();
-            let tab = self.tab_mut();
-            tab.canonical.browser.commit(url, START_PAGE.to_string());
-            tab.replace_page(Page::load_with_broker(
-                START_PAGE,
-                None,
-                None,
-                viewport,
-                theme,
-                broker,
-            ));
-            tab.canonical.title = "New tab".to_string();
-            self.menu_open = false;
-            self.sync_chrome();
-            self.request_redraw();
-            return;
-        }
-
         let tab_id = self.tab().canonical.id;
-        let generation = self.tab().canonical.browser.generation;
-        let provider = self.provider.clone();
-        let proxy = self.proxy.clone();
-        let fetch_url = url.clone();
-        self.menu_open = false;
-        self.sync_chrome();
-        self.request_redraw();
-
-        std::thread::spawn(move || {
-            let result = browser::fetch(&provider, &fetch_url);
-            let _ = proxy.send_event(UserEvent::Navigated {
-                tab: tab_id,
-                generation,
-                url: fetch_url,
-                result,
-            });
-        });
+        self.navigate_tab(tab_id, input);
     }
 
     fn reload(&mut self) {
@@ -4676,9 +4945,7 @@ impl BrowserApp {
 
     fn stop_navigation(&mut self) {
         let tab = self.tab_mut();
-        tab.canonical.browser.generation = tab.canonical.browser.generation.wrapping_add(1);
-        tab.canonical.browser.loading = false;
-        tab.canonical.browser.sync_address();
+        tab.canonical.browser.stop_loading();
         self.sync_chrome();
         self.request_redraw();
     }
@@ -4946,6 +5213,7 @@ impl BrowserApp {
         // through the same code path as a socket `decision`.
         if id_is("sup-approve") || id_is("sup-reject") || id_is("pk-allow") || id_is("pk-deny") {
             let approve = id_is("sup-approve") || id_is("pk-allow");
+            self.activate_session_for_tab(self.tab().canonical.id);
             if let Some(pending) = self.control.as_ref().and_then(|s| s.pending.as_ref()) {
                 let (pid, fp, generation) = (
                     pending.proposal_id.clone(),
@@ -4958,16 +5226,19 @@ impl BrowserApp {
             return;
         }
         if id_is("sup-take") {
+            self.activate_session_for_tab(self.tab().canonical.id);
             self.control_take("user", "desktop-panel");
             self.flush_control_out();
             return;
         }
         if id_is("sup-done") {
+            self.activate_session_for_tab(self.tab().canonical.id);
             self.control_release("user", "desktop-panel");
             self.flush_control_out();
             return;
         }
         if id_is("sup-stop") {
+            self.activate_session_for_tab(self.tab().canonical.id);
             self.control_stop("user", "desktop-panel");
             self.flush_control_out();
             return;
@@ -6048,6 +6319,7 @@ impl BrowserApp {
         url: Url,
         result: Result<String, String>,
     ) {
+        self.activate_session_for_tab(tab_id);
         let viewport = self.content_viewport();
         let Some(target) = self.tabs.iter_mut().find(|tab| tab.canonical.id == tab_id) else {
             return;
@@ -6694,8 +6966,9 @@ fn apply_dom_field_action(
             }
         }
         "select" => {
-            let wanted = value.unwrap_or_default();
-            let options: Vec<(NodeId, bool)> = doc
+            let wanted = value.unwrap_or_default().trim();
+            let wanted_lower = wanted.to_ascii_lowercase();
+            let options: Vec<(NodeId, String, String)> = doc
                 .get_node(node_id)
                 .map(|node| {
                     node.children
@@ -6712,32 +6985,65 @@ fn apply_dom_field_action(
                                 .map(str::to_string)
                                 .unwrap_or_else(|| child.text_content().trim().to_string());
                             let opt_text = child.text_content().trim().to_string();
-                            let matches = opt_val == wanted || opt_text == wanted;
-                            Some((child_id, matches))
+                            Some((child_id, opt_val, opt_text))
                         })
                         .collect()
                 })
                 .unwrap_or_default();
+            let matched = options
+                .iter()
+                .find(|(_, v, t)| v == wanted || t == wanted)
+                .or_else(|| {
+                    options.iter().find(|(_, v, t)| {
+                        v.to_ascii_lowercase() == wanted_lower
+                            || t.to_ascii_lowercase() == wanted_lower
+                    })
+                })
+                .or_else(|| {
+                    if wanted_lower.is_empty() {
+                        None
+                    } else {
+                        options.iter().find(|(_, v, t)| {
+                            t.to_ascii_lowercase().contains(&wanted_lower)
+                                || v.to_ascii_lowercase().contains(&wanted_lower)
+                        })
+                    }
+                })
+                .cloned();
+            let matched_id = matched.as_ref().map(|(id, _, _)| *id);
+            let final_val = matched
+                .as_ref()
+                .map(|(_, v, _)| v.as_str())
+                .unwrap_or(wanted);
             let mut mutator = doc.mutate();
-            for (opt_id, is_match) in options {
-                if is_match {
-                    mutator.set_attribute(opt_id, qual_name("selected"), "selected");
+            for (opt_id, _, _) in &options {
+                if Some(*opt_id) == matched_id {
+                    mutator.set_attribute(*opt_id, qual_name("selected"), "selected");
                 } else {
-                    mutator.clear_attribute(opt_id, qual_name("selected"));
+                    mutator.clear_attribute(*opt_id, qual_name("selected"));
                 }
             }
-            mutator.set_attribute(node_id, qual_name("value"), wanted);
+            mutator.set_attribute(node_id, qual_name("value"), final_val);
         }
         "check" => {
             let checked = matches!(
                 value.unwrap_or_default().to_ascii_lowercase().as_str(),
                 "true" | "1" | "yes" | "checked" | "on"
             );
-            let mut mutator = doc.mutate();
-            if checked {
-                mutator.set_attribute(node_id, qual_name("checked"), "true");
+            let is_radio = doc
+                .get_node(node_id)
+                .and_then(|n| n.element_data())
+                .and_then(|d| d.attr(local_name!("type")))
+                .is_some_and(|t| t.eq_ignore_ascii_case("radio"));
+            if is_radio && checked {
+                check_radio_group(doc, node_id);
             } else {
-                mutator.clear_attribute(node_id, qual_name("checked"));
+                let mut mutator = doc.mutate();
+                if checked {
+                    mutator.set_attribute(node_id, qual_name("checked"), "true");
+                } else {
+                    mutator.clear_attribute(node_id, qual_name("checked"));
+                }
             }
         }
         _ => {}
@@ -7096,12 +7402,17 @@ fn check_radio_group(doc: &mut HtmlDocument, radio_id: NodeId) {
                 }
             }
         }
+        let mut mutator = doc.mutate();
         for nid in same_group {
-            let val = if nid == radio_id { "true" } else { "false" };
-            apply_dom_field_action(doc, nid, "input", "check", Some(val), None, None);
+            if nid == radio_id {
+                mutator.set_attribute(nid, qual_name("checked"), "true");
+            } else {
+                mutator.clear_attribute(nid, qual_name("checked"));
+            }
         }
     } else {
-        apply_dom_field_action(doc, radio_id, "input", "check", Some("true"), None, None);
+        let mut mutator = doc.mutate();
+        mutator.set_attribute(radio_id, qual_name("checked"), "true");
     }
 }
 
@@ -9813,6 +10124,257 @@ fn supervisortest() -> i32 {
             .ok();
     }
 
+    // --- Concurrent 3-tab multi-session orchestration (LinkedIn + Expedia + Zappos) ---
+    // Verify that opening 3 parallel sessions (with background tabs) preserves
+    // the active foreground tab, allows Session 2 (Expedia) and Session 3 (Zappos)
+    // to observe, propose, and execute form/select/radio operations while
+    // Session 1 (LinkedIn) stays parked in AwaitingDecision, and blocks SSRF
+    // when allow_local_network is false.
+    {
+        let out_li = send(
+            &mut app,
+            1,
+            &mut seq_h,
+            json!({"type": "session.open", "title": "LinkedIn Signup", "request_id": "m_li_open",
+                   "policy": {"decision": "human_per_action", "allow_local_network": false}}),
+        );
+        let sid_li = find(&out_li, "session.opened")
+            .and_then(|v| v.get("session_id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let tab_li = app.tab().canonical.id;
+        let active_idx_li = app.active;
+
+        let out_ex = send(
+            &mut app,
+            1,
+            &mut seq_h,
+            json!({"type": "session.open", "title": "Expedia Flight", "request_id": "m_ex_open",
+                   "background": true, "policy": {"decision": "human_per_action"}}),
+        );
+        let sid_ex = find(&out_ex, "session.opened")
+            .and_then(|v| v.get("session_id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let tab_ex = TabId(
+            find(&out_ex, "session.opened")
+                .and_then(|v| v.get("tab_id"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+
+        let out_za = send(
+            &mut app,
+            1,
+            &mut seq_h,
+            json!({"type": "session.open", "title": "Zappos Shoes", "request_id": "m_za_open",
+                   "background": true, "policy": {"decision": "human_per_action"}}),
+        );
+        let sid_za = find(&out_za, "session.opened")
+            .and_then(|v| v.get("session_id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let tab_za = TabId(
+            find(&out_za, "session.opened")
+                .and_then(|v| v.get("tab_id"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+
+        check(
+            !sid_li.is_empty() && !sid_ex.is_empty() && !sid_za.is_empty()
+                && sid_li != sid_ex && sid_ex != sid_za,
+            "3 concurrent sessions open on independent canonical tabs",
+        );
+        check(
+            app.active == active_idx_li && app.tab().canonical.id == tab_li,
+            "background session.open preserves the foreground active tab",
+        );
+
+        // Load distinct fixtures into Expedia and Zappos background tabs.
+        let vp = page_viewport(app.size, app.scale, app.theme);
+        if let Some(ex_tab) = app.tabs.iter_mut().find(|t| t.canonical.id == tab_ex) {
+            let ex_html = r#"<!DOCTYPE html><html><head><title>Expedia</title></head><body>
+              <label for="cabin">Cabin</label>
+              <select id="cabin" name="cabin">
+                <option value="econ">Economy</option>
+                <option value="biz">Business Class</option>
+              </select>
+            </body></html>"#;
+            let ex_url = Url::parse("https://expedia.test/flights").expect("ex url");
+            ex_tab.canonical.browser.commit(ex_url.clone(), ex_html.to_string());
+            ex_tab.replace_page(Page::load(ex_html, Some(ex_url), None, vp.clone(), Theme::Light));
+        }
+        if let Some(za_tab) = app.tabs.iter_mut().find(|t| t.canonical.id == tab_za) {
+            let za_html = r#"<!DOCTYPE html><html><head><title>Zappos</title></head><body>
+              <label style="display:inline-block;width:90px;height:36px;">
+                <input id="sz9" type="radio" name="shoe_size" value="9" style="width:0;height:0;opacity:0;">
+                Size 9
+              </label>
+              <label style="display:inline-block;width:90px;height:36px;">
+                <input id="sz10" type="radio" name="shoe_size" value="10" style="width:0;height:0;opacity:0;">
+                Size 10.5
+              </label>
+            </body></html>"#;
+            let za_url = Url::parse("https://zappos.test/shoes").expect("za url");
+            za_tab.canonical.browser.commit(za_url.clone(), za_html.to_string());
+            za_tab.replace_page(Page::load(za_html, Some(za_url), None, vp, Theme::Light));
+        }
+
+        // Session 1 (LinkedIn) proposes a click and parks in AwaitingDecision,
+        // and verifies SSRF protection when allow_local_network is false.
+        let snap_li = observe(&mut app, 2, &mut seq_a, &sid_li, false);
+        let ssrf_out = send(
+            &mut app,
+            2,
+            &mut seq_a,
+            json!({"type": "propose", "session_id": sid_li, "request_id": "m_ssrf",
+                   "proposal_id": "p_ssrf",
+                   "snapshot_id": snap_li.get("snapshot_id").cloned().unwrap_or(Value::Null),
+                   "fingerprint": snap_li.get("fingerprint").cloned().unwrap_or(Value::Null),
+                   "generation": snap_li.get("generation").cloned().unwrap_or(Value::Null),
+                   "operation": {"kind": "navigate", "url": "http://127.0.0.1:8788/admin"},
+                   "rationale": "Attempt private network navigation"}),
+        );
+        check(
+            refused(&ssrf_out).as_deref() == Some("local_network_forbidden"),
+            "allow_local_network=false refuses private/loopback URL navigation",
+        );
+
+        let out_li_prop = propose_click(&mut app, &mut seq_a, &sid_li, &snap_li, "p_li_1");
+        check(
+            find(&out_li_prop, "proposal.pending").is_some_and(|p| {
+                p.get("target_label")
+                    .and_then(Value::as_str)
+                    .is_some_and(|l| l.contains("Increment Counter"))
+                    && p.get("target_bounds").is_some()
+            }),
+            "proposal.pending enriches card with target_label and target_bounds",
+        );
+
+        // While LinkedIn is parked in AwaitingDecision, Expedia (Session 2)
+        // observes its background tab and selects "Business" by partial label match.
+        let snap_ex = observe(&mut app, 2, &mut seq_a, &sid_ex, false);
+        let cabin_id = snap_ex
+            .get("elements")
+            .and_then(Value::as_array)
+            .and_then(|els| {
+                els.iter()
+                    .find(|e| e.get("tag").and_then(Value::as_str) == Some("select"))
+            })
+            .and_then(|e| e.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let _ = send(
+            &mut app,
+            2,
+            &mut seq_a,
+            json!({"type": "propose", "session_id": sid_ex, "request_id": "m_ex_p1",
+                   "proposal_id": "p_ex_1",
+                   "snapshot_id": snap_ex.get("snapshot_id").cloned().unwrap_or(Value::Null),
+                   "fingerprint": snap_ex.get("fingerprint").cloned().unwrap_or(Value::Null),
+                   "generation": snap_ex.get("generation").cloned().unwrap_or(Value::Null),
+                   "operation": {"kind": "select", "target_id": cabin_id, "value": "business class"},
+                   "rationale": "Select Business Class on Expedia"}),
+        );
+        let out_ex_dec = send(
+            &mut app,
+            1,
+            &mut seq_h,
+            json!({"type": "decision", "session_id": sid_ex, "request_id": "m_ex_d1",
+                   "proposal_id": "p_ex_1",
+                   "fingerprint": snap_ex.get("fingerprint").cloned().unwrap_or(Value::Null),
+                   "generation": snap_ex.get("generation").cloned().unwrap_or(Value::Null),
+                   "decision": "approve", "decided_by": "user", "surface": "socket"}),
+        );
+        check(
+            find(&out_ex_dec, "executed").is_some() && app.active == active_idx_li,
+            "background Expedia session executes select without yanking foreground tab",
+        );
+
+        // Simultaneously, Zappos (Session 3) observes its background tab, finds
+        // the CSS-hidden radio input inside its visible <label> tile, and clicks it.
+        let snap_za = observe(&mut app, 2, &mut seq_a, &sid_za, true);
+        let size10_id = snap_za
+            .get("elements")
+            .and_then(Value::as_array)
+            .and_then(|els| {
+                els.iter().find(|e| {
+                    e.get("label")
+                        .and_then(Value::as_str)
+                        .is_some_and(|l| l.contains("Size 10.5"))
+                })
+            })
+            .and_then(|e| e.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        check(
+            !size10_id.is_empty(),
+            "Zappos CSS-hidden radio input inside visible <label> tile is indexed",
+        );
+        let _ = send(
+            &mut app,
+            2,
+            &mut seq_a,
+            json!({"type": "propose", "session_id": sid_za, "request_id": "m_za_p1",
+                   "proposal_id": "p_za_1",
+                   "snapshot_id": snap_za.get("snapshot_id").cloned().unwrap_or(Value::Null),
+                   "fingerprint": snap_za.get("fingerprint").cloned().unwrap_or(Value::Null),
+                   "generation": snap_za.get("generation").cloned().unwrap_or(Value::Null),
+                   "operation": {"kind": "click", "target_id": size10_id},
+                   "rationale": "Pick shoe size 10.5 on Zappos"}),
+        );
+        let out_za_dec = send(
+            &mut app,
+            1,
+            &mut seq_h,
+            json!({"type": "decision", "session_id": sid_za, "request_id": "m_za_d1",
+                   "proposal_id": "p_za_1",
+                   "fingerprint": snap_za.get("fingerprint").cloned().unwrap_or(Value::Null),
+                   "generation": snap_za.get("generation").cloned().unwrap_or(Value::Null),
+                   "decision": "approve", "decided_by": "user", "surface": "socket"}),
+        );
+        let snap_za_after = observe(&mut app, 2, &mut seq_a, &sid_za, false);
+        let size10_checked = snap_za_after
+            .get("elements")
+            .and_then(Value::as_array)
+            .and_then(|els| {
+                els.iter().find(|e| {
+                    e.get("label")
+                        .and_then(Value::as_str)
+                        .is_some_and(|l| l.contains("Size 10.5"))
+                })
+            })
+            .and_then(|e| e.get("checked"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        check(
+            find(&out_za_dec, "executed").is_some() && size10_checked,
+            "clicking CSS-hidden radio tile checks Size 10.5 in background Zappos tab",
+        );
+
+        // And LinkedIn (Session 1) is still parked in AwaitingDecision and can now be approved!
+        let out_li_dec = send(
+            &mut app,
+            1,
+            &mut seq_h,
+            json!({"type": "decision", "session_id": sid_li, "request_id": "m_li_d1",
+                   "proposal_id": "p_li_1",
+                   "fingerprint": snap_li.get("fingerprint").cloned().unwrap_or(Value::Null),
+                   "generation": snap_li.get("generation").cloned().unwrap_or(Value::Null),
+                   "decision": "approve", "decided_by": "user", "surface": "socket"}),
+        );
+        check(
+            find(&out_li_dec, "executed").is_some(),
+            "parked LinkedIn session executes cleanly after parallel background sessions complete",
+        );
+    }
+
     cleanup_test_run();
 
     if failures == 0 {
@@ -9902,6 +10464,7 @@ fn observetest() -> i32 {
       <label for="name">Name</label><input id="name" value="Ada">
       <label for="pw">Password</label><input id="pw" type="password" value="correct-horse">
       <label><input id="agree" type="checkbox" checked> Agree</label>
+      <label style="display:inline-block;width:80px;height:32px;"><input id="sz10" type="radio" name="sz" value="10" style="width:0;height:0;opacity:0;"> Size 10</label>
       <a href="/next">Next page</a>
     </body></html>"#;
     let page = Page::load(
@@ -9950,6 +10513,16 @@ fn observetest() -> i32 {
             .iter()
             .any(|e| e.checked == Some(true)),
         "checkbox state is observed",
+    );
+    check(
+        fixture_snapshot.elements.iter().any(|e| {
+            e.dom_id.as_deref() == Some("sz10")
+                && e.visible
+                && e.bounds.width > 0.0
+                && e.bounds.height > 0.0
+                && e.label.contains("Size 10")
+        }),
+        "CSS-hidden radio inside visible <label> inherits label bounds and visibility",
     );
 
     cleanup_test_run();

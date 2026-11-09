@@ -165,18 +165,41 @@ fn is_sensitive(tag: &str, input_type: &str, node: &Node, label: &str) -> bool {
         || hint.contains("cvv")
 }
 
+fn enclosing_label(doc: &HtmlDocument, start_id: NodeId) -> Option<(NodeId, String)> {
+    let mut cur = doc.get_node(start_id).and_then(|n| n.parent);
+    while let Some(nid) = cur {
+        let node = doc.get_node(nid)?;
+        if let Some(data) = node.element_data() {
+            if data.name.local.to_string().eq_ignore_ascii_case("label") {
+                return Some((nid, normalized(&node.text_content(), 160)));
+            }
+        }
+        cur = node.parent;
+    }
+    None
+}
+
 fn label_for(
     doc: &HtmlDocument,
     node: &Node,
     tag: &str,
-    labels_by_for: &HashMap<String, String>,
+    labels_by_for: &HashMap<String, (String, NodeId)>,
 ) -> String {
     if let Some(value) = attr(node, local_name!("aria-label")) {
         return normalized(value, 160);
     }
     if let Some(id) = attr(node, local_name!("id")) {
-        if let Some(label) = labels_by_for.get(id) {
-            return label.clone();
+        if let Some((label, _)) = labels_by_for.get(id) {
+            if !label.is_empty() {
+                return label.clone();
+            }
+        }
+    }
+    if matches!(tag, "input" | "select" | "textarea") {
+        if let Some((_, label_text)) = enclosing_label(doc, node.id) {
+            if !label_text.is_empty() {
+                return label_text;
+            }
         }
     }
 
@@ -206,7 +229,6 @@ fn label_for(
             return normalized(href, 160);
         }
     }
-    let _ = doc;
     tag.to_string()
 }
 
@@ -380,7 +402,7 @@ fn collect_visible_text(doc: &HtmlDocument) -> String {
 }
 
 pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
-    let mut labels_by_for = HashMap::new();
+    let mut labels_by_for: HashMap<String, (String, NodeId)> = HashMap::new();
     let mut stack = vec![doc.root_node().id];
     while let Some(node_id) = stack.pop() {
         let Some(node) = doc.get_node(node_id) else {
@@ -389,7 +411,10 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
         if let Some(data) = node.element_data() {
             if data.name.local.to_string() == "label" {
                 if let Some(target) = data.attr(local_name!("for")) {
-                    labels_by_for.insert(target.to_string(), normalized(&node.text_content(), 160));
+                    labels_by_for.insert(
+                        target.to_string(),
+                        (normalized(&node.text_content(), 160), node_id),
+                    );
                 }
             }
         }
@@ -407,32 +432,54 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
         let Some(node) = doc.get_node(node_id) else {
             continue;
         };
+        let mut promoted_label_rect = None;
         if let Some(data) = node.element_data() {
             let tag_lc = data.name.local.to_string().to_ascii_lowercase();
             if matches!(tag_lc.as_str(), "script" | "style" | "noscript" | "template") {
                 continue;
             }
-            if attr(node, local_name!("hidden")).is_some()
+            let input_type_lc = attr(node, local_name!("type"))
+                .unwrap_or("text")
+                .to_ascii_lowercase();
+            let is_checkable_input =
+                tag_lc == "input" && matches!(input_type_lc.as_str(), "radio" | "checkbox");
+
+            let is_self_hidden = attr(node, local_name!("hidden")).is_some()
                 || attr(node, local_name!("aria-hidden")) == Some("true")
-            {
-                continue;
-            }
-            let class_attr = attr(node, local_name!("class")).unwrap_or_default();
-            if class_attr
-                .split_whitespace()
-                .any(|c| matches!(c, "hide" | "hidden" | "sr-only" | "invisible"))
-            {
-                continue;
-            }
-            let display = doc.resolved_style_value(node_id, "display");
-            let visibility = doc.resolved_style_value(node_id, "visibility");
-            let opacity = doc.resolved_style_value(node_id, "opacity");
-            if display == "none"
-                || visibility == "hidden"
-                || visibility == "collapse"
-                || opacity == "0"
-            {
-                continue;
+                || attr(node, local_name!("class"))
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .any(|c| matches!(c, "hide" | "hidden" | "sr-only" | "invisible"))
+                || {
+                    let display = doc.resolved_style_value(node_id, "display");
+                    let visibility = doc.resolved_style_value(node_id, "visibility");
+                    let opacity = doc.resolved_style_value(node_id, "opacity");
+                    display == "none"
+                        || visibility == "hidden"
+                        || visibility == "collapse"
+                        || opacity == "0"
+                };
+
+            if is_self_hidden {
+                if is_checkable_input {
+                    let assoc_label_id = attr(node, local_name!("id"))
+                        .and_then(|id| labels_by_for.get(id).map(|(_, lid)| *lid))
+                        .or_else(|| enclosing_label(doc, node_id).map(|(lid, _)| lid));
+                    if let Some(lid) = assoc_label_id {
+                        let l_disp = doc.resolved_style_value(lid, "display");
+                        let l_vis = doc.resolved_style_value(lid, "visibility");
+                        if l_disp != "none" && l_vis != "hidden" {
+                            if let Some(l_rect) = doc.get_client_bounding_rect(lid) {
+                                if l_rect.width > 0.0 && l_rect.height > 0.0 {
+                                    promoted_label_rect = Some(l_rect);
+                                }
+                            }
+                        }
+                    }
+                }
+                if promoted_label_rect.is_none() {
+                    continue;
+                }
             }
         }
         for child in node.children.iter().rev() {
@@ -457,12 +504,24 @@ pub fn observe(doc: &HtmlDocument, metadata: SnapshotMetadata) -> PageSnapshot {
         let Some((kind, role)) = classified else {
             continue;
         };
-        let Some(rect) = doc.get_client_bounding_rect(node_id) else {
-            continue;
+        let rect = match doc
+            .get_client_bounding_rect(node_id)
+            .filter(|r| r.width > 0.0 && r.height > 0.0)
+            .or(promoted_label_rect)
+            .or_else(|| {
+                if tag == "input" && matches!(input_type.as_str(), "radio" | "checkbox") {
+                    let lid = attr(node, local_name!("id"))
+                        .and_then(|id| labels_by_for.get(id).map(|(_, lid)| *lid))
+                        .or_else(|| enclosing_label(doc, node_id).map(|(lid, _)| lid))?;
+                    doc.get_client_bounding_rect(lid)
+                        .filter(|r| r.width > 0.0 && r.height > 0.0)
+                } else {
+                    None
+                }
+            }) {
+            Some(r) => r,
+            None => continue,
         };
-        if rect.width <= 0.0 || rect.height <= 0.0 {
-            continue;
-        }
         let visible = rect.x < metadata.viewport_width as f64
             && rect.y < metadata.viewport_height as f64
             && rect.x + rect.width > 0.0

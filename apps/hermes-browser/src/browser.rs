@@ -76,6 +76,23 @@ impl Browser {
             .unwrap_or_else(|| self.address.clone())
     }
 
+    #[allow(dead_code)]
+    pub fn address_display(&self) -> String {
+        let url = self.display_url();
+        if url.starts_with("muse://") {
+            String::new()
+        } else {
+            url
+        }
+    }
+
+    pub fn stop_loading(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.loading = false;
+        self.error = None;
+        self.sync_address();
+    }
+
     /// Begin a navigation: validates the input, records the generation, and
     /// returns the URL to fetch. The caller performs the fetch off-thread.
     pub fn begin_navigation(&mut self, input: &str) -> Result<Url, String> {
@@ -163,11 +180,27 @@ pub fn normalize_input(input: &str) -> Result<Url, String> {
         return Url::parse(trimmed).map_err(|e| format!("invalid URL: {e}"));
     }
 
+    let authority = trimmed.split('/').next().unwrap_or(trimmed);
     let looks_like_host = !trimmed.contains(char::is_whitespace)
-        && (trimmed.contains('.') || trimmed.starts_with("localhost"));
+        && (authority.contains('.')
+            || authority.starts_with("localhost")
+            || authority.starts_with('['));
 
     if looks_like_host {
-        let candidate = format!("https://{trimmed}");
+        let secure_candidate = Url::parse(&format!("https://{trimmed}"));
+        let loopback = secure_candidate
+            .as_ref()
+            .ok()
+            .and_then(Url::host_str)
+            .is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost")
+                    || host.eq_ignore_ascii_case("[::1]")
+                    || host.eq_ignore_ascii_case("::1")
+                    || host
+                        .parse::<std::net::Ipv4Addr>()
+                        .is_ok_and(|address| address.is_loopback())
+            });
+        let candidate = format!("{}://{trimmed}", if loopback { "http" } else { "https" });
         if let Ok(url) = Url::parse(&candidate) {
             if url.host().is_some() {
                 return Ok(url);
@@ -178,6 +211,66 @@ pub fn normalize_input(input: &str) -> Result<Url, String> {
     let mut search = Url::parse("https://duckduckgo.com/html/").expect("static url");
     search.query_pairs_mut().append_pair("q", trimmed);
     Ok(search)
+}
+
+/// Returns true if `url` targets a known third-party ad/tracker/beacon domain
+/// that wastes network worker threads and adds layout jitter without contributing
+/// to document structure.
+pub fn is_blocked_tracker_url(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host_lc = host.to_ascii_lowercase();
+    const BLOCKED_SUFFIXES: &[&str] = &[
+        "doubleclick.net",
+        "googlesyndication.com",
+        "google-analytics.com",
+        "googletagmanager.com",
+        "googletagservices.com",
+        "connect.facebook.net",
+        "scorecardresearch.com",
+        "adnxs.com",
+        "criteo.com",
+        "taboola.com",
+        "outbrain.com",
+        "hotjar.com",
+        "clarity.ms",
+        "quantserve.com",
+        "rubiconproject.com",
+    ];
+    BLOCKED_SUFFIXES
+        .iter()
+        .any(|suffix| host_lc == *suffix || host_lc.ends_with(&format!(".{suffix}")))
+}
+
+/// Returns true if `url` resolves to a loopback, RFC1918 private, link-local,
+/// or cloud-metadata IP/host (used when `policy.allow_local_network == false`).
+pub fn is_local_or_private_url(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host_lc = host.trim_matches(|c| c == '[' || c == ']').to_ascii_lowercase();
+    if host_lc == "localhost"
+        || host_lc.ends_with(".localhost")
+        || host_lc.ends_with(".local")
+        || host_lc == "::1"
+    {
+        return true;
+    }
+    if let Ok(ipv4) = host_lc.parse::<std::net::Ipv4Addr>() {
+        return ipv4.is_loopback()
+            || ipv4.is_private()
+            || ipv4.is_link_local()
+            || ipv4.is_unspecified()
+            || ipv4.octets()[0] == 100 && (ipv4.octets()[1] & 0b1100_0000) == 64;
+    }
+    if let Ok(ipv6) = host_lc.parse::<std::net::Ipv6Addr>() {
+        return ipv6.is_loopback()
+            || ipv6.is_unspecified()
+            || (ipv6.segments()[0] & 0xfe00) == 0xfc00
+            || (ipv6.segments()[0] & 0xffc0) == 0xfe80;
+    }
+    false
 }
 
 /// Resolve a link target found inside a page against that page's URL.
@@ -196,11 +289,18 @@ pub type SharedProvider = Arc<blitz_net::Provider>;
 /// runtime with worker threads is therefore required: tasks spawned during
 /// parsing must keep running after the constructor returns, and their
 /// completions arrive through the NetWaker.
+///
+/// Scaled to 8+ worker threads so concurrent multi-tab agent sessions
+/// (e.g., LinkedIn + Expedia + Zappos loading HTML, CSS, and images in parallel)
+/// never serialize behind a 2-thread bottleneck.
 fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
     RT.get_or_init(|| {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get().clamp(8, 16))
+            .unwrap_or(8);
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(threads)
             .enable_all()
             .build()
             .expect("tokio runtime")
@@ -214,6 +314,9 @@ pub fn enter_runtime() -> tokio::runtime::EnterGuard<'static> {
 
 /// Blocking fetch used by the worker thread and by `--url` renders.
 pub fn fetch(provider: &SharedProvider, url: &Url) -> Result<String, String> {
+    if is_blocked_tracker_url(url) {
+        return Err("blocked tracker url".to_string());
+    }
     let request = blitz_traits::net::Request::get(url.clone());
     match runtime().block_on(provider.fetch_async(request)) {
         Ok((_content_type, bytes)) => {
@@ -224,6 +327,50 @@ pub fn fetch(provider: &SharedProvider, url: &Url) -> Result<String, String> {
         }
         Err(e) => Err(format!("{e}")),
     }
+}
+
+#[allow(dead_code)]
+pub fn fetch_cancellable(
+    provider: &SharedProvider,
+    url: &Url,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("navigation cancelled".into());
+    }
+    if is_blocked_tracker_url(url) {
+        return Err("blocked tracker url".into());
+    }
+    runtime().block_on(async {
+        let request = blitz_traits::net::Request::get(url.clone());
+        let fetch = provider.fetch_async(request);
+        tokio::pin!(fetch);
+        let started = std::time::Instant::now();
+        let max_wait = std::time::Duration::from_secs(60);
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                return Err("navigation cancelled".into());
+            }
+            if started.elapsed() >= max_wait {
+                return Err("navigation timed out after 60 seconds".into());
+            }
+            match tokio::time::timeout(std::time::Duration::from_millis(20), &mut fetch).await {
+                Ok(result) => {
+                    return result
+                        .map_err(|error| error.to_string())
+                        .and_then(|(_, bytes)| {
+                            if bytes.is_empty() {
+                                Err("empty response".into())
+                            } else {
+                                Ok(String::from_utf8_lossy(&bytes).into_owned())
+                            }
+                        });
+                }
+                Err(_) => {}
+            }
+        }
+    })
 }
 
 /// Blocking HTTP form submission (`GET` or `POST` `application/x-www-form-urlencoded`).

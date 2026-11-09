@@ -5,7 +5,7 @@
 //! page execution live in `BrowserApp`; socket threads never touch the page.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -129,7 +129,10 @@ fn handle_connection(
     let mut authed: Option<Role> = None;
     loop {
         let mut line = String::new();
-        match reader.read_line(&mut line) {
+        let read_res = std::io::Read::by_ref(&mut reader)
+            .take((MAX_FRAME_BYTES + 1) as u64)
+            .read_line(&mut line);
+        match read_res {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
