@@ -679,6 +679,53 @@ impl Page {
             }
         }
 
+        if let Some(root_html) =
+            dom_ffi::query_selector_all_in_doc(&self.ctx.doc, "html").first().copied()
+        {
+            unsafe {
+                let _ = hermes_app_dispatch_event(
+                    self.hermes,
+                    c"DOMContentLoaded".as_ptr(),
+                    root_html.as_u64(),
+                    0.0,
+                    0.0,
+                );
+                let _ = hermes_app_dispatch_event(
+                    self.hermes,
+                    c"load".as_ptr(),
+                    root_html.as_u64(),
+                    0.0,
+                    0.0,
+                );
+            }
+        }
+
+        if self.ctx.dirty {
+            self.resolve();
+            self.ctx.dirty = false;
+        }
+    }
+
+    fn dispatch_control_input_and_change(&mut self, node_id: NodeId) {
+        if self.hermes.is_null() {
+            return;
+        }
+        unsafe {
+            let _ = hermes_app_dispatch_event(
+                self.hermes,
+                c"input".as_ptr(),
+                node_id.as_u64(),
+                0.0,
+                0.0,
+            );
+            let _ = hermes_app_dispatch_event(
+                self.hermes,
+                c"change".as_ptr(),
+                node_id.as_u64(),
+                0.0,
+                0.0,
+            );
+        }
         if self.ctx.dirty {
             self.resolve();
             self.ctx.dirty = false;
@@ -3268,21 +3315,37 @@ impl BrowserApp {
         let pending = sink.pending.clone();
         drop(sink);
 
-        // Now the secret goes into the page.
-        let tab = self.tab_mut();
-        for (node_id, tag, value) in pending {
-            apply_dom_field_action(
-                tab.instance.page.doc_mut(),
-                node_id,
-                &tag,
-                "type",
-                Some(&value),
-                None,
-                None,
-            );
+        // Now the secret goes into the session's target tab (foreground or background).
+        let session_tab_id = self
+            .control
+            .as_ref()
+            .map(|s| s.tab_id)
+            .unwrap_or_else(|| self.tab().canonical.id);
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.canonical.id == session_tab_id)
+        {
+            let mut mutated_nodes = Vec::new();
+            for (node_id, tag, value) in pending {
+                apply_dom_field_action(
+                    tab.instance.page.doc_mut(),
+                    node_id,
+                    &tag,
+                    "type",
+                    Some(&value),
+                    None,
+                    None,
+                );
+                mutated_nodes.push(node_id);
+            }
+            tab.instance.page.resolve();
+            for nid in mutated_nodes {
+                tab.instance.page.dispatch_control_input_and_change(nid);
+            }
+            tab.bump_generation();
         }
-        tab.instance.page.resolve();
-        tab.bump_generation();
+        self.follow_pending_js_navigation(session_tab_id);
 
         if let Some(session) = self.control.as_mut() {
             session.pending = None;
@@ -3594,6 +3657,7 @@ impl BrowserApp {
         };
         let prev_active_id = self.tab().canonical.id;
         self.activate_tab(tab_id);
+        'cmd: {
         match command {
             PageCommand::Click {
                 target_id,
@@ -3607,19 +3671,13 @@ impl BrowserApp {
                     })
                     .cloned()
                 else {
-                    if is_background {
-                        self.activate_tab(prev_active_id);
-                    }
-                    return;
+                    break 'cmd;
                 };
                 if element.role == "link" {
                     if let Some(href) = element.href.clone() {
                         self.session_event(OutTarget::Both, "nav.started", json!({"url": href}));
                         self.navigate_tab(tab_id, &href);
-                        if is_background {
-                            self.activate_tab(prev_active_id);
-                        }
-                        return;
+                        break 'cmd;
                     }
                 }
                 let cx = (element.bounds.x + element.bounds.width / 2.0) as f32;
@@ -3639,8 +3697,12 @@ impl BrowserApp {
                     let tab = self.tab_mut();
                     tab.instance.page.resolve();
                     tab.instance.page.ctx.dirty = false;
-                } else if let Some((ctrl_id, ctag, ctype, clicked_opt)) =
-                    find_interactive_form_control(self.tab().instance.page.doc(), element.node_id)
+                } else if !self.tab().instance.page.ctx.last_event_default_prevented
+                    && let Some((ctrl_id, ctag, ctype, clicked_opt)) =
+                        find_interactive_form_control(
+                            self.tab().instance.page.doc(),
+                            element.node_id,
+                        )
                 {
                     match (ctag.as_str(), ctype.as_str()) {
                         ("input", "checkbox") => {
@@ -3668,11 +3730,13 @@ impl BrowserApp {
                                 None,
                             );
                             tab.instance.page.resolve();
+                            tab.instance.page.dispatch_control_input_and_change(ctrl_id);
                         }
                         ("input", "radio") => {
                             let tab = self.tab_mut();
                             check_radio_group(tab.instance.page.doc_mut(), ctrl_id);
                             tab.instance.page.resolve();
+                            tab.instance.page.dispatch_control_input_and_change(ctrl_id);
                         }
                         ("select", _) => {
                             let tab = self.tab_mut();
@@ -3686,6 +3750,7 @@ impl BrowserApp {
                                 cycle_select_option(tab.instance.page.doc_mut(), ctrl_id, 1);
                             }
                             tab.instance.page.resolve();
+                            tab.instance.page.dispatch_control_input_and_change(ctrl_id);
                         }
                         _ => {}
                     }
@@ -3693,8 +3758,10 @@ impl BrowserApp {
                 self.tab_mut().bump_generation();
                 if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take()
                 {
-                    self.submit_page_form(form_node);
+                    self.submit_page_form_http(form_node);
                 }
+                self.poll_page_related_origins();
+                self.poll_page_passkey_ceremonies();
                 self.follow_pending_js_navigation(tab_id);
             }
             PageCommand::Type {
@@ -3710,20 +3777,26 @@ impl BrowserApp {
                     })
                     .cloned()
                 else {
-                    return;
+                    break 'cmd;
                 };
-                let tab = self.tab_mut();
-                apply_dom_field_action(
-                    tab.instance.page.doc_mut(),
-                    element.node_id,
-                    &element.tag,
-                    "type",
-                    Some(text.as_str()),
-                    None,
-                    None,
-                );
-                tab.instance.page.resolve();
-                tab.bump_generation();
+                {
+                    let tab = self.tab_mut();
+                    apply_dom_field_action(
+                        tab.instance.page.doc_mut(),
+                        element.node_id,
+                        &element.tag,
+                        "type",
+                        Some(text.as_str()),
+                        None,
+                        None,
+                    );
+                    tab.instance.page.resolve();
+                    tab.instance
+                        .page
+                        .dispatch_control_input_and_change(element.node_id);
+                    tab.bump_generation();
+                }
+                self.follow_pending_js_navigation(tab_id);
             }
             PageCommand::Select {
                 target_id,
@@ -3738,50 +3811,64 @@ impl BrowserApp {
                     })
                     .cloned()
                 else {
-                    return;
+                    break 'cmd;
                 };
-                let tab = self.tab_mut();
-                apply_dom_field_action(
-                    tab.instance.page.doc_mut(),
-                    element.node_id,
-                    &element.tag,
-                    "select",
-                    Some(value.as_str()),
-                    None,
-                    None,
-                );
-                tab.instance.page.resolve();
-                tab.bump_generation();
-            }
-            PageCommand::FillForm { fields } => {
-                let tab = self.tab_mut();
-                for f in fields {
-                    let Some(element) = snapshot
-                        .elements
-                        .iter()
-                        .find(|e| {
-                            f.target_ref.as_deref() == Some(e.node_ref.as_str())
-                                || f.target_id.as_deref() == Some(e.id.as_str())
-                        })
-                        .cloned()
-                    else {
-                        continue;
-                    };
+                {
+                    let tab = self.tab_mut();
                     apply_dom_field_action(
                         tab.instance.page.doc_mut(),
                         element.node_id,
                         &element.tag,
-                        &f.action,
-                        f.value.as_deref(),
-                        f.origin.as_deref(),
-                        f.username.as_deref(),
+                        "select",
+                        Some(value.as_str()),
+                        None,
+                        None,
                     );
+                    tab.instance.page.resolve();
+                    tab.instance
+                        .page
+                        .dispatch_control_input_and_change(element.node_id);
+                    tab.bump_generation();
                 }
-                tab.instance.page.resolve();
-                tab.bump_generation();
+                self.follow_pending_js_navigation(tab_id);
+            }
+            PageCommand::FillForm { fields } => {
+                {
+                    let tab = self.tab_mut();
+                    let mut mutated_nodes = Vec::new();
+                    for f in fields {
+                        let Some(element) = snapshot
+                            .elements
+                            .iter()
+                            .find(|e| {
+                                f.target_ref.as_deref() == Some(e.node_ref.as_str())
+                                    || f.target_id.as_deref() == Some(e.id.as_str())
+                            })
+                            .cloned()
+                        else {
+                            continue;
+                        };
+                        apply_dom_field_action(
+                            tab.instance.page.doc_mut(),
+                            element.node_id,
+                            &element.tag,
+                            &f.action,
+                            f.value.as_deref(),
+                            f.origin.as_deref(),
+                            f.username.as_deref(),
+                        );
+                        mutated_nodes.push(element.node_id);
+                    }
+                    tab.instance.page.resolve();
+                    for nid in mutated_nodes {
+                        tab.instance.page.dispatch_control_input_and_change(nid);
+                    }
+                    tab.bump_generation();
+                }
                 if let Some(ref sig) = snapshot.form_signature {
                     recall::record_recipe(&snapshot.url, sig, fields, snapshot);
                 }
+                self.follow_pending_js_navigation(tab_id);
             }
             PageCommand::ReplayRecipe { recipe_id } => {
                 let matched = if !recipe_id.is_empty() {
@@ -3790,36 +3877,44 @@ impl BrowserApp {
                     recall::find_matching_recipe(&snapshot.url, snapshot.form_signature.as_deref())
                 };
                 let Some(recipe) = matched else {
-                    return;
+                    break 'cmd;
                 };
-                let tab = self.tab_mut();
-                for rf in &recipe.fields {
-                    let Some(element) = snapshot
-                        .elements
-                        .iter()
-                        .filter(|e| matches!(e.tag.as_str(), "input" | "select" | "textarea"))
-                        .find(|e| {
-                            (rf.dom_id.is_some() && e.dom_id == rf.dom_id)
-                                || (rf.name.is_some() && e.name == rf.name)
-                                || (!rf.label.is_empty() && e.label == rf.label)
-                        })
-                        .cloned()
-                    else {
-                        continue;
-                    };
-                    apply_dom_field_action(
-                        tab.instance.page.doc_mut(),
-                        element.node_id,
-                        &element.tag,
-                        &rf.action,
-                        rf.value.as_deref(),
-                        rf.origin.as_deref(),
-                        rf.username.as_deref(),
-                    );
+                {
+                    let tab = self.tab_mut();
+                    let mut mutated_nodes = Vec::new();
+                    for rf in &recipe.fields {
+                        let Some(element) = snapshot
+                            .elements
+                            .iter()
+                            .filter(|e| matches!(e.tag.as_str(), "input" | "select" | "textarea"))
+                            .find(|e| {
+                                (rf.dom_id.is_some() && e.dom_id == rf.dom_id)
+                                    || (rf.name.is_some() && e.name == rf.name)
+                                    || (!rf.label.is_empty() && e.label == rf.label)
+                            })
+                            .cloned()
+                        else {
+                            continue;
+                        };
+                        apply_dom_field_action(
+                            tab.instance.page.doc_mut(),
+                            element.node_id,
+                            &element.tag,
+                            &rf.action,
+                            rf.value.as_deref(),
+                            rf.origin.as_deref(),
+                            rf.username.as_deref(),
+                        );
+                        mutated_nodes.push(element.node_id);
+                    }
+                    tab.instance.page.resolve();
+                    for nid in mutated_nodes {
+                        tab.instance.page.dispatch_control_input_and_change(nid);
+                    }
+                    tab.bump_generation();
                 }
-                tab.instance.page.resolve();
-                tab.bump_generation();
                 self.recalled_count = self.recalled_count.wrapping_add(1);
+                self.follow_pending_js_navigation(tab_id);
             }
             PageCommand::Submit {
                 target_id,
@@ -3833,60 +3928,110 @@ impl BrowserApp {
                     })
                     .cloned()
                 else {
-                    return;
+                    break 'cmd;
                 };
-                let base_url = self
-                    .tab()
-                    .canonical
-                    .browser
-                    .current()
-                    .map(|e| e.url.clone())
-                    .unwrap_or_else(|| Url::parse(START_URL).expect("start url"));
-                let (action_url, method, entries) = collect_form_submission(
-                    self.tab().instance.page.doc(),
-                    &base_url,
-                    element.node_id,
-                );
-                self.session_event(
-                    OutTarget::Both,
-                    "nav.started",
-                    json!({"url": action_url.to_string()}),
-                );
-                let provider = self.provider.clone();
-                let viewport = page_viewport(self.size, self.scale, self.theme);
-                let theme = self.theme;
-                match browser::submit_form(&provider, &action_url, &method, &entries) {
-                    Ok((final_url, html)) => {
-                        let broker = self.passkey_broker.clone();
-                        let tab = self.tab_mut();
-                        tab.canonical.browser.commit(final_url.clone(), html.clone());
-                        tab.replace_page(Page::load_with_broker(
-                            &html,
-                            Some(final_url.clone()),
-                            Some(provider),
-                            viewport,
-                            theme,
-                            broker,
-                        ));
-                        tab.canonical.browser.error = None;
-                        tab.canonical.title = title_for(&final_url, tab.instance.page.doc());
-                        self.session_event(
-                            OutTarget::Both,
-                            "nav.committed",
-                            json!({"tab_id": tab_id.0, "url": final_url.to_string()}),
-                        );
+                self.tab_mut().instance.page.ctx.pending_form_submit = None;
+
+                // 1. Dispatch "click" on the submitter when it is not the <form> element itself.
+                let mut click_prevented = false;
+                let mut click_dirtied = false;
+                if !element.tag.eq_ignore_ascii_case("form") {
+                    let hermes = self.tab().instance.page.hermes;
+                    if !hermes.is_null() {
+                        unsafe {
+                            let _ = hermes_app_dispatch_event(
+                                hermes,
+                                c"click".as_ptr(),
+                                element.node_id.as_u64(),
+                                0.0,
+                                0.0,
+                            );
+                        }
                     }
-                    Err(e) => {
-                        let broker = self.passkey_broker.clone();
+                    click_prevented = self.tab().instance.page.ctx.last_event_default_prevented;
+                    click_dirtied = self.tab().instance.page.ctx.dirty;
+                    if click_dirtied {
                         let tab = self.tab_mut();
-                        tab.canonical.browser.fail(e.clone());
-                        let html = error_page(&e);
-                        tab.replace_page(Page::load_with_broker(
-                            &html, None, None, viewport, theme, broker,
-                        ));
-                        tab.canonical.title = "Error".to_string();
+                        tab.instance.page.resolve();
+                        tab.instance.page.ctx.dirty = false;
+                        tab.bump_generation();
                     }
                 }
+
+                if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take()
+                {
+                    self.submit_page_form_http(form_node);
+                    break 'cmd;
+                }
+                let click_handled_async = {
+                    let ctx = &self.tab().instance.page.ctx;
+                    ctx.pending_navigation.is_some()
+                        || !ctx.pending_page_ceremonies.is_empty()
+                        || !ctx.pending_related_origins.is_empty()
+                };
+                if click_prevented || click_handled_async {
+                    self.tab_mut().bump_generation();
+                    self.poll_page_related_origins();
+                    self.poll_page_passkey_ceremonies();
+                    self.follow_pending_js_navigation(tab_id);
+                    break 'cmd;
+                }
+
+                // 2. Locate enclosing <form> and dispatch cancelable "submit" event.
+                let enclosing_form = find_enclosing_form_element(
+                    self.tab().instance.page.doc(),
+                    element.node_id,
+                );
+                if let Some(form_id) = enclosing_form {
+                    let hermes = self.tab().instance.page.hermes;
+                    if !hermes.is_null() {
+                        unsafe {
+                            let _ = hermes_app_dispatch_event(
+                                hermes,
+                                c"submit".as_ptr(),
+                                form_id.as_u64(),
+                                0.0,
+                                0.0,
+                            );
+                        }
+                    }
+                    let submit_prevented =
+                        self.tab().instance.page.ctx.last_event_default_prevented;
+                    if self.tab().instance.page.ctx.dirty {
+                        let tab = self.tab_mut();
+                        tab.instance.page.resolve();
+                        tab.instance.page.ctx.dirty = false;
+                        tab.bump_generation();
+                    }
+                    if let Some(form_node) =
+                        self.tab_mut().instance.page.ctx.pending_form_submit.take()
+                    {
+                        self.submit_page_form_http(form_node);
+                        break 'cmd;
+                    }
+                    let submit_handled_async = {
+                        let ctx = &self.tab().instance.page.ctx;
+                        ctx.pending_navigation.is_some()
+                            || !ctx.pending_page_ceremonies.is_empty()
+                            || !ctx.pending_related_origins.is_empty()
+                    };
+                    if submit_prevented || submit_handled_async {
+                        self.tab_mut().bump_generation();
+                        self.poll_page_related_origins();
+                        self.poll_page_passkey_ceremonies();
+                        self.follow_pending_js_navigation(tab_id);
+                        break 'cmd;
+                    }
+                } else if click_dirtied {
+                    // Submitter is a standalone JS button with no <form> whose click handler mutated the DOM.
+                    self.poll_page_related_origins();
+                    self.poll_page_passkey_ceremonies();
+                    self.follow_pending_js_navigation(tab_id);
+                    break 'cmd;
+                }
+
+                // 3. Standard HTML form submission (or unprevented form fallback).
+                self.submit_page_form_http(element.node_id);
             }
             PageCommand::Scroll { dy } => {
                 self.scroll_page(*dy);
@@ -3899,6 +4044,7 @@ impl BrowserApp {
             PageCommand::Back => self.go_back(),
             PageCommand::Forward => self.go_forward(),
             PageCommand::Reload => self.reload(),
+        }
         }
         if is_background {
             self.activate_tab(prev_active_id);
@@ -4172,66 +4318,85 @@ impl BrowserApp {
     /// The fetch runs on a worker thread and the answer comes back through
     /// the event loop, so the UI thread never waits on the network.
     fn poll_page_related_origins(&mut self) {
-        // A request whose fetch never answered must not leave the page's
-        // promise pending forever. The deadline is the same one the approval
-        // prompt uses: the request is refused when it is older than the
-        // passkey prompt timeout.
-        let expired = {
-            let page = &self.tab().instance.page;
-            page.ctx
-                .pending_related_origins
-                .values()
-                .find(|request| {
-                    request.started_at.elapsed()
-                        >= std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
-                })
-                .map(|request| request.request_id.clone())
-        };
-        if let Some(request_id) = expired {
-            let page = &mut self.tab_mut().instance.page;
-            page.ctx.related_origins_in_flight.remove(&request_id);
-            page.ctx.pending_related_origins.remove(&request_id);
-            let payload = serde_json::json!({
-                "error": "The relying party's related origins document could not be read in time"
-            });
-            settle_related_origins(page.hermes, &request_id, &payload);
+        let active_id = self.tab().canonical.id;
+        let ordered_ids: Vec<TabId> = std::iter::once(active_id)
+            .chain(
+                self.tabs
+                    .iter()
+                    .map(|t| t.canonical.id)
+                    .filter(|&id| id != active_id),
+            )
+            .collect();
+
+        // Check for expired related-origins requests across all open tabs.
+        let mut expired_pair = None;
+        for tid in &ordered_ids {
+            if let Some(tab_entry) = self.tabs.iter().find(|t| t.canonical.id == *tid) {
+                if let Some(req_id) = tab_entry
+                    .instance
+                    .page
+                    .ctx
+                    .pending_related_origins
+                    .values()
+                    .find(|request| {
+                        request.started_at.elapsed()
+                            >= std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
+                    })
+                    .map(|request| request.request_id.clone())
+                {
+                    expired_pair = Some((*tid, req_id));
+                    break;
+                }
+            }
+        }
+        if let Some((tid, request_id)) = expired_pair {
+            if let Some(tab_entry) = self.tabs.iter_mut().find(|t| t.canonical.id == tid) {
+                let page = &mut tab_entry.instance.page;
+                page.ctx.related_origins_in_flight.remove(&request_id);
+                page.ctx.pending_related_origins.remove(&request_id);
+                let payload = serde_json::json!({
+                    "error": "The relying party's related origins document could not be read in time"
+                });
+                settle_related_origins(page.hermes, &request_id, &payload);
+            }
             return;
         }
 
-        // The request the host has not started yet. The parked map is drained
-        // from the front, so a page that starts several ceremonies gets them
-        // resolved in order.
-        let pending = {
-            let page = &self.tab().instance.page;
-            let in_flight = &page.ctx.related_origins_in_flight;
-            page.ctx
-                .pending_related_origins
-                .values()
-                .find(|request| !in_flight.contains(&request.request_id))
-                .cloned()
-        };
-        let Some(pending) = pending else {
+        // Find the next unstarted related-origins request across all open tabs.
+        let mut next_pending = None;
+        for tid in &ordered_ids {
+            if let Some(tab_entry) = self.tabs.iter().find(|t| t.canonical.id == *tid) {
+                let page = &tab_entry.instance.page;
+                let in_flight = &page.ctx.related_origins_in_flight;
+                if let Some(req) = page
+                    .ctx
+                    .pending_related_origins
+                    .values()
+                    .find(|request| !in_flight.contains(&request.request_id))
+                    .cloned()
+                {
+                    next_pending = Some((*tid, req));
+                    break;
+                }
+            }
+        }
+        let Some((tab, pending)) = next_pending else {
             return;
         };
-        // The request stays in the map until the fetch answers, because the
-        // answer needs the request's inputs to start the ceremony. A marker
-        // keeps it from being fetched twice.
-        self.tab_mut()
-            .instance
-            .page
-            .ctx
-            .related_origins_in_flight
-            .insert(pending.request_id.clone());
+        if let Some(tab_entry) = self.tabs.iter_mut().find(|t| t.canonical.id == tab) {
+            tab_entry
+                .instance
+                .page
+                .ctx
+                .related_origins_in_flight
+                .insert(pending.request_id.clone());
+        }
 
-        let tab = self.tab().canonical.id;
         let proxy = self.proxy.clone();
         let origin = pending.origin.clone();
         let rp_id = pending.rp_id.clone();
         let request_id = pending.request_id.clone();
         std::thread::spawn(move || {
-            // The fetch needs a Tokio reactor. The browser's own runtime is
-            // private, but `enter_runtime` enters it, and the fetch is
-            // awaited inside that context.
             let _guard = browser::enter_runtime();
             let outcome =
                 pollster::block_on(crate::webauthn::related_origins::validate(&origin, &rp_id));
@@ -4251,44 +4416,39 @@ impl BrowserApp {
     }
 
     /// Settles a page's promise after the related-origins fetch has answered.
-    ///
-    /// The fetch ran in a tab that may have been closed or replaced while it
-    /// was in flight, so the answer is only used when it names the tab that is
-    /// showing now. A stale answer is dropped: the page it belonged to is
-    /// gone, and settling it would touch a document that is no longer there.
     fn handle_related_origins_resolved_for_tab(
         &mut self,
         tab: TabId,
         request_id: String,
         result: Result<String, String>,
     ) {
-        if self.tab().canonical.id != tab {
+        let Some(tab_entry) = self.tabs.iter_mut().find(|t| t.canonical.id == tab) else {
+            return;
+        };
+        if !tab_entry
+            .instance
+            .page
+            .ctx
+            .pending_related_origins
+            .contains_key(&request_id)
+        {
             return;
         }
-        self.handle_related_origins_resolved(&request_id, result);
+        Self::settle_related_origins_on_page(&mut tab_entry.instance.page, &request_id, result);
+        self.poll_page_passkey_ceremonies();
         self.sync_chrome();
         self.request_redraw();
     }
 
-    /// Settles a page's promise after the related-origins fetch has answered.
-    ///
-    /// When the relying party's own document named the caller's origin, the
-    /// ceremony is started here and the page's promise moves on to the human
-    /// approval gate. When it did not, the page's promise is rejected with
-    /// the reason.
-    fn handle_related_origins_resolved(
-        &mut self,
+    fn settle_related_origins_on_page(
+        page: &mut Page,
         request_id: &str,
         result: Result<String, String>,
     ) {
-        let page = &mut self.tab_mut().instance.page;
         page.ctx.related_origins_in_flight.remove(request_id);
         let request = page.ctx.pending_related_origins.remove(request_id);
         let payload = match (result, request) {
             (Ok(_), Some(request)) => {
-                // The relying party's own document named the caller's origin,
-                // so the ceremony may proceed. It starts here, with the
-                // related origins check already made.
                 if request.is_create {
                     dom_ffi::begin_page_registration_with_related_origins(
                         &mut page.ctx,
@@ -4313,29 +4473,39 @@ impl BrowserApp {
         settle_related_origins(page.hermes, request_id, &payload);
     }
 
-    /// Picks up any passkey ceremony a page started, so a human can be asked
-    /// about it.
-    ///
-    /// A page's `navigator.credentials.get()` starts a ceremony and stops.
-    /// The ceremony waits in the broker until somebody says yes or no. This
-    /// is where the host notices it, raises the interstitial, and enforces
-    /// the deadline.
+    /// Picks up any passkey ceremony a page started (across foreground or background tabs),
+    /// so a human can be asked about it.
     fn poll_page_passkey_ceremonies(&mut self) {
-        // A ceremony that is already being shown may have run out of time.
-        // The deadline is read from the page's own map, which is where the
-        // ceremony's start time lives.
-        let expired = self
-            .tab()
-            .instance
-            .page
-            .ctx
-            .pending_page_ceremonies
-            .values()
-            .find(|ceremony| {
-                ceremony.started_at.elapsed()
-                    >= std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
-            })
-            .cloned();
+        let active_id = self.tab().canonical.id;
+        let ordered_ids: Vec<TabId> = std::iter::once(active_id)
+            .chain(
+                self.tabs
+                    .iter()
+                    .map(|t| t.canonical.id)
+                    .filter(|&id| id != active_id),
+            )
+            .collect();
+
+        let mut expired = None;
+        for tid in &ordered_ids {
+            if let Some(tab_entry) = self.tabs.iter().find(|t| t.canonical.id == *tid) {
+                if let Some(c) = tab_entry
+                    .instance
+                    .page
+                    .ctx
+                    .pending_page_ceremonies
+                    .values()
+                    .find(|ceremony| {
+                        ceremony.started_at.elapsed()
+                            >= std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
+                    })
+                    .cloned()
+                {
+                    expired = Some(c);
+                    break;
+                }
+            }
+        }
         if let Some(expired) = expired {
             self.finish_page_passkey_ceremony(
                 &expired,
@@ -4344,18 +4514,26 @@ impl BrowserApp {
             return;
         }
 
-        // Look for a ceremony the page started and that nobody has answered.
-        let pending = {
-            let page = &self.tab().instance.page;
-            page.ctx
-                .pending_page_ceremonies
-                .values()
-                .find(|ceremony| {
-                    ceremony.started_at.elapsed()
-                        < std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
-                })
-                .cloned()
-        };
+        let mut pending = None;
+        for tid in &ordered_ids {
+            if let Some(tab_entry) = self.tabs.iter().find(|t| t.canonical.id == *tid) {
+                if let Some(c) = tab_entry
+                    .instance
+                    .page
+                    .ctx
+                    .pending_page_ceremonies
+                    .values()
+                    .find(|ceremony| {
+                        ceremony.started_at.elapsed()
+                            < std::time::Duration::from_secs(chrome::PASSKEY_PROMPT_TIMEOUT_SECS)
+                    })
+                    .cloned()
+                {
+                    pending = Some(c);
+                    break;
+                }
+            }
+        }
         let Some(pending) = pending else {
             if self.passkey_prompt.take().is_some() {
                 self.sync_chrome();
@@ -4445,13 +4623,18 @@ impl BrowserApp {
         ceremony: &dom_ffi::PageCeremony,
         result: Result<String, String>,
     ) {
-        // The ceremony is removed first, so a second decision cannot settle
-        // the promise twice.
-        let page = &mut self.tab_mut().instance.page;
-        page.ctx
-            .pending_page_ceremonies
-            .remove(&ceremony.ceremony_id);
-        let hermes = page.hermes;
+        let owner_tab_id = self
+            .tabs
+            .iter()
+            .find(|t| {
+                t.instance
+                    .page
+                    .ctx
+                    .pending_page_ceremonies
+                    .contains_key(&ceremony.ceremony_id)
+            })
+            .map(|t| t.canonical.id)
+            .unwrap_or_else(|| self.tab().canonical.id);
 
         let payload = match &result {
             Ok(json) => json.clone(),
@@ -4463,16 +4646,26 @@ impl BrowserApp {
             if result.is_ok() { "true" } else { "false" },
             serde_json::to_string(&payload).unwrap_or_else(|_| "\"\"".into()),
         );
-        if let Ok(code) = std::ffi::CString::new(script) {
-            unsafe {
-                hermes_app_eval_script(hermes, code.as_ptr(), c"<passkey-decision>".as_ptr());
+        let mut pending_form_node = None;
+        if let Some(tab_entry) = self.tabs.iter_mut().find(|t| t.canonical.id == owner_tab_id) {
+            tab_entry
+                .instance
+                .page
+                .ctx
+                .pending_page_ceremonies
+                .remove(&ceremony.ceremony_id);
+            let hermes = tab_entry.instance.page.hermes;
+            if let Ok(code) = std::ffi::CString::new(script) {
+                unsafe {
+                    hermes_app_eval_script(hermes, code.as_ptr(), c"<passkey-decision>".as_ptr());
+                }
             }
-        }
-        if self.tab().instance.page.ctx.dirty {
-            let tab = self.tab_mut();
-            tab.instance.page.resolve();
-            tab.instance.page.ctx.dirty = false;
-            tab.bump_generation();
+            if tab_entry.instance.page.ctx.dirty {
+                tab_entry.instance.page.resolve();
+                tab_entry.instance.page.ctx.dirty = false;
+                tab_entry.bump_generation();
+            }
+            pending_form_node = tab_entry.instance.page.ctx.pending_form_submit.take();
         }
 
         // Cancel the ceremony in the broker, so a decision that arrived after
@@ -4512,11 +4705,17 @@ impl BrowserApp {
         self.flush_control_out();
 
         self.passkey_prompt = None;
-        let active_tab_id = self.tab().canonical.id;
-        if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
-            self.submit_page_form(form_node);
+        if let Some(form_node) = pending_form_node {
+            let prev_active = self.tab().canonical.id;
+            if owner_tab_id != prev_active {
+                self.activate_tab(owner_tab_id);
+            }
+            self.submit_page_form_http(form_node);
+            if owner_tab_id != prev_active {
+                self.activate_tab(prev_active);
+            }
         }
-        self.follow_pending_js_navigation(active_tab_id);
+        self.follow_pending_js_navigation(owner_tab_id);
         self.sync_chrome();
         self.request_redraw();
     }
@@ -5958,6 +6157,7 @@ impl BrowserApp {
                 local_y,
             );
         }
+        let click_prevented = self.tab().instance.page.ctx.last_event_default_prevented;
         let js_dirtied = self.tab().instance.page.ctx.dirty;
         if js_dirtied {
             let tab = self.tab_mut();
@@ -5966,12 +6166,19 @@ impl BrowserApp {
             tab.bump_generation();
         }
         if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
-            self.submit_page_form(form_node);
+            self.submit_page_form_http(form_node);
             return;
         }
+        self.poll_page_related_origins();
+        self.poll_page_passkey_ceremonies();
         if self.tab().instance.page.ctx.pending_navigation.is_some() {
             let tab_id = self.tab().canonical.id;
             self.follow_pending_js_navigation(tab_id);
+            self.sync_chrome();
+            self.request_redraw();
+            return;
+        }
+        if click_prevented {
             self.sync_chrome();
             self.request_redraw();
             return;
@@ -6000,6 +6207,7 @@ impl BrowserApp {
                 .and_then(|n| n.element_data())
                 .is_some_and(|d| d.attr(local_name!("disabled")).is_some());
             if !is_disabled {
+                let active_tab_id = self.tab().canonical.id;
                 self.tab_mut()
                     .instance
                     .page
@@ -6020,38 +6228,50 @@ impl BrowserApp {
                             })
                             .unwrap_or(false);
                         let next_val = if cur_checked { "false" } else { "true" };
-                        let tab = self.tab_mut();
-                        apply_dom_field_action(
-                            tab.instance.page.doc_mut(),
-                            control_id,
-                            "input",
-                            "check",
-                            Some(next_val),
-                            None,
-                            None,
-                        );
-                        tab.instance.page.resolve();
-                        tab.bump_generation();
-                    }
-                    ("input", "radio") => {
-                        let tab = self.tab_mut();
-                        check_radio_group(tab.instance.page.doc_mut(), control_id);
-                        tab.instance.page.resolve();
-                        tab.bump_generation();
-                    }
-                    ("select", _) => {
-                        let tab = self.tab_mut();
-                        if let Some(opt_id) = clicked_option_id {
-                            select_specific_option(
+                        {
+                            let tab = self.tab_mut();
+                            apply_dom_field_action(
                                 tab.instance.page.doc_mut(),
                                 control_id,
-                                opt_id,
+                                "input",
+                                "check",
+                                Some(next_val),
+                                None,
+                                None,
                             );
-                        } else {
-                            cycle_select_option(tab.instance.page.doc_mut(), control_id, 1);
+                            tab.instance.page.resolve();
+                            tab.instance.page.dispatch_control_input_and_change(control_id);
+                            tab.bump_generation();
                         }
-                        tab.instance.page.resolve();
-                        tab.bump_generation();
+                        self.follow_pending_js_navigation(active_tab_id);
+                    }
+                    ("input", "radio") => {
+                        {
+                            let tab = self.tab_mut();
+                            check_radio_group(tab.instance.page.doc_mut(), control_id);
+                            tab.instance.page.resolve();
+                            tab.instance.page.dispatch_control_input_and_change(control_id);
+                            tab.bump_generation();
+                        }
+                        self.follow_pending_js_navigation(active_tab_id);
+                    }
+                    ("select", _) => {
+                        {
+                            let tab = self.tab_mut();
+                            if let Some(opt_id) = clicked_option_id {
+                                select_specific_option(
+                                    tab.instance.page.doc_mut(),
+                                    control_id,
+                                    opt_id,
+                                );
+                            } else {
+                                cycle_select_option(tab.instance.page.doc_mut(), control_id, 1);
+                            }
+                            tab.instance.page.resolve();
+                            tab.instance.page.dispatch_control_input_and_change(control_id);
+                            tab.bump_generation();
+                        }
+                        self.follow_pending_js_navigation(active_tab_id);
                     }
                     ("input", "submit" | "image") => {
                         if !js_dirtied {
@@ -6090,7 +6310,59 @@ impl BrowserApp {
         self.request_redraw();
     }
 
+    /// Submit a form from a user gesture (submit button click or Enter key in `<input>`),
+    /// dispatching the cancelable JS `"submit"` event on `<form>` first.
     fn submit_page_form(&mut self, submitter_id: NodeId) {
+        let tab_id = self.tab().canonical.id;
+        self.tab_mut().instance.page.ctx.pending_form_submit = None;
+        if let Some(form_id) =
+            find_enclosing_form_element(self.tab().instance.page.doc(), submitter_id)
+        {
+            let hermes = self.tab().instance.page.hermes;
+            if !hermes.is_null() {
+                unsafe {
+                    let _ = hermes_app_dispatch_event(
+                        hermes,
+                        c"submit".as_ptr(),
+                        form_id.as_u64(),
+                        0.0,
+                        0.0,
+                    );
+                }
+            }
+            let submit_prevented = self.tab().instance.page.ctx.last_event_default_prevented;
+            if self.tab().instance.page.ctx.dirty {
+                let tab = self.tab_mut();
+                tab.instance.page.resolve();
+                tab.instance.page.ctx.dirty = false;
+                tab.bump_generation();
+            }
+            if let Some(form_node) = self.tab_mut().instance.page.ctx.pending_form_submit.take() {
+                self.submit_page_form_http(form_node);
+                return;
+            }
+            let handled_async = {
+                let ctx = &self.tab().instance.page.ctx;
+                ctx.pending_navigation.is_some()
+                    || !ctx.pending_page_ceremonies.is_empty()
+                    || !ctx.pending_related_origins.is_empty()
+            };
+            if submit_prevented || handled_async {
+                self.tab_mut().bump_generation();
+                self.poll_page_related_origins();
+                self.poll_page_passkey_ceremonies();
+                self.follow_pending_js_navigation(tab_id);
+                self.sync_chrome();
+                self.request_redraw();
+                self.flush_control_out();
+                return;
+            }
+        }
+        self.submit_page_form_http(submitter_id);
+    }
+
+    /// Execute the raw HTTP `GET`/`POST` submission for `submitter_id` (or `<form>` node).
+    fn submit_page_form_http(&mut self, submitter_id: NodeId) {
         let tab_id = self.tab().canonical.id;
         let base_url = self
             .tab()
@@ -6154,6 +6426,8 @@ impl BrowserApp {
                 self.session_event(OutTarget::Both, "nav.failed", json!({"error": e}));
             }
         }
+        self.poll_page_related_origins();
+        self.poll_page_passkey_ceremonies();
         self.follow_pending_js_navigation(tab_id);
         self.sync_chrome();
         self.request_redraw();
@@ -6433,19 +6707,29 @@ impl BrowserApp {
                 if tag == "select" {
                     match logical_key {
                         Key::Named(NamedKey::ArrowDown | NamedKey::ArrowRight) => {
-                            let tab = self.tab_mut();
-                            cycle_select_option(tab.instance.page.doc_mut(), focused_id, 1);
-                            tab.instance.page.resolve();
-                            tab.bump_generation();
+                            let active_tab_id = self.tab().canonical.id;
+                            {
+                                let tab = self.tab_mut();
+                                cycle_select_option(tab.instance.page.doc_mut(), focused_id, 1);
+                                tab.instance.page.resolve();
+                                tab.instance.page.dispatch_control_input_and_change(focused_id);
+                                tab.bump_generation();
+                            }
+                            self.follow_pending_js_navigation(active_tab_id);
                             self.sync_chrome();
                             self.request_redraw();
                             return;
                         }
                         Key::Named(NamedKey::ArrowUp | NamedKey::ArrowLeft) => {
-                            let tab = self.tab_mut();
-                            cycle_select_option(tab.instance.page.doc_mut(), focused_id, -1);
-                            tab.instance.page.resolve();
-                            tab.bump_generation();
+                            let active_tab_id = self.tab().canonical.id;
+                            {
+                                let tab = self.tab_mut();
+                                cycle_select_option(tab.instance.page.doc_mut(), focused_id, -1);
+                                tab.instance.page.resolve();
+                                tab.instance.page.dispatch_control_input_and_change(focused_id);
+                                tab.bump_generation();
+                            }
+                            self.follow_pending_js_navigation(active_tab_id);
                             self.sync_chrome();
                             self.request_redraw();
                             return;
@@ -6454,6 +6738,7 @@ impl BrowserApp {
                     }
                 } else if tag == "input" && input_type == "checkbox" {
                     if matches!(logical_key, Key::Named(NamedKey::Space)) {
+                        let active_tab_id = self.tab().canonical.id;
                         let cur_checked = self
                             .tab()
                             .instance
@@ -6467,18 +6752,22 @@ impl BrowserApp {
                             })
                             .unwrap_or(false);
                         let next_val = if cur_checked { "false" } else { "true" };
-                        let tab = self.tab_mut();
-                        apply_dom_field_action(
-                            tab.instance.page.doc_mut(),
-                            focused_id,
-                            "input",
-                            "check",
-                            Some(next_val),
-                            None,
-                            None,
-                        );
-                        tab.instance.page.resolve();
-                        tab.bump_generation();
+                        {
+                            let tab = self.tab_mut();
+                            apply_dom_field_action(
+                                tab.instance.page.doc_mut(),
+                                focused_id,
+                                "input",
+                                "check",
+                                Some(next_val),
+                                None,
+                                None,
+                            );
+                            tab.instance.page.resolve();
+                            tab.instance.page.dispatch_control_input_and_change(focused_id);
+                            tab.bump_generation();
+                        }
+                        self.follow_pending_js_navigation(active_tab_id);
                         self.sync_chrome();
                         self.request_redraw();
                         return;
@@ -6561,24 +6850,29 @@ impl BrowserApp {
                     }
 
                     if mutated {
-                        let tab = self.tab_mut();
-                        apply_dom_field_action(
-                            tab.instance.page.doc_mut(),
-                            focused_id,
-                            &tag,
-                            "type",
-                            Some(&cur_val),
-                            None,
-                            None,
-                        );
-                        blitz_dom::Document::handle_ui_event(
-                            tab.instance.page.doc_mut(),
-                            blitz_traits::events::UiEvent::AppleStandardKeybinding(
-                                "moveToEndOfDocument:".into(),
-                            ),
-                        );
-                        tab.instance.page.resolve();
-                        tab.bump_generation();
+                        let active_tab_id = self.tab().canonical.id;
+                        {
+                            let tab = self.tab_mut();
+                            apply_dom_field_action(
+                                tab.instance.page.doc_mut(),
+                                focused_id,
+                                &tag,
+                                "type",
+                                Some(&cur_val),
+                                None,
+                                None,
+                            );
+                            blitz_dom::Document::handle_ui_event(
+                                tab.instance.page.doc_mut(),
+                                blitz_traits::events::UiEvent::AppleStandardKeybinding(
+                                    "moveToEndOfDocument:".into(),
+                                ),
+                            );
+                            tab.instance.page.resolve();
+                            tab.instance.page.dispatch_control_input_and_change(focused_id);
+                            tab.bump_generation();
+                        }
+                        self.follow_pending_js_navigation(active_tab_id);
                         self.sync_chrome();
                         self.request_redraw();
                         return;
@@ -7631,6 +7925,35 @@ fn find_interactive_form_control(
                     }
                 }
             }
+        }
+        cur = node.parent;
+    }
+    None
+}
+
+fn find_enclosing_form_element(doc: &HtmlDocument, node_id: NodeId) -> Option<NodeId> {
+    if let Some(sub_node) = doc.get_node(node_id) {
+        if let Some(data) = sub_node.element_data() {
+            if data.name.local.to_string().eq_ignore_ascii_case("form") {
+                return Some(node_id);
+            }
+            if let Some(form_attr) = data.attr(local_name!("form")).filter(|s| !s.is_empty()) {
+                if let Some(fid) = doc.get_element_by_id(form_attr) {
+                    return Some(fid);
+                }
+            }
+        }
+    }
+    let mut cur = doc.get_node(node_id).and_then(|n| n.parent);
+    while let Some(nid) = cur {
+        let Some(node) = doc.get_node(nid) else {
+            break;
+        };
+        if node
+            .element_data()
+            .is_some_and(|d| d.name.local.to_string().eq_ignore_ascii_case("form"))
+        {
+            return Some(nid);
         }
         cur = node.parent;
     }
@@ -9500,6 +9823,441 @@ fn runtimetest() -> i32 {
         check(
             leak_val == "null",
             "localStorage is strictly isolated by origin",
+        );
+    }
+
+    // Part 5: Modern SPA/form interactivity in Static Hermes + supervised background session:
+    // DOMContentLoaded + window load, live el.value / el.checked / el.disabled / el.classList /
+    // el.id / el.tagName / scoped querySelectorAll / btoa+atob / crypto.getRandomValues,
+    // supervised fill_form dispatching input+change to enable a disabled submit button,
+    // and supervised submit honoring form submit e.preventDefault() + new FormData(form) + fetch()
+    // without triggering raw fallback HTTP POST or stealing foreground tab focus.
+    {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Mutex;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind part5 server");
+        let port = listener.local_addr().expect("local addr").port();
+        let seen_js_post_body = Arc::new(Mutex::new(String::new()));
+        let seen_js_post_ctype = Arc::new(Mutex::new(String::new()));
+        let raw_fallback_hits = Arc::new(AtomicBool::new(false));
+
+        let body_sink = seen_js_post_body.clone();
+        let ctype_sink = seen_js_post_ctype.clone();
+        let raw_sink = raw_fallback_hits.clone();
+
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut buf = [0u8; 8192];
+                let mut total = Vec::new();
+                let mut header_end = None;
+                let mut content_len = 0usize;
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            total.extend_from_slice(&buf[..n]);
+                            if header_end.is_none() {
+                                if let Some(pos) = total.windows(4).position(|w| w == b"\r\n\r\n") {
+                                    let h_end = pos + 4;
+                                    header_end = Some(h_end);
+                                    let hdrs = String::from_utf8_lossy(&total[..h_end]);
+                                    for line in hdrs.lines() {
+                                        if let Some(rest) = line
+                                            .to_ascii_lowercase()
+                                            .strip_prefix("content-length:")
+                                        {
+                                            content_len = rest.trim().parse().unwrap_or(0);
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(h_end) = header_end {
+                                if total.len() >= h_end + content_len {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                let h_end = header_end.unwrap_or(total.len());
+                let head = String::from_utf8_lossy(&total[..h_end]).to_string();
+                let body = String::from_utf8_lossy(&total[h_end..]).to_string();
+                let req_line = head.lines().next().unwrap_or("");
+                let mut ctype = String::new();
+                for line in head.lines().skip(1) {
+                    if let Some((k, v)) = line.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("content-type") {
+                            ctype = v.trim().to_string();
+                        }
+                    }
+                }
+
+                if req_line.starts_with("GET /spa-signup ") {
+                    let html = r##"<!DOCTYPE html><html><head><title>Initial SPA</title></head><body>
+                        <div id="probe" class="seed old" data-drop="temp"></div>
+                        <form id="spa-form" action="/never-raw-post" method="POST">
+                            <label for="handle">Handle</label>
+                            <input id="handle" name="handle" type="text" value="" />
+                            <label for="plan">Plan</label>
+                            <select id="plan" name="plan">
+                                <option value="">Choose</option>
+                                <option value="pro">Pro</option>
+                            </select>
+                            <label for="agree">Agree</label>
+                            <input id="agree" name="agree" type="checkbox" value="yes" />
+                            <button id="js-submit" type="submit" disabled>Create Workspace</button>
+                        </form>
+                        <script>
+                            var lifecycle = [];
+                            document.addEventListener("DOMContentLoaded", function() {
+                                lifecycle.push("dcl:" + document.readyState);
+                            });
+                            window.addEventListener("load", function() {
+                                lifecycle.push("load:" + String(document.forms.length));
+                                document.getElementById("probe").setAttribute("data-lifecycle", lifecycle.join("|"));
+                            });
+
+                            var probe = document.getElementById("probe");
+                            probe.classList.add("ready");
+                            probe.classList.remove("old");
+                            var toggledOff = probe.classList.toggle("seed");
+                            var hasReady = probe.classList.contains("ready") && !toggledOff;
+                            probe.removeAttribute("data-drop");
+                            var attrRemoved = !probe.hasAttribute("data-drop");
+
+                            var form = document.getElementById("spa-form");
+                            var scopedInputs = form.querySelectorAll("input, select");
+                            var encoded = btoa("walkaway:2026");
+                            var decoded = atob(encoded);
+                            var rnd = new Uint8Array(16);
+                            crypto.getRandomValues(rnd);
+                            var nonZero = 0;
+                            for (var i = 0; i < rnd.length; i++) {
+                                if (rnd[i] !== 0) nonZero++;
+                            }
+                            document.title = "Hydrated SPA";
+                            probe.setAttribute(
+                                "data-dom-api",
+                                [
+                                    probe.id,
+                                    probe.tagName,
+                                    String(hasReady),
+                                    String(attrRemoved),
+                                    String(scopedInputs.length),
+                                    decoded,
+                                    String(nonZero > 0),
+                                    document.title
+                                ].join("|")
+                            );
+
+                            var handleEl = form.querySelector("#handle");
+                            var planEl = form.querySelector("#plan");
+                            var agreeEl = form.querySelector("#agree");
+                            var submitBtn = document.getElementById("js-submit");
+                            function revalidate() {
+                                var ok = handleEl.value.length >= 3 && planEl.value === "pro" && agreeEl.checked === true;
+                                submitBtn.disabled = !ok;
+                                probe.setAttribute("data-live-state", handleEl.value + "|" + planEl.value + "|" + String(agreeEl.checked) + "|" + String(submitBtn.disabled));
+                            }
+                            handleEl.addEventListener("input", revalidate);
+                            planEl.addEventListener("change", revalidate);
+                            agreeEl.addEventListener("change", revalidate);
+
+                            form.addEventListener("submit", function(ev) {
+                                ev.preventDefault();
+                                var fd = new FormData(form);
+                                fetch("/api/js-submit", {
+                                    method: "POST",
+                                    body: fd
+                                }).then(function(r) {
+                                    return r.json();
+                                }).then(function(payload) {
+                                    if (payload && payload.next) {
+                                        window.location.href = payload.next;
+                                    }
+                                });
+                            });
+                        </script>
+                    </body></html>"##;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html.len(),
+                        html
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if req_line.starts_with("POST /api/js-submit ") {
+                    *ctype_sink.lock().expect("lock") = ctype;
+                    *body_sink.lock().expect("lock") = body;
+                    let json_resp = r#"{"ok":true,"next":"/confirmed"}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        json_resp.len(),
+                        json_resp
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if req_line.starts_with("POST /never-raw-post") {
+                    raw_sink.store(true, Ordering::SeqCst);
+                    let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if req_line.starts_with("GET /confirmed ") {
+                    let html = r#"<!DOCTYPE html><html><head><title>Workspace Created</title></head><body>
+                        <button id="done-badge">Workspace Ready</button>
+                    </body></html>"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html.len(),
+                        html
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                }
+            }
+        });
+
+        let mut spa_app = test_app();
+        let foreground_tab_id = spa_app.tab().canonical.id;
+        spa_app.control_connect(1, Role::Host);
+        spa_app.control_connect(2, Role::Agent);
+        let (mut seq_h, mut seq_a) = (0u64, 0u64);
+        let send_ctrl = |app: &mut BrowserApp, conn: u64, seq: &mut u64, mut frame: Value| -> Vec<(OutTarget, Value)> {
+            *seq += 1;
+            frame["v"] = json!(1);
+            frame["seq"] = json!(*seq);
+            app.handle_control(conn, frame);
+            app.drain_control_out()
+        };
+        let find_ctrl = |out: &[(OutTarget, Value)], kind: &str| -> Option<Value> {
+            out.iter()
+                .map(|(_, v)| v)
+                .find(|v| v.get("type").and_then(Value::as_str) == Some(kind))
+                .cloned()
+        };
+
+        let out = send_ctrl(
+            &mut spa_app,
+            1,
+            &mut seq_h,
+            json!({
+                "type": "session.open",
+                "title": "SPA Background Test",
+                "request_id": "spa-open",
+                "background": true,
+                "capabilities": {"protocol": 1},
+                "policy": {"decision": "human_per_action"}
+            }),
+        );
+        let opened = find_ctrl(&out, "session.opened").expect("session.opened");
+        let session_id = opened["session_id"].as_str().expect("session_id").to_string();
+        let bg_tab_id = TabId(opened["tab_id"].as_u64().expect("tab_id"));
+        check(
+            spa_app.tab().canonical.id == foreground_tab_id && bg_tab_id != foreground_tab_id,
+            "background session.open creates a background tab without stealing foreground focus",
+        );
+
+        let spa_url = Url::parse(&format!("http://127.0.0.1:{port}/spa-signup")).expect("spa url");
+        let (final_url, html) =
+            browser::fetch_with_final_url(&spa_app.provider, &spa_url).expect("fetch /spa-signup");
+        let bg_gen = spa_app
+            .tabs
+            .iter()
+            .find(|t| t.canonical.id == bg_tab_id)
+            .expect("bg tab")
+            .canonical
+            .browser
+            .generation;
+        spa_app.handle_navigated(bg_tab_id, bg_gen, final_url, Ok(html));
+
+        let (lifecycle_attr, dom_api_attr) = {
+            let bg_doc = spa_app
+                .tabs
+                .iter()
+                .find(|t| t.canonical.id == bg_tab_id)
+                .expect("bg tab")
+                .instance
+                .page
+                .doc();
+            let probe_id = bg_doc.get_element_by_id("probe").expect("#probe");
+            let node = bg_doc.get_node(probe_id).expect("probe node");
+            (
+                node.attr(LocalName::from("data-lifecycle"))
+                    .unwrap_or_default()
+                    .to_string(),
+                node.attr(LocalName::from("data-dom-api"))
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        };
+        check(
+            lifecycle_attr == "dcl:complete|load:1",
+            &format!("DOMContentLoaded and window load events fire in order with readyState and document.forms ({lifecycle_attr})"),
+        );
+        check(
+            dom_api_attr == "probe|DIV|true|true|3|walkaway:2026|true|Hydrated SPA",
+            &format!("classList, removeAttribute/hasAttribute, scoped querySelectorAll, btoa/atob, crypto.getRandomValues, and document.title work ({dom_api_attr})"),
+        );
+
+        // Initial observe on background session: submit button must be disabled.
+        let out = send_ctrl(
+            &mut spa_app,
+            2,
+            &mut seq_a,
+            json!({
+                "type": "observe.request",
+                "session_id": session_id,
+                "request_id": "spa-obs-1",
+                "include_screenshot": false
+            }),
+        );
+        let snap1 = find_ctrl(&out, "observe.result").expect("snap1");
+        let find_el = |snap: &Value, dom_id: &str| -> Value {
+            snap["elements"]
+                .as_array()
+                .and_then(|els| {
+                    els.iter()
+                        .find(|e| e.get("dom_id").and_then(Value::as_str) == Some(dom_id))
+                        .cloned()
+                })
+                .unwrap_or(Value::Null)
+        };
+        check(
+            find_el(&snap1, "js-submit")["enabled"].as_bool() == Some(false),
+            "observe reports enabled=false on #js-submit before form validation passes",
+        );
+
+        // Propose & approve fill_form on background tab -> dispatches input & change -> enables #js-submit.
+        let _ = send_ctrl(
+            &mut spa_app,
+            2,
+            &mut seq_a,
+            json!({
+                "type": "propose",
+                "session_id": session_id,
+                "request_id": "spa-prop-fill",
+                "proposal_id": "spa-prop-fill",
+                "snapshot_id": snap1["snapshot_id"],
+                "fingerprint": snap1["fingerprint"],
+                "generation": snap1["generation"],
+                "operation": {
+                    "kind": "fill_form",
+                    "fields": [
+                        {"target_ref": find_el(&snap1, "handle")["node_ref"], "action": "type", "value": "ryan"},
+                        {"target_ref": find_el(&snap1, "plan")["node_ref"], "action": "select", "value": "pro"},
+                        {"target_ref": find_el(&snap1, "agree")["node_ref"], "action": "check", "value": "true"}
+                    ]
+                },
+                "rationale": "Fill JS-validated workspace form"
+            }),
+        );
+        let out = send_ctrl(
+            &mut spa_app,
+            1,
+            &mut seq_h,
+            json!({
+                "type": "decision",
+                "session_id": session_id,
+                "request_id": "spa-dec-fill",
+                "proposal_id": "spa-prop-fill",
+                "fingerprint": snap1["fingerprint"],
+                "generation": snap1["generation"],
+                "decision": "approve",
+                "decided_by": "user",
+                "surface": "glasses"
+            }),
+        );
+        check(
+            find_ctrl(&out, "executed").is_some()
+                && spa_app.tab().canonical.id == foreground_tab_id,
+            "fill_form executes on background tab while preserving foreground tab focus",
+        );
+
+        let out = send_ctrl(
+            &mut spa_app,
+            2,
+            &mut seq_a,
+            json!({
+                "type": "observe.request",
+                "session_id": session_id,
+                "request_id": "spa-obs-2",
+                "include_screenshot": false
+            }),
+        );
+        let snap2 = find_ctrl(&out, "observe.result").expect("snap2");
+        check(
+            find_el(&snap2, "js-submit")["enabled"].as_bool() == Some(true),
+            "fill_form dispatches input/change events so JS validation enables #js-submit",
+        );
+
+        // Propose & approve submit -> dispatches cancelable submit on #spa-form -> FormData + fetch() -> /confirmed.
+        let _ = send_ctrl(
+            &mut spa_app,
+            2,
+            &mut seq_a,
+            json!({
+                "type": "propose",
+                "session_id": session_id,
+                "request_id": "spa-prop-sub",
+                "proposal_id": "spa-prop-sub",
+                "snapshot_id": snap2["snapshot_id"],
+                "fingerprint": snap2["fingerprint"],
+                "generation": snap2["generation"],
+                "operation": {
+                    "kind": "submit",
+                    "target_ref": find_el(&snap2, "js-submit")["node_ref"]
+                },
+                "rationale": "Submit JS-intercepted workspace form"
+            }),
+        );
+        let out = send_ctrl(
+            &mut spa_app,
+            1,
+            &mut seq_h,
+            json!({
+                "type": "decision",
+                "session_id": session_id,
+                "request_id": "spa-dec-sub",
+                "proposal_id": "spa-prop-sub",
+                "fingerprint": snap2["fingerprint"],
+                "generation": snap2["generation"],
+                "decision": "approve",
+                "decided_by": "user",
+                "surface": "glasses"
+            }),
+        );
+        check(
+            find_ctrl(&out, "executed").is_some()
+                && spa_app.tab().canonical.id == foreground_tab_id,
+            "JS-intercepted submit executes on background tab without stealing foreground tab focus",
+        );
+
+        let js_ctype = seen_js_post_ctype.lock().expect("lock").clone();
+        let js_body = seen_js_post_body.lock().expect("lock").clone();
+        let raw_hit = raw_fallback_hits.load(Ordering::SeqCst);
+        check(
+            !raw_hit
+                && js_ctype.to_ascii_lowercase().starts_with("application/x-www-form-urlencoded")
+                && js_body == "handle=ryan&plan=pro&agree=yes",
+            &format!("submit e.preventDefault() blocks raw fallback POST and sends live FormData via fetch ({js_ctype} | {js_body})"),
+        );
+
+        let out = send_ctrl(
+            &mut spa_app,
+            2,
+            &mut seq_a,
+            json!({
+                "type": "observe.request",
+                "session_id": session_id,
+                "request_id": "spa-obs-3",
+                "include_screenshot": false
+            }),
+        );
+        let snap3 = find_ctrl(&out, "observe.result").expect("snap3");
+        check(
+            snap3["url"].as_str().is_some_and(|u| u.ends_with("/confirmed"))
+                && find_el(&snap3, "done-badge")["label"].as_str() == Some("Workspace Ready"),
+            "fetch response redirect from submit handler lands background tab on /confirmed",
         );
     }
 
@@ -12560,12 +13318,12 @@ mod tests {
     #[test]
     fn suite_selftest_and_runtime_and_hurdles() {
         assert_eq!(selftest(), 0, "selftest failed");
-        assert_eq!(runtimetest(), 0, "runtimetest failed");
 
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let release_bin = manifest_dir.join("target/release/hermes-blitz-browser");
         if release_bin.exists() {
             for flag in [
+                "--runtimetest",
                 "--uitest",
                 "--observetest",
                 "--supervisortest",

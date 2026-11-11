@@ -179,6 +179,70 @@
     level: c_ptr,
     message: c_ptr
   ): void {});
+  const _remove_attr = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_remove_attribute(
+    node: c_size_t,
+    name: c_ptr
+  ): void {});
+  const _has_attr = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_has_attribute(
+    node: c_size_t,
+    name: c_ptr
+  ): c_int {
+    throw 0;
+  });
+  const _load_tag_name = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_load_tag_name(
+    node: c_size_t
+  ): c_int {
+    throw 0;
+  });
+  const _load_form_value = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_load_form_value(
+    node: c_size_t
+  ): c_int {
+    throw 0;
+  });
+  const _set_form_value = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_set_form_value(
+    node: c_size_t,
+    value: c_ptr
+  ): void {});
+  const _get_checked = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_get_checked(
+    node: c_size_t
+  ): c_int {
+    throw 0;
+  });
+  const _set_checked = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_set_checked(
+    node: c_size_t,
+    checked: c_int
+  ): void {});
+  const _focus_node = $SHBuiltin.extern_c({include: "blitz_bridge.h"}, function blitz_focus_node(
+    node: c_size_t
+  ): void {});
+  const _query_selector_within = $SHBuiltin.extern_c(
+    {include: "blitz_bridge.h"},
+    function blitz_query_selector_within(root: c_size_t, selector: c_ptr): c_size_t {
+      throw 0;
+    }
+  );
+  const _query_selector_all_within = $SHBuiltin.extern_c(
+    {include: "blitz_bridge.h"},
+    function blitz_query_selector_all_within(root: c_size_t, selector: c_ptr): c_size_t {
+      throw 0;
+    }
+  );
+  const _load_form_entries_json = $SHBuiltin.extern_c(
+    {include: "blitz_bridge.h"},
+    function blitz_load_form_entries_json(form_node: c_size_t): c_int {
+      throw 0;
+    }
+  );
+  const _crypto_random_bytes = $SHBuiltin.extern_c(
+    {include: "blitz_bridge.h"},
+    function blitz_crypto_random_bytes(len: c_size_t): c_int {
+      throw 0;
+    }
+  );
+  const _set_event_default_prevented = $SHBuiltin.extern_c(
+    {include: "blitz_bridge.h"},
+    function blitz_set_event_default_prevented(prevented: c_int): void {}
+  );
 
   /* Allocate a NUL-terminated UTF-8 copy of `s`. Caller frees.
    * Supports full Unicode (1-, 2-, 3-, and 4-byte UTF-8 sequences including
@@ -549,7 +613,7 @@
   function wrapElement(id: c_size_t): any {
     if ((id as any) === 0) return null;
     let el: any = new ObjectCtor();
-    el.id = id;
+    el.__nodeId = id;
     let styleObj: any = new ObjectCtor();
     styleObj.setProperty = function (name: string, value: string): void {
       let n: c_ptr = toUtf8z(String(name));
@@ -605,9 +669,22 @@
       if (len < 0) return null;
       return readScratchUtf8(len);
     };
+    el.removeAttribute = function (name: string): void {
+      let n: c_ptr = toUtf8z(String(name));
+      _remove_attr(id, n);
+      _free(n);
+      _mark_dirty();
+    };
+    el.hasAttribute = function (name: string): boolean {
+      let n: c_ptr = toUtf8z(String(name));
+      let present: number = _has_attr(id, n);
+      _free(n);
+      return present !== 0;
+    };
     el.appendChild = function (child: any): any {
-      if (child && child.id) {
-        _append_child(id, child.id);
+      let childNodeId: any = child ? child.__nodeId || child.id : 0;
+      if (childNodeId) {
+        _append_child(id, childNodeId);
         _mark_dirty();
       }
       return child;
@@ -624,6 +701,102 @@
       _submit_form(id);
       _mark_dirty();
     };
+    el.focus = function (): void {
+      _focus_node(id);
+    };
+    el.blur = function (): void {};
+    el.click = function (): void {
+      let disp: any = (globalThis as any).__dispatchBlitzEvent;
+      if (disp) disp("click", id as any, 0, 0);
+    };
+    el.querySelector = function (selector: string): any {
+      let c: c_ptr = toUtf8z(String(selector));
+      let nid: c_size_t = _query_selector_within(id, c);
+      _free(c);
+      if ((nid as any) === 0) return null;
+      return wrapElement(nid);
+    };
+    el.querySelectorAll = function (selector: string): any {
+      let c: c_ptr = toUtf8z(String(selector));
+      let count: number = _query_selector_all_within(id, c) as any;
+      _free(c);
+      let results: any = new ArrayCtor();
+      let i: number = 0;
+      while (i < count) {
+        let nid: c_size_t = _query_selector_item(i as any);
+        if ((nid as any) !== 0) {
+          results[results.length] = wrapElement(nid);
+        }
+        i = i + 1;
+      }
+      return results;
+    };
+
+    let classListObj: any = new ObjectCtor();
+    function readClassTokens(): any {
+      let raw: any = el.getAttribute("class");
+      let tokens: any = new ArrayCtor();
+      if (!raw) return tokens;
+      let parts: any = (String(raw) as any).split(/\s+/);
+      for (let i: number = 0; i < parts.length; i = i + 1) {
+        let tok: string = String(parts[i]);
+        if (tok.length > 0) tokens[tokens.length] = tok;
+      }
+      return tokens;
+    }
+    classListObj.contains = function (cls: any): boolean {
+      let want: string = String(cls);
+      let tokens: any = readClassTokens();
+      for (let i: number = 0; i < tokens.length; i = i + 1) {
+        if (tokens[i] === want) return true;
+      }
+      return false;
+    };
+    classListObj.add = function (...names: any[]): void {
+      let tokens: any = readClassTokens();
+      for (let nIdx: number = 0; nIdx < names.length; nIdx = nIdx + 1) {
+        let want: string = String(names[nIdx]);
+        if (!want) continue;
+        let found: boolean = false;
+        for (let i: number = 0; i < tokens.length; i = i + 1) {
+          if (tokens[i] === want) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) tokens[tokens.length] = want;
+      }
+      el.setAttribute("class", tokens.join(" "));
+    };
+    classListObj.remove = function (...names: any[]): void {
+      let tokens: any = readClassTokens();
+      let next: any = new ArrayCtor();
+      for (let i: number = 0; i < tokens.length; i = i + 1) {
+        let cur: string = String(tokens[i]);
+        let drop: boolean = false;
+        for (let nIdx: number = 0; nIdx < names.length; nIdx = nIdx + 1) {
+          if (cur === String(names[nIdx])) {
+            drop = true;
+            break;
+          }
+        }
+        if (!drop) next[next.length] = cur;
+      }
+      el.setAttribute("class", next.join(" "));
+    };
+    classListObj.toggle = function (cls: any, force: any): boolean {
+      let want: string = String(cls);
+      let has: boolean = classListObj.contains(want);
+      let shouldHave: boolean = force !== undefined ? Boolean(force) : !has;
+      if (shouldHave) {
+        classListObj.add(want);
+      } else {
+        classListObj.remove(want);
+      }
+      return shouldHave;
+    };
+    el.classList = classListObj;
+
     el.addEventListener = function (type: string, listener: any): void {
       if (!listener) return;
       let t: string = String(type);
@@ -639,6 +812,22 @@
         byNode[key] = list;
       }
       list[list.length] = listener;
+    };
+    el.removeEventListener = function (type: string, listener: any): void {
+      if (!listener) return;
+      let t: string = String(type);
+      let byNode: any = eventListeners[t];
+      if (!byNode) return;
+      let key: any = id as any;
+      let list: any = byNode[key];
+      if (!list) return;
+      let next: any = new ArrayCtor();
+      for (let i: number = 0; i < list.length; i = i + 1) {
+        if (list[i] !== listener) {
+          next[next.length] = list[i];
+        }
+      }
+      byNode[key] = next;
     };
     el.getBoundingClientRect = function (): any {
       let x: number = _get_rect_field(id, 0);
@@ -657,6 +846,38 @@
       return rectObj;
     };
     if (defineProp) {
+      let idDesc: any = new ObjectCtor();
+      idDesc.get = function (): string {
+        let v: any = el.getAttribute("id");
+        return v === null || v === undefined ? "" : String(v);
+      };
+      idDesc.set = function (v: any): void {
+        el.setAttribute("id", String(v));
+      };
+      idDesc.configurable = true;
+      defineProp(el, "id", idDesc);
+
+      let tagDesc: any = new ObjectCtor();
+      tagDesc.get = function (): string {
+        let len: number = _load_tag_name(id);
+        if (len < 0) return "";
+        return readScratchUtf8(len);
+      };
+      tagDesc.configurable = true;
+      defineProp(el, "tagName", tagDesc);
+      defineProp(el, "nodeName", tagDesc);
+
+      let classDesc: any = new ObjectCtor();
+      classDesc.get = function (): string {
+        let v: any = el.getAttribute("class");
+        return v === null || v === undefined ? "" : String(v);
+      };
+      classDesc.set = function (v: any): void {
+        el.setAttribute("class", String(v));
+      };
+      classDesc.configurable = true;
+      defineProp(el, "className", classDesc);
+
       let textDesc: any = new ObjectCtor();
       textDesc.get = function (): string {
         return el.getInnerText();
@@ -690,14 +911,63 @@
 
       let valueDesc: any = new ObjectCtor();
       valueDesc.get = function (): string {
-        let v: any = el.getAttribute("value");
-        return v === null || v === undefined ? "" : String(v);
+        let len: number = _load_form_value(id);
+        if (len < 0) return "";
+        return readScratchUtf8(len);
       };
       valueDesc.set = function (v: any): void {
-        el.setAttribute("value", String(v));
+        let s: string = v === null || v === undefined ? "" : String(v);
+        let c: c_ptr = toUtf8z(s);
+        _set_form_value(id, c);
+        _free(c);
+        _mark_dirty();
       };
       valueDesc.configurable = true;
       defineProp(el, "value", valueDesc);
+
+      let checkedDesc: any = new ObjectCtor();
+      checkedDesc.get = function (): boolean {
+        return _get_checked(id) !== 0;
+      };
+      checkedDesc.set = function (v: any): void {
+        _set_checked(id, v ? 1 : 0);
+        _mark_dirty();
+      };
+      checkedDesc.configurable = true;
+      defineProp(el, "checked", checkedDesc);
+
+      let disabledDesc: any = new ObjectCtor();
+      disabledDesc.get = function (): boolean {
+        return el.hasAttribute("disabled");
+      };
+      disabledDesc.set = function (v: any): void {
+        if (v) {
+          el.setAttribute("disabled", "disabled");
+        } else {
+          el.removeAttribute("disabled");
+        }
+      };
+      disabledDesc.configurable = true;
+      defineProp(el, "disabled", disabledDesc);
+
+      let attrProps: any = ["name", "type", "placeholder", "href", "action", "method"];
+      for (let pIdx: number = 0; pIdx < attrProps.length; pIdx = pIdx + 1) {
+        let propName: string = String(attrProps[pIdx]);
+        let d: any = new ObjectCtor();
+        d.get = (function (pn: string): any {
+          return function (): string {
+            let v: any = el.getAttribute(pn);
+            return v === null || v === undefined ? "" : String(v);
+          };
+        })(propName);
+        d.set = (function (pn: string): any {
+          return function (v: any): void {
+            el.setAttribute(pn, String(v));
+          };
+        })(propName);
+        d.configurable = true;
+        defineProp(el, propName, d);
+      }
     }
     return el;
   }
@@ -783,7 +1053,32 @@
     };
     cookieDesc.configurable = true;
     defineProp(docObj, "cookie", cookieDesc);
+
+    let titleDesc: any = new ObjectCtor();
+    titleDesc.get = function (): string {
+      let tid: c_size_t = querySelector("title");
+      if ((tid as any) === 0) return "";
+      let tEl: any = wrapElement(tid);
+      return tEl ? tEl.getInnerText() : "";
+    };
+    titleDesc.set = function (v: any): void {
+      let tid: c_size_t = querySelector("title");
+      if ((tid as any) !== 0) {
+        let tEl: any = wrapElement(tid);
+        if (tEl) tEl.setInnerText(String(v));
+      }
+    };
+    titleDesc.configurable = true;
+    defineProp(docObj, "title", titleDesc);
+
+    let formsDesc: any = new ObjectCtor();
+    formsDesc.get = function (): any {
+      return docObj.querySelectorAll("form");
+    };
+    formsDesc.configurable = true;
+    defineProp(docObj, "forms", formsDesc);
   }
+  docObj.readyState = "complete";
   docObj.addEventListener = function (type: string, listener: any): void {
     let rootId: c_size_t = querySelector("html");
     if ((rootId as any) !== 0) {
@@ -791,7 +1086,20 @@
       if (rootEl) rootEl.addEventListener(type, listener);
     }
   };
+  docObj.removeEventListener = function (type: string, listener: any): void {
+    let rootId: c_size_t = querySelector("html");
+    if ((rootId as any) !== 0) {
+      let rootEl: any = wrapElement(rootId);
+      if (rootEl) rootEl.removeEventListener(type, listener);
+    }
+  };
   (globalThis as any).document = docObj;
+  (globalThis as any).addEventListener = function (type: string, listener: any): void {
+    docObj.addEventListener(type, listener);
+  };
+  (globalThis as any).removeEventListener = function (type: string, listener: any): void {
+    docObj.removeEventListener(type, listener);
+  };
 
   /* ---- window.location & window.history ---- */
   function currentHref(): string {
@@ -1055,6 +1363,14 @@
     let bodyStr: string = "";
     if (init && init.body !== undefined && init.body !== null) {
       bodyStr = typeof init.body === "string" ? init.body : String(init.body);
+      if (
+        typeof init.body === "object" &&
+        (init.body._isFormData || init.body._isUrlSearchParams) &&
+        !hdrMap["content-type"] &&
+        !hdrMap["Content-Type"]
+      ) {
+        hdrMap["content-type"] = "application/x-www-form-urlencoded;charset=UTF-8";
+      }
     }
     let cMethod: c_ptr = toUtf8z(methodStr);
     let cUrl: c_ptr = toUtf8z(urlStr);
@@ -1093,28 +1409,154 @@
     return PromiseCtor.resolve(respObj);
   };
 
-  /* ---- URLSearchParams, setTimeout, queueMicrotask ---- */
+  /* ---- FormData, URLSearchParams, atob/btoa, crypto.getRandomValues, timers ---- */
+  function makeFormData(formEl: any): any {
+    let entriesList: any = new ArrayCtor();
+    if (formEl && formEl.__nodeId) {
+      let len: number = _load_form_entries_json(formEl.__nodeId);
+      if (len > 0) {
+        let parsed: any = (globalThis as any).JSON.parse(readScratchUtf8(len));
+        if (parsed && parsed.length) {
+          for (let i: number = 0; i < parsed.length; i = i + 1) {
+            let row: any = parsed[i];
+            if (row && row.length >= 2) {
+              let pair: any = new ArrayCtor();
+              pair[0] = String(row[0]);
+              pair[1] = String(row[1]);
+              entriesList[entriesList.length] = pair;
+            }
+          }
+        }
+      }
+    }
+    let fd: any = new ObjectCtor();
+    fd._isFormData = true;
+    fd._entries = entriesList;
+    fd.append = function (k: any, v: any): void {
+      let pair: any = new ArrayCtor();
+      pair[0] = String(k);
+      pair[1] = String(v === null || v === undefined ? "" : v);
+      entriesList[entriesList.length] = pair;
+    };
+    fd.set = function (k: any, v: any): void {
+      let keyStr: string = String(k);
+      let valStr: string = String(v === null || v === undefined ? "" : v);
+      let next: any = new ArrayCtor();
+      let replaced: boolean = false;
+      for (let i: number = 0; i < entriesList.length; i = i + 1) {
+        let row: any = entriesList[i];
+        if (row[0] === keyStr) {
+          if (!replaced) {
+            let pair: any = new ArrayCtor();
+            pair[0] = keyStr;
+            pair[1] = valStr;
+            next[next.length] = pair;
+            replaced = true;
+          }
+        } else {
+          next[next.length] = row;
+        }
+      }
+      if (!replaced) {
+        let pair: any = new ArrayCtor();
+        pair[0] = keyStr;
+        pair[1] = valStr;
+        next[next.length] = pair;
+      }
+      entriesList = next;
+      fd._entries = entriesList;
+    };
+    fd.get = function (k: any): any {
+      let keyStr: string = String(k);
+      for (let i: number = 0; i < entriesList.length; i = i + 1) {
+        if (entriesList[i][0] === keyStr) return entriesList[i][1];
+      }
+      return null;
+    };
+    fd.getAll = function (k: any): any {
+      let keyStr: string = String(k);
+      let out: any = new ArrayCtor();
+      for (let i: number = 0; i < entriesList.length; i = i + 1) {
+        if (entriesList[i][0] === keyStr) out[out.length] = entriesList[i][1];
+      }
+      return out;
+    };
+    fd.has = function (k: any): boolean {
+      return fd.get(k) !== null;
+    };
+    fd.delete = function (k: any): void {
+      let keyStr: string = String(k);
+      let next: any = new ArrayCtor();
+      for (let i: number = 0; i < entriesList.length; i = i + 1) {
+        if (entriesList[i][0] !== keyStr) next[next.length] = entriesList[i];
+      }
+      entriesList = next;
+      fd._entries = entriesList;
+    };
+    fd.entries = function (): any {
+      return entriesList;
+    };
+    fd.forEach = function (cb: any): void {
+      if (typeof cb !== "function") return;
+      for (let i: number = 0; i < entriesList.length; i = i + 1) {
+        cb(entriesList[i][1], entriesList[i][0], fd);
+      }
+    };
+    fd.toString = function (): string {
+      let out: string = "";
+      for (let i: number = 0; i < entriesList.length; i = i + 1) {
+        if (i > 0) out = out + "&";
+        out =
+          out +
+          String((globalThis as any).encodeURIComponent(entriesList[i][0])) +
+          "=" +
+          String((globalThis as any).encodeURIComponent(entriesList[i][1]));
+      }
+      return out;
+    };
+    return fd;
+  }
+  (globalThis as any).FormData = makeFormData;
+
   function makeURLSearchParams(init: any): any {
     let pairs: any = new ObjectCtor();
-    let q: string = typeof init === "string" ? init : "";
-    if (q.charAt(0) === "?") q = q.substring(1);
-    if (q.length > 0) {
-      let parts: any = (q as any).split("&");
-      for (let i: number = 0; i < parts.length; i = i + 1) {
-        let seg: string = String(parts[i]);
-        let eq: number = seg.indexOf("=");
-        if (eq >= 0) {
-          let rawK: string = String((seg.substring(0, eq) as any).split("+").join(" "));
-          let rawV: string = String((seg.substring(eq + 1) as any).split("+").join(" "));
-          let k: string = String((globalThis as any).decodeURIComponent(rawK));
-          let v: string = String((globalThis as any).decodeURIComponent(rawV));
-          pairs[k] = v;
-        } else if (seg.length > 0) {
-          pairs[String((globalThis as any).decodeURIComponent(seg))] = "";
+    if (typeof init === "string") {
+      let q: string = init;
+      if (q.charAt(0) === "?") q = q.substring(1);
+      if (q.length > 0) {
+        let parts: any = (q as any).split("&");
+        for (let i: number = 0; i < parts.length; i = i + 1) {
+          let seg: string = String(parts[i]);
+          let eq: number = seg.indexOf("=");
+          if (eq >= 0) {
+            let rawK: string = String((seg.substring(0, eq) as any).split("+").join(" "));
+            let rawV: string = String((seg.substring(eq + 1) as any).split("+").join(" "));
+            let k: string = String((globalThis as any).decodeURIComponent(rawK));
+            let v: string = String((globalThis as any).decodeURIComponent(rawV));
+            pairs[k] = v;
+          } else if (seg.length > 0) {
+            pairs[String((globalThis as any).decodeURIComponent(seg))] = "";
+          }
+        }
+      }
+    } else if (init && typeof init === "object") {
+      if (init._entries && init._entries.length !== undefined) {
+        for (let i: number = 0; i < init._entries.length; i = i + 1) {
+          let row: any = init._entries[i];
+          if (row && row.length >= 2) {
+            pairs[String(row[0])] = String(row[1]);
+          }
+        }
+      } else {
+        let keys: any = ObjectCtor.keys(init);
+        for (let i: number = 0; i < keys.length; i = i + 1) {
+          let k: string = String(keys[i]);
+          pairs[k] = String(init[k]);
         }
       }
     }
     let usp: any = new ObjectCtor();
+    usp._isUrlSearchParams = true;
     usp.get = function (k: any): any {
       let v: any = pairs[String(k)];
       return v === undefined ? null : v;
@@ -1147,6 +1589,86 @@
     return usp;
   }
   (globalThis as any).URLSearchParams = makeURLSearchParams;
+
+  let b64Std: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  (globalThis as any).btoa = function (input: any): string {
+    let str: string = String(input === undefined ? "" : input);
+    let out: string = "";
+    let i: number = 0;
+    while (i < str.length) {
+      let c1: number = str.charCodeAt(i) & 0xff;
+      i = i + 1;
+      if (i === str.length) {
+        out = out + b64Std.charAt(c1 >> 2) + b64Std.charAt((c1 & 0x3) << 4) + "==";
+        break;
+      }
+      let c2: number = str.charCodeAt(i) & 0xff;
+      i = i + 1;
+      if (i === str.length) {
+        out =
+          out +
+          b64Std.charAt(c1 >> 2) +
+          b64Std.charAt(((c1 & 0x3) << 4) | ((c2 & 0xf0) >> 4)) +
+          b64Std.charAt((c2 & 0xf) << 2) +
+          "=";
+        break;
+      }
+      let c3: number = str.charCodeAt(i) & 0xff;
+      i = i + 1;
+      out =
+        out +
+        b64Std.charAt(c1 >> 2) +
+        b64Std.charAt(((c1 & 0x3) << 4) | ((c2 & 0xf0) >> 4)) +
+        b64Std.charAt(((c2 & 0xf) << 2) | ((c3 & 0xc0) >> 6)) +
+        b64Std.charAt(c3 & 0x3f);
+    }
+    return out;
+  };
+  (globalThis as any).atob = function (input: any): string {
+    let clean: string = String(input === undefined ? "" : input)
+      .replace(/[\t\n\f\r ]+/g, "")
+      .replace(/=+$/, "");
+    let out: string = "";
+    let acc: number = 0;
+    let bits: number = 0;
+    for (let i: number = 0; i < clean.length; i = i + 1) {
+      let ch: string = clean.charAt(i);
+      if (ch === "-") ch = "+";
+      else if (ch === "_") ch = "/";
+      let v: number = b64Std.indexOf(ch);
+      if (v < 0) continue;
+      acc = (acc << 6) | v;
+      bits = bits + 6;
+      if (bits >= 8) {
+        bits = bits - 8;
+        out = out + String.fromCharCode((acc >> bits) & 0xff);
+      }
+    }
+    return out;
+  };
+
+  let cryptoObj: any = (globalThis as any).crypto || new ObjectCtor();
+  cryptoObj.getRandomValues = function (typedArray: any): any {
+    if (!typedArray || typeof typedArray.byteLength !== "number") {
+      throw new Error("crypto.getRandomValues requires a TypedArray");
+    }
+    let byteLen: number = typedArray.byteLength;
+    let got: number = _crypto_random_bytes(byteLen as any);
+    if (got < 0) {
+      throw new Error("crypto.getRandomValues failed");
+    }
+    let view: any = new Uint8Array(
+      typedArray.buffer || typedArray,
+      typedArray.byteOffset || 0,
+      byteLen
+    );
+    for (let i: number = 0; i < byteLen; i = i + 1) {
+      let b: number = _scratch_bytes_get(i as any);
+      view[i] = b >= 0 ? b : 0;
+    }
+    return typedArray;
+  };
+  (globalThis as any).crypto = cryptoObj;
 
   let nextTimerId: number = 1;
   (globalThis as any).setTimeout = function (fn: any, _ms: any): number {
@@ -1537,18 +2059,33 @@
     x: number,
     y: number
   ): void {
+    _set_event_default_prevented(0);
     let targetEl: any = wrapElement(nodeId as any);
     let stopped: boolean = false;
+    let stopImmediate: boolean = false;
+    let defaultPrevented: boolean = false;
     let ev: any = new ObjectCtor();
     ev.type = eventType;
     ev.target = targetEl;
     ev.currentTarget = targetEl;
+    ev.bubbles = true;
+    ev.cancelable = true;
+    ev.defaultPrevented = false;
     ev.clientX = x;
     ev.clientY = y;
     ev.x = x;
     ev.y = y;
+    ev.preventDefault = function (): void {
+      defaultPrevented = true;
+      ev.defaultPrevented = true;
+      _set_event_default_prevented(1);
+    };
     ev.stopPropagation = function (): void {
       stopped = true;
+    };
+    ev.stopImmediatePropagation = function (): void {
+      stopped = true;
+      stopImmediate = true;
     };
 
     let byNode: any = eventListeners[eventType];
@@ -1564,7 +2101,7 @@
         if (listeners) {
           let i: number = 0;
           let len: number = listeners.length;
-          while (i < len) {
+          while (i < len && !stopImmediate) {
             let fn: any = listeners[i];
             if (fn) {
               fn(ev);

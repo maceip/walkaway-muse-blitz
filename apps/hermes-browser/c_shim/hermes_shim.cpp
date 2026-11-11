@@ -64,6 +64,19 @@ int blitz_dom_http_fetch(
     const char *headers_json,
     const char *body_utf8);
 void blitz_dom_console_log(void *ctx, const char *level, const char *message);
+void blitz_dom_remove_attribute(void *ctx, uint64_t node, const char *name);
+int blitz_dom_has_attribute(void *ctx, uint64_t node, const char *name);
+int blitz_dom_load_tag_name(void *ctx, uint64_t node);
+int blitz_dom_load_form_value(void *ctx, uint64_t node);
+void blitz_dom_set_form_value(void *ctx, uint64_t node, const char *value);
+int blitz_dom_get_checked(void *ctx, uint64_t node);
+void blitz_dom_set_checked(void *ctx, uint64_t node, int checked);
+void blitz_dom_focus_node(void *ctx, uint64_t node);
+uint64_t blitz_dom_query_selector_within(void *ctx, uint64_t root, const char *selector);
+size_t blitz_dom_query_selector_all_within(void *ctx, uint64_t root, const char *selector);
+int blitz_dom_load_form_entries_json(void *ctx, uint64_t form_node);
+int blitz_dom_crypto_random_bytes(void *ctx, size_t len);
+void blitz_dom_set_event_default_prevented(void *ctx, int prevented);
 }
 
 struct HermesAppRuntime {
@@ -267,6 +280,71 @@ extern "C" int blitz_http_fetch(
 extern "C" void blitz_console_log(const char *level, const char *message) {
   if (!g_app) return;
   blitz_dom_console_log(g_app->blitz_ctx, level, message);
+}
+
+extern "C" void blitz_remove_attribute(uint64_t node, const char *name) {
+  if (!g_app) return;
+  blitz_dom_remove_attribute(g_app->blitz_ctx, node, name);
+}
+
+extern "C" int blitz_has_attribute(uint64_t node, const char *name) {
+  if (!g_app) return 0;
+  return blitz_dom_has_attribute(g_app->blitz_ctx, node, name);
+}
+
+extern "C" int blitz_load_tag_name(uint64_t node) {
+  if (!g_app) return -1;
+  return blitz_dom_load_tag_name(g_app->blitz_ctx, node);
+}
+
+extern "C" int blitz_load_form_value(uint64_t node) {
+  if (!g_app) return -1;
+  return blitz_dom_load_form_value(g_app->blitz_ctx, node);
+}
+
+extern "C" void blitz_set_form_value(uint64_t node, const char *value) {
+  if (!g_app) return;
+  blitz_dom_set_form_value(g_app->blitz_ctx, node, value);
+}
+
+extern "C" int blitz_get_checked(uint64_t node) {
+  if (!g_app) return 0;
+  return blitz_dom_get_checked(g_app->blitz_ctx, node);
+}
+
+extern "C" void blitz_set_checked(uint64_t node, int checked) {
+  if (!g_app) return;
+  blitz_dom_set_checked(g_app->blitz_ctx, node, checked);
+}
+
+extern "C" void blitz_focus_node(uint64_t node) {
+  if (!g_app) return;
+  blitz_dom_focus_node(g_app->blitz_ctx, node);
+}
+
+extern "C" uint64_t blitz_query_selector_within(uint64_t root, const char *selector) {
+  if (!g_app) return 0;
+  return blitz_dom_query_selector_within(g_app->blitz_ctx, root, selector);
+}
+
+extern "C" size_t blitz_query_selector_all_within(uint64_t root, const char *selector) {
+  if (!g_app) return 0;
+  return blitz_dom_query_selector_all_within(g_app->blitz_ctx, root, selector);
+}
+
+extern "C" int blitz_load_form_entries_json(uint64_t form_node) {
+  if (!g_app) return -1;
+  return blitz_dom_load_form_entries_json(g_app->blitz_ctx, form_node);
+}
+
+extern "C" int blitz_crypto_random_bytes(size_t len) {
+  if (!g_app) return -1;
+  return blitz_dom_crypto_random_bytes(g_app->blitz_ctx, len);
+}
+
+extern "C" void blitz_set_event_default_prevented(int prevented) {
+  if (!g_app) return;
+  blitz_dom_set_event_default_prevented(g_app->blitz_ctx, prevented);
 }
 
 /* ------------------------------------------------------------------------- */

@@ -83,6 +83,8 @@ pub struct BlitzHostContext {
     pub session_storage: std::collections::HashMap<String, String>,
     /// Per-page JS console log ring buffer (`console.log`, `warn`, `error`, plus uncaught JSIExceptions).
     pub console_logs: Vec<ConsoleEntry>,
+    /// Set to `true` when the most recently dispatched JS event called `event.preventDefault()`.
+    pub last_event_default_prevented: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -207,6 +209,7 @@ impl BlitzHostContext {
             pending_navigation: None,
             session_storage: std::collections::HashMap::new(),
             console_logs: Vec::new(),
+            last_event_default_prevented: false,
         }
     }
 
@@ -1809,6 +1812,535 @@ pub unsafe extern "C" fn blitz_dom_console_log(
         },
         message: msg_str.to_string(),
     });
+}
+
+fn attr_qual(name: &str) -> QualName {
+    QualName::new(None, Namespace::from(""), LocalName::from(name))
+}
+
+/// Read the live value of a form control (`input`, `textarea`, `select`, `option`, `button`)
+/// directly from Blitz's DOM + `text_input_data` editor + `<option selected>` state.
+pub fn read_live_control_value(doc: &BaseDocument, node_id: NodeId) -> String {
+    let Some(node) = doc.get_node(node_id) else {
+        return String::new();
+    };
+    let Some(data) = node.element_data() else {
+        return String::new();
+    };
+    let tag = data.name.local.to_string().to_ascii_lowercase();
+    match tag.as_str() {
+        "select" => node
+            .children
+            .iter()
+            .copied()
+            .find_map(|cid| {
+                let cnode = doc.get_node(cid)?;
+                let cdata = cnode.element_data()?;
+                if !cdata.name.local.to_string().eq_ignore_ascii_case("option")
+                    || cdata.attr(LocalName::from("disabled")).is_some()
+                    || cdata.attr(LocalName::from("selected")).is_none()
+                {
+                    return None;
+                }
+                Some(
+                    cdata
+                        .attr(LocalName::from("value"))
+                        .map(str::to_string)
+                        .unwrap_or_else(|| cnode.text_content().trim().to_string()),
+                )
+            })
+            .or_else(|| data.attr(LocalName::from("value")).map(str::to_string))
+            .or_else(|| {
+                node.children.iter().copied().find_map(|cid| {
+                    let cnode = doc.get_node(cid)?;
+                    let cdata = cnode.element_data()?;
+                    if !cdata.name.local.to_string().eq_ignore_ascii_case("option")
+                        || cdata.attr(LocalName::from("disabled")).is_some()
+                    {
+                        return None;
+                    }
+                    Some(
+                        cdata
+                            .attr(LocalName::from("value"))
+                            .map(str::to_string)
+                            .unwrap_or_else(|| cnode.text_content().trim().to_string()),
+                    )
+                })
+            })
+            .unwrap_or_default(),
+        "textarea" => data
+            .text_input_data()
+            .map(|d| d.editor.text().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| data.attr(LocalName::from("value")).map(str::to_string))
+            .unwrap_or_else(|| node.text_content()),
+        "option" => data
+            .attr(LocalName::from("value"))
+            .map(str::to_string)
+            .unwrap_or_else(|| node.text_content().trim().to_string()),
+        _ => {
+            if let Some(tid) = data.text_input_data() {
+                let editor_text = tid.editor.text().to_string();
+                if !editor_text.is_empty() {
+                    return editor_text;
+                }
+            }
+            data.attr(LocalName::from("value"))
+                .unwrap_or_default()
+                .to_string()
+        }
+    }
+}
+
+/// `node.removeAttribute(name)`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_remove_attribute(
+    ctx: *mut c_void,
+    node: u64,
+    name: *const c_char,
+) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    if node == 0 {
+        return;
+    }
+    let name = unsafe { as_str(name) };
+    let node_id = NodeId::from_u64(node);
+    if ctx.doc.get_node(node_id).is_none() {
+        return;
+    }
+    {
+        let mut mutator = ctx.doc.mutate();
+        mutator.clear_attribute(node_id, attr_qual(name));
+    }
+    ctx.dirty = true;
+}
+
+/// `node.hasAttribute(name)`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_has_attribute(
+    ctx: *mut c_void,
+    node: u64,
+    name: *const c_char,
+) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return 0;
+    };
+    if node == 0 {
+        return 0;
+    }
+    let name = unsafe { as_str(name) };
+    let node_id = NodeId::from_u64(node);
+    ctx.doc
+        .get_node(node_id)
+        .and_then(|n| n.attr(LocalName::from(name)))
+        .map(|_| 1)
+        .unwrap_or(0)
+}
+
+/// `node.tagName` -> writes uppercase HTML tag name into `ctx.scratch_utf8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_load_tag_name(ctx: *mut c_void, node: u64) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    if node == 0 {
+        return -1;
+    }
+    let node_id = NodeId::from_u64(node);
+    let Some(tag_upper) = ctx
+        .doc
+        .get_node(node_id)
+        .and_then(|n| n.element_data())
+        .map(|d| d.name.local.to_string().to_ascii_uppercase())
+    else {
+        return -1;
+    };
+    ctx.scratch_utf8.clear();
+    ctx.scratch_utf8.extend_from_slice(tag_upper.as_bytes());
+    ctx.scratch_utf8.len() as c_int
+}
+
+/// `el.value` getter -> writes live form control value into `ctx.scratch_utf8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_load_form_value(ctx: *mut c_void, node: u64) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    if node == 0 {
+        return -1;
+    }
+    let val = read_live_control_value(&ctx.doc, NodeId::from_u64(node));
+    ctx.scratch_utf8.clear();
+    ctx.scratch_utf8.extend_from_slice(val.as_bytes());
+    ctx.scratch_utf8.len() as c_int
+}
+
+/// `el.value = v` setter -> updates `<input>`, `<textarea>`, or `<select>` state in Blitz DOM.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_set_form_value(
+    ctx: *mut c_void,
+    node: u64,
+    value: *const c_char,
+) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    if node == 0 {
+        return;
+    }
+    let val = unsafe { as_str(value) };
+    let node_id = NodeId::from_u64(node);
+    let Some(tag) = ctx
+        .doc
+        .get_node(node_id)
+        .and_then(|n| n.element_data())
+        .map(|d| d.name.local.to_string().to_ascii_lowercase())
+    else {
+        return;
+    };
+    match tag.as_str() {
+        "select" => {
+            let options: Vec<(NodeId, String, String)> = ctx
+                .doc
+                .get_node(node_id)
+                .map(|n| {
+                    n.children
+                        .iter()
+                        .copied()
+                        .filter_map(|cid| {
+                            let child = ctx.doc.get_node(cid)?;
+                            let data = child.element_data()?;
+                            if !data.name.local.to_string().eq_ignore_ascii_case("option") {
+                                return None;
+                            }
+                            let opt_val = data
+                                .attr(LocalName::from("value"))
+                                .map(str::to_string)
+                                .unwrap_or_else(|| child.text_content().trim().to_string());
+                            let opt_text = child.text_content().trim().to_string();
+                            Some((cid, opt_val, opt_text))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let matched_id = options
+                .iter()
+                .find(|(_, v, t)| v == val || t == val)
+                .map(|(id, _, _)| *id);
+            let mut mutator = ctx.doc.mutate();
+            for (opt_id, _, _) in &options {
+                if Some(*opt_id) == matched_id {
+                    mutator.set_attribute(*opt_id, attr_qual("selected"), "selected");
+                } else {
+                    mutator.clear_attribute(*opt_id, attr_qual("selected"));
+                }
+            }
+            mutator.set_attribute(node_id, attr_qual("value"), val);
+        }
+        "textarea" => {
+            let existing_text_child = ctx.doc.get_node(node_id).and_then(|n| {
+                n.children.iter().copied().find(|child| {
+                    matches!(
+                        ctx.doc.get_node(*child).map(|c| &c.data),
+                        Some(NodeData::Text(_))
+                    )
+                })
+            });
+            let mut mutator = ctx.doc.mutate();
+            if let Some(text_node) = existing_text_child {
+                mutator.set_node_text(text_node, val);
+            } else {
+                let created = mutator.create_text_node(val);
+                mutator.append_children(node_id, &[created]);
+            }
+            mutator.set_attribute(node_id, attr_qual("value"), val);
+        }
+        _ => {
+            let mut mutator = ctx.doc.mutate();
+            mutator.set_attribute(node_id, attr_qual("value"), val);
+        }
+    }
+    ctx.dirty = true;
+}
+
+/// `el.checked` getter
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_get_checked(ctx: *mut c_void, node: u64) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return 0;
+    };
+    if node == 0 {
+        return 0;
+    }
+    let node_id = NodeId::from_u64(node);
+    ctx.doc
+        .get_node(node_id)
+        .and_then(|n| n.element_data())
+        .map(|d| {
+            d.checkbox_input_checked()
+                .unwrap_or_else(|| d.attr(LocalName::from("checked")).is_some())
+        })
+        .unwrap_or(false) as c_int
+}
+
+/// `el.checked = bool` setter (handles radio group mutual exclusion too).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_set_checked(ctx: *mut c_void, node: u64, checked: c_int) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    if node == 0 {
+        return;
+    }
+    let node_id = NodeId::from_u64(node);
+    let is_checked = checked != 0;
+    let radio_group = ctx
+        .doc
+        .get_node(node_id)
+        .and_then(|n| n.element_data())
+        .and_then(|d| {
+            if d.name.local.to_string().eq_ignore_ascii_case("input")
+                && d.attr(LocalName::from("type"))
+                    .is_some_and(|t| t.eq_ignore_ascii_case("radio"))
+            {
+                d.attr(LocalName::from("name"))
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        });
+    if is_checked && let Some(group_name) = radio_group {
+        let mut same_group = Vec::new();
+        let mut stack = vec![ctx.doc.root_node().id];
+        while let Some(nid) = stack.pop() {
+            let Some(n) = ctx.doc.get_node(nid) else {
+                continue;
+            };
+            for &child in n.children.iter().rev() {
+                stack.push(child);
+            }
+            if let Some(d) = n.element_data() {
+                if d.name.local.to_string().eq_ignore_ascii_case("input")
+                    && d.attr(LocalName::from("type"))
+                        .is_some_and(|t| t.eq_ignore_ascii_case("radio"))
+                    && d.attr(LocalName::from("name")) == Some(group_name.as_str())
+                {
+                    same_group.push(nid);
+                }
+            }
+        }
+        let mut mutator = ctx.doc.mutate();
+        for nid in same_group {
+            if nid == node_id {
+                mutator.set_attribute(nid, attr_qual("checked"), "true");
+            } else {
+                mutator.clear_attribute(nid, attr_qual("checked"));
+            }
+        }
+    } else {
+        let mut mutator = ctx.doc.mutate();
+        if is_checked {
+            mutator.set_attribute(node_id, attr_qual("checked"), "true");
+        } else {
+            mutator.clear_attribute(node_id, attr_qual("checked"));
+        }
+    }
+    ctx.dirty = true;
+}
+
+/// `el.focus()`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_focus_node(ctx: *mut c_void, node: u64) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    if node == 0 {
+        return;
+    }
+    let node_id = NodeId::from_u64(node);
+    if ctx.doc.get_node(node_id).is_some() {
+        ctx.doc.set_focus_to(node_id);
+        ctx.dirty = true;
+    }
+}
+
+fn query_selector_all_under(doc: &BaseDocument, root_id: NodeId, selector: &str) -> Vec<NodeId> {
+    let chains: Vec<Vec<(Option<Combinator>, CompoundSelector<'_>)>> = selector
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(parse_selector_chain)
+        .filter(|c| !c.is_empty())
+        .collect();
+    if chains.is_empty() {
+        return Vec::new();
+    }
+    let Some(root_node) = doc.get_node(root_id) else {
+        return Vec::new();
+    };
+    let mut matches = Vec::new();
+    let mut stack: Vec<NodeId> = root_node.children.iter().rev().copied().collect();
+    while let Some(node_id) = stack.pop() {
+        let Some(node) = doc.get_node(node_id) else {
+            continue;
+        };
+        for child in node.children.iter().rev() {
+            stack.push(*child);
+        }
+        if node.element_data().is_some()
+            && chains
+                .iter()
+                .any(|chain| node_matches_chain(doc, node_id, chain))
+        {
+            matches.push(node_id);
+        }
+    }
+    matches
+}
+
+/// `el.querySelector(selector)`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_query_selector_within(
+    ctx: *mut c_void,
+    root: u64,
+    selector: *const c_char,
+) -> u64 {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return 0;
+    };
+    if root == 0 {
+        return 0;
+    }
+    let selector = unsafe { as_str(selector) }.trim();
+    query_selector_all_under(&ctx.doc, NodeId::from_u64(root), selector)
+        .first()
+        .map(|n| n.as_u64())
+        .unwrap_or(0)
+}
+
+/// `el.querySelectorAll(selector)` -> populates `ctx.scratch_nodes` and returns count.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_query_selector_all_within(
+    ctx: *mut c_void,
+    root: u64,
+    selector: *const c_char,
+) -> usize {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return 0;
+    };
+    if root == 0 {
+        ctx.scratch_nodes.clear();
+        return 0;
+    }
+    let selector = unsafe { as_str(selector) }.trim();
+    ctx.scratch_nodes = query_selector_all_under(&ctx.doc, NodeId::from_u64(root), selector)
+        .into_iter()
+        .map(|n| n.as_u64())
+        .collect();
+    ctx.scratch_nodes.len()
+}
+
+/// Collect live `[name, value]` entries for `new FormData(form)` as JSON into `ctx.scratch_utf8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_load_form_entries_json(ctx: *mut c_void, form_node: u64) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    if form_node == 0 {
+        return -1;
+    }
+    let root_id = NodeId::from_u64(form_node);
+    if ctx.doc.get_node(root_id).is_none() {
+        return -1;
+    }
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut stack = vec![root_id];
+    while let Some(nid) = stack.pop() {
+        let Some(node) = ctx.doc.get_node(nid) else {
+            continue;
+        };
+        for child in node.children.iter().rev() {
+            stack.push(*child);
+        }
+        let Some(data) = node.element_data() else {
+            continue;
+        };
+        if data.attr(LocalName::from("disabled")).is_some() {
+            continue;
+        }
+        let tag = data.name.local.to_string().to_ascii_lowercase();
+        let Some(name) = data
+            .attr(LocalName::from("name"))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        match tag.as_str() {
+            "input" => {
+                let input_type = data
+                    .attr(LocalName::from("type"))
+                    .unwrap_or("text")
+                    .to_ascii_lowercase();
+                match input_type.as_str() {
+                    "checkbox" | "radio" => {
+                        let is_checked = data
+                            .checkbox_input_checked()
+                            .unwrap_or_else(|| data.attr(LocalName::from("checked")).is_some());
+                        if is_checked {
+                            let val = data
+                                .attr(LocalName::from("value"))
+                                .unwrap_or("on")
+                                .to_string();
+                            pairs.push((name, val));
+                        }
+                    }
+                    "submit" | "button" | "reset" | "image" | "file" => {}
+                    _ => {
+                        pairs.push((name, read_live_control_value(&ctx.doc, nid)));
+                    }
+                }
+            }
+            "select" | "textarea" => {
+                pairs.push((name, read_live_control_value(&ctx.doc, nid)));
+            }
+            _ => {}
+        }
+    }
+    write_json(ctx, &serde_json::json!(pairs))
+}
+
+/// Fill `ctx.scratch_bytes` with `len` CSPRNG bytes (`crypto.getRandomValues`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_crypto_random_bytes(ctx: *mut c_void, len: usize) -> c_int {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return -1;
+    };
+    if len > 65_536 {
+        return -1;
+    }
+    match crate::webauthn::random::bytes(len) {
+        Ok(bytes) => {
+            ctx.scratch_bytes = bytes;
+            ctx.scratch_bytes.len() as c_int
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Record whether the currently-dispatching JS event invoked `event.preventDefault()`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn blitz_dom_set_event_default_prevented(
+    ctx: *mut c_void,
+    prevented: c_int,
+) {
+    let Some(ctx) = (unsafe { as_ctx(ctx) }) else {
+        return;
+    };
+    ctx.last_event_default_prevented = prevented != 0;
 }
 
 /// Walk up from the hit node to the nearest element carrying an `id`

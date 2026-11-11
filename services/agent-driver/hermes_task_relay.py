@@ -524,7 +524,7 @@ class HermesTaskManager:
                     "start_url": resolved_url,
                     "session_title": f"Walkaway: {self.goal[:60]}",
                     "reuse_active_tab": reuse_active,
-                    "force_replace": reuse_active,
+                    "force_replace": bool(reuse_active or background),
                     "background": bool(background),
                 },
                 headers=self._bus_headers(),

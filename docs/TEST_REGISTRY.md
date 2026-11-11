@@ -8,21 +8,32 @@ hop works across devices.
 
 ### T-HERMES-SUITES
 
-- Command: run `--selftest`, `--uitest`, `--runtimetest`, `--observetest`,
-  and `--supervisortest` on the Hermes release binary.
-- Real components: Hermes browser, Blitz rendering, Static Hermes AOT page,
-  native observe, supervision state machine, supervision bar.
+- Command: `cargo test --release --manifest-path apps/hermes-browser/Cargo.toml`
+  (runs all 103 Rust unit tests plus `--selftest`, `--runtimetest`, `--uitest`,
+  `--observetest`, `--supervisortest`, and `--hurdletest` on the Hermes release
+  binary).
+- Real components: Hermes browser, Blitz rendering, Static Hermes AOT page
+  (`src/js/dom_runtime.ts` + `src/dom_ffi.rs` + `c_shim/*`), RFC 6265 cookie
+  jar + 10-hop HTTP redirect following, `window.fetch` / `FormData` /
+  `URLSearchParams` / `localStorage` / `sessionStorage` / `window.location` /
+  `history.pushState` / `<script src>` / JS Console, native observe,
+  supervision state machine, background session tabs, supervision bar.
 - Asserts: rendering/input foundations, tab/runtime isolation, indexed
   snapshots, proposal/decision execution, takeover/release/stop, audit and
-  secret exclusion. The supervisor suite's passkey checks drive the **real
-  broker** (`src/credentials.rs`): a registration ceremony is held until a
-  human approves it, then completes as a real ECDSA P-256 WebAuthn
+  secret exclusion, Part 4 multi-route auth/cookie/fetch/storage/location flow,
+  and Part 5 modern SPA/form interactivity (`DOMContentLoaded` + `load`,
+  `classList`, `removeAttribute`/`hasAttribute`, scoped `querySelectorAll`,
+  `btoa`/`atob`, `crypto.getRandomValues`, `fill_form` dispatching `input` +
+  `change` to enable a disabled submit button, and `submit` honoring
+  `e.preventDefault()` + `new FormData(form)` + `fetch()` on a background tab
+  without stealing foreground focus). The supervisor suite's passkey checks
+  drive the **real broker** (`src/credentials.rs`): a registration ceremony is
+  held until a human approves it, then completes as a real ECDSA P-256 WebAuthn
   registration; an assertion ceremony is held until a human approves it, then
-  completes as a real ECDSA P-256 WebAuthn assertion. These checks used to
-  drive the legacy `src/vault.rs` signer, which is no longer the shipping
-  implementation.
-- Last observed: pass; supervisor suite PASS 2026-11-06 12:0x PT with the
-  broker-driven passkey checks.
+  completes as a real ECDSA P-256 WebAuthn assertion.
+- Last observed: **PASS** 2026-11-11 — `cargo test --release` 103/103 PASS in
+  `9.29s` (`--selftest`, `--runtimetest`, `--uitest`, `--observetest`,
+  `--supervisortest`, and `--hurdletest` all PASS).
 
 ### T-HERMES-PASSKEY-E2E
 
@@ -166,15 +177,15 @@ hop works across devices.
   place name resolved by the real geocoder, a current temperature in a
   plausible range, and a multi-day forecast; the served page already
   contains that real temperature, so **no page-side network call is needed**
-  — the Blitz runtime Hermes builds on has no `fetch` and no
-  `XMLHttpRequest`, so a page that pulled its own data would render
-  nothing at all; the engine's own DOM, after loading that page, holds the
+  (note: `window.fetch` was later added to `dom_runtime.ts` in `d1d9ee8` on
+  2026-11-11, while `/weather` remains server-rendered by design); the engine's
+  own DOM, after loading that page, holds the
   rendered temperature, the condition, the place, one row per forecast day,
   and the inline SVG weather icon; the page carries inline SVG for the icon
   rather than an emoji glyph, because the engine's font stack has no emoji
   font and an emoji renders as a tofu box; an unknown place is a 404 naming
   the real reason, and its page shows that reason with no temperature.
-- Last observed: **PASS** 2026-11-07 00:5x PT — 16 checks, all ok.
+- Last observed: **PASS** 2026-11-11 — 16/16 checks, all ok.
 - Note: the DOM assertions were mutation-tested. Rendering the temperature
   100° off makes the DOM check fail, and replacing the inline SVG with a
   text glyph makes both SVG checks fail. A test that cannot fail proves
@@ -230,12 +241,17 @@ hop works across devices.
   `source="glasses_dat"`.
 - Asserts: a page-initiated ceremony is announced as a `proposal.pending`
   with a `page-passkey-` proposal id, the bridge turns it into a bus card of
-  kind `passkey`, **nothing is decided before the glasses answer** (the
-  browser does not approve a page's own ceremony by itself), the glasses tap
-  decides it once with `decision: approve` and `surface: glasses`, and a
-  replayed tap decides nothing a second time.
-- Last observed: **PASS** 2026-11-06 22:2x PT — 1 test, plus the four
-  pre-existing bridge tests in the same file.
+  kind `passkey` (both in `--card-mode immediate` and automatically in
+  `--card-mode held` across both foreground and `background=True` supervised
+  tabs without needing `POST /cards`), **nothing is decided before the glasses
+  answer** (the browser does not approve a page's own ceremony by itself), the
+  glasses tap decides it once with `decision: approve` and `surface: glasses`,
+  full WebAuthn registration + ECDSA P-256 assertion against `signup_fixture.py`
+  (`openssl` verifier) succeeds, and a replayed tap decides nothing a second
+  time.
+- Last observed: **PASS** 2026-11-11 — `python3 services/hermes-host/test_decision_bridge_e2e.py`
+  7/7 tests PASS in `17.915s` (3 tests in `PagePasskeyGlassesE2ETest` + 4
+  bridge tests).
 - Note: this is the proof that the glasses DAT card really is the primary
   surface for a page's passkey prompt. The chain is the whole way round:
   the page calls the API, the browser announces the ceremony, the bridge
@@ -732,7 +748,7 @@ hop works across devices.
 - Asserts:
   1. `test_muse_mcp_drives_real_hermes_browser_and_commits_on_glasses_or_android_approval`: Invokes `mcp_server.py` JSON-RPC `tools/call` (`walkaway_start_task` with `url` + `goal`, `walkaway_get_state`), verifies real Hermes navigates, stages form fields via local `Qwen3-4B` (`llm_calls == 1`), pauses at `waiting_for_human` with a domain-first card (`<=80` title, `<=160` body), and commits only after either a `glasses_dat` (`surface="glasses"`) or `android_app` (`surface="android_app"`) approval ack (`0` rows before approval, `1` row after approval).
   2. `test_live_internet_https_httpbin_form_via_muse_mcp`: Drives live external `https://httpbin.org/forms/post` over HTTPS through `mcp_server.py` (`walkaway_start_task`), fills customer/pizza fields via local `Qwen3-4B`, emits `COMMIT httpbin.org: ...`, approves via `source="android_app"`, and verifies the real HTTPS POST response from `https://httpbin.org/post` inside Hermes (`"custname": "Ryan MacArthur"`).
-- Last observed: **PASS** 2026-11-05 (`2/2` tests in `10.704s`, 100% headless with zero visible desktop windows).
+- Last observed: **PASS** 2026-11-11 (`2/2` tests as part of `HERMES_HIDDEN_WINDOW=1 python3 -m unittest discover -s tests/e2e -p "test_*.py" -v` — 11/11 OK in `43.338s`, 100% headless with zero visible desktop windows).
 
 ### T-FGS-CRASH-001 (BridgeKeepAliveService dataSync Crash Loop — Fix)
 

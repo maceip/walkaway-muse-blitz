@@ -238,7 +238,11 @@ class Bridge:
         with self.lock:
             self.pending[key] = binding
         log(f"glasses-pending {key} kind={binding['operation_kind']}")
-        if self.card_mode == "immediate":
+        is_page_ceremony = (
+            frame.get("surface") == "page"
+            or str(binding.get("proposal_id") or "").startswith("page-passkey-")
+        )
+        if self.card_mode == "immediate" or is_page_ceremony:
             try:
                 title, body = format_card(binding)
                 self.create_card(
@@ -353,7 +357,7 @@ class Bridge:
                 if str(c.sock_path) == str(sock_path):
                     existing_client = c
                     break
-            if existing_client is not None and not (reuse_active_tab or force_replace or start_url or background):
+            if existing_client is not None and not (reuse_active_tab or force_replace or background):
                 raise ValueError(f"socket already attached: {sock_path}")
         if existing_client is not None:
             client = existing_client
@@ -368,7 +372,7 @@ class Bridge:
                 session_title,
                 start_url or "",
                 reuse_active_tab=reuse_active_tab,
-                force_replace=force_replace,
+                force_replace=bool(force_replace or existing_client is not None),
                 background=background,
             )
             deadline = time.monotonic() + 10

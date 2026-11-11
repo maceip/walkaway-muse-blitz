@@ -86,6 +86,21 @@ int blitz_http_fetch(
 /* Per-tab JavaScript Console (console.log / warn / error) */
 void blitz_console_log(const char *level, const char *message);
 
+/* Form control reflection, scoped queries, FormData, CSPRNG & preventDefault */
+void blitz_remove_attribute(uint64_t node, const char *name);
+int blitz_has_attribute(uint64_t node, const char *name);
+int blitz_load_tag_name(uint64_t node);
+int blitz_load_form_value(uint64_t node);
+void blitz_set_form_value(uint64_t node, const char *value);
+int blitz_get_checked(uint64_t node);
+void blitz_set_checked(uint64_t node, int checked);
+void blitz_focus_node(uint64_t node);
+uint64_t blitz_query_selector_within(uint64_t root, const char *selector);
+size_t blitz_query_selector_all_within(uint64_t root, const char *selector);
+int blitz_load_form_entries_json(uint64_t form_node);
+int blitz_crypto_random_bytes(size_t len);
+void blitz_set_event_default_prevented(int prevented);
+
 #ifdef __cplusplus
 }
 #endif

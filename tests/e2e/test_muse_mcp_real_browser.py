@@ -238,7 +238,7 @@ class TestMuseMcpRealBrowser(unittest.TestCase):
                 "url": self.site_url,
             },
         )
-        self.assertEqual(start_res["status"], "ready")
+        self.assertEqual(start_res["status"], "awaiting_approval")
         self.assertIn("Mario's Artisan Pizza", start_res["page_title"])
         self.assertEqual(len(self.site_server.submitted_orders), 0)
 
@@ -297,7 +297,7 @@ class TestMuseMcpRealBrowser(unittest.TestCase):
                 "url": self.site_url,
             },
         )
-        self.assertEqual(start_res2["status"], "ready")
+        self.assertEqual(start_res2["status"], "awaiting_approval")
         prop_res2 = self._mcp_call("walkaway_request_approval", {})
         self.assertTrue(prop_res2["awaiting_approval"])
         card_mid2 = prop_res2["card_message_id"]
@@ -338,7 +338,7 @@ class TestMuseMcpRealBrowser(unittest.TestCase):
                 "url": live_url,
             },
         )
-        self.assertEqual(start_res["status"], "ready")
+        self.assertEqual(start_res["status"], "awaiting_approval")
         self.assertIn("httpbin.org/forms/post", start_res["page_url"])
 
         prop_res = self._mcp_call("walkaway_request_approval", {})

@@ -494,6 +494,7 @@ class PasskeyPageServer:
 
     PAGE = """<!DOCTYPE html><html><head><title>Passkey page</title></head><body>
       <div id="host">waiting</div>
+      <button id="passkey-state">waiting</button>
       <script>
         navigator.credentials.create({
           publicKey: {
@@ -502,9 +503,13 @@ class PasskeyPageServer:
             challenge: new Uint8Array([1, 2, 3, 4])
           }
         }).then(function(cred) {
-          document.getElementById("host").setAttribute("data-result", "created:" + String(cred.id.byteLength));
+          var status = "created:" + String(cred.id.byteLength);
+          document.getElementById("host").setAttribute("data-result", status);
+          document.getElementById("passkey-state").innerText = status;
         }).catch(function(err) {
-          document.getElementById("host").setAttribute("data-result", "error:" + String(err && err.message ? err.message : err));
+          var status = "error:" + String(err && err.message ? err.message : err);
+          document.getElementById("host").setAttribute("data-result", status);
+          document.getElementById("passkey-state").innerText = status;
         });
       </script>
     </body></html>"""
@@ -660,6 +665,50 @@ class PagePasskeyGlassesE2ETest(unittest.TestCase):
                 self.assertEqual(login_count, 1)
             finally:
                 h.stop()
+
+    def test_held_mode_background_tab_passkey_ceremony_auto_cards_and_settles(self):
+        self.assertTrue(HERMES_BIN.exists())
+        page_server = PasskeyPageServer()
+        try:
+            with tempfile.TemporaryDirectory(prefix="walkaway-passkey-held-bg-") as tmp:
+                # Live demo stack runs decision_bridge in card_mode="held" and attaches
+                # background tabs via POST /sockets with background=True.
+                h = Harness(self, tmp, hermes_count=1, card_mode="held",
+                            dynamic=True, allow_android=False)
+                try:
+                    code, attached = http_json(
+                        f"{h.bridge}/sockets",
+                        {
+                            "sock_path": str(h.socks[0]),
+                            "start_url": page_server.url,
+                            "background": True,
+                        },
+                    )
+                    self.assertEqual(code, 201, attached)
+                    agent = h.agent(0)
+                    session = wait_until(lambda: h.session_id(0))
+
+                    # Even in held mode (without POST /cards), a page-initiated passkey
+                    # ceremony on a background tab is immediately carded to the bus.
+                    card = wait_card(h, 0)
+                    self.assertEqual(card.get("kind"), "passkey")
+                    entry = card["batch_proposals"][0]
+                    self.assertTrue(str(entry.get("proposal_id", "")).startswith("page-passkey-"))
+
+                    # Glasses tap settles the background tab's WebAuthn promise.
+                    h.bus_ack(card["id"], "approve", "glasses_dat")
+                    snap = wait_until(
+                        lambda: (
+                            s if str(by_id(s := observe_until(agent, session, "passkey-state", "bg-pk"))
+                                     .get("passkey-state", {}).get("label", "")).startswith("created:")
+                            else None
+                        )
+                    )
+                    self.assertTrue(by_id(snap)["passkey-state"]["label"].startswith("created:"))
+                finally:
+                    h.stop()
+        finally:
+            page_server.stop()
 
 
 if __name__ == "__main__":
