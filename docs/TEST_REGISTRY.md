@@ -419,6 +419,302 @@ hop works across devices.
   6 files written, all four heroes re-rendered in Chrome without overlap.
 
 
+### T-AI-RED-TEAM-WEB-001
+
+- Command: `python3 scripts/verify-ai-red-team-web.py` from the repo root
+  (Pillow and numpy required, because the check re-runs both media
+  generators; ffmpeg/ffprobe required by the film generator).
+- Real components: the built app in `apps/ai-red-team-web/dist/` (the Vite
+  output that the server actually serves), `src/styles.css`,
+  `src/lib/schedule.ts` (the exercise clock), `src/components/App.tsx` (the
+  brand block), `src/lib/useScene.ts` (the scene switch), the generated
+  manifest `src/media/scenes.ts`, the three self-hosted
+  `public/fonts/*.woff2` faces (Michroma plus IBM Plex Mono 400/500), the
+  shipped scenes in `public/media/scenes/`, the drawn sky in
+  `public/media/space/deep-field.webp`, the films in `public/video/`, the
+  media pipeline `scripts/build-redteam-media.py` together with its config
+  `videos/scenes.json` and its source media in `videos/`, the sky generator
+  `scripts/build-space-backdrop.py`, and the production server
+  `server/index.mjs`.
+- Asserts:
+  1. every local reference in the **built** document resolves to a real,
+     non-empty file;
+  2. **the page makes no external request** — every subresource in the
+     document and in the stylesheet is same-origin (a `rel="canonical"` link
+     declares an address rather than fetching one, so it is allowed to be
+     absolute);
+  3. every `@font-face` URL resolves to a real, non-empty woff2;
+  4. the brand block is exactly what it must be — an anchor whose `href` is
+     `mailto:contact@model.tools`, whose text is `AI RED TEAM`, whose face is
+     Michroma, with `San Francisco, CA` beneath it;
+  5. the schedule in `schedule.ts` is one drill every **240 s**, the drill and
+     the blue settle fit inside one period, the warning window is shorter than
+     a period, and the warning is the window immediately before the next
+     drill;
+  6. **the scene pipeline holds together** — `videos/scenes.json` (14 scenes), the
+     generated `src/media/scenes.ts` and the files on disk agree; every scene
+     the manifest names exists and is non-empty; **the set contains both a
+     still scene and a film scene**, so the page can actually switch between
+     them; **every scene is the same size** — 1024×1024, the canonical stage —
+     which is what makes the globe the same size and in the same place in every
+     scene; and the document preloads the default scene's picture, so the
+     preload cannot drift away from the default;
+  7. **the globe is not carrying weather.** For every scene whose delivered
+     source carried the storm — the five films and the one still marked
+     `"storm": true` — the shipped picture must differ from the delivered one
+     over the cloud, and the cloud's own light must be *lower* in the shipped
+     picture than it was in the delivered one. The scenes delivered without a
+     storm are not checked this way: their brightness is the sky, and a
+     daylight sky is white in the same places a storm is;
+  8. the shipped scenes are byte-for-byte the ones
+     `scripts/build-redteam-media.py` produces from `videos/`, and the films
+     still hash to the recorded value from the same source;
+  9. the shipped sky is byte-for-byte the plate
+     `scripts/build-space-backdrop.py` draws;
+  10. the production server keeps resolved paths inside its dist directory,
+      exposes `/healthz`, supports HTTP Range requests for the video, and
+      answers a missing asset with a 404 rather than with the page — a
+      missing picture must be able to say it is missing.
+- Last observed: **PASS** 2026-11-24 15:0x — 5 local references resolved, 0
+  external requests, 3 woff2 faces resolved, brand block exact (4 checks),
+  schedule exact (6 checks), scene pipeline exact (59 checks: 14 scenes, both
+  kinds present, every still and every film present, every scene at 1024×1024,
+  preload matching the default), **the storm is off (12 checks)**, scenes
+  matched the generator, sky matched the generator, server guard present
+  (4 checks).
+- Mutation-tested, because a test that cannot fail proves nothing. Four
+  separate mutations were applied to the 2026-11-23 build and the restored
+  files re-checked:
+  - renaming a scene in the generated manifest to `city-spiral-RENAMED` made
+    the suite exit 1 naming both the manifest check and the generator check;
+  - tampering with the last 40 bytes of `deep-field.webp` made the suite exit
+    1 with `stale deep-field.webp`;
+  - tampering with the last 40 bytes of `city-globe-grey.jpg` made the suite
+    exit 1 with `stale .../city-globe-grey.jpg`;
+  - the mailto with `mailto:wrong@example.com` makes the suite exit 1 naming
+    the expected address.
+  All four files were restored and the suite passes again.
+- **The storm check was mutation-tested separately**, because the storm is the
+  one thing the owner asked to be gone and a statistic that cannot tell a
+  storm from a daylight sky proves nothing:
+  - shipping the *delivered* `city-spiral.jpg` instead of the repaired one
+    made the suite exit 1 with `the scene city-spiral ships the storm
+    unchanged (mean change 0.0)`, and the generator drift check caught it as
+    well;
+  - shipping the unrepaired first frame of `city-dive.mp4` as the film's
+    picture made the suite exit 1 with `the scene city-dive ships the storm
+    unchanged (mean change 0.0)`.
+  Both files were restored and the suite passes again.
+- **The storm was measured before and after.** The delivered sources carry the
+  cloud over 20-26% of the top band of the frame (the grey plate 25.4%, the
+  spiral 25.9%, the films 20.1-20.5%); after the repair the shipped pictures
+  carry 0.3-3.7% of the frame over the same band.
+- **The lightning is told from the city's light by shape, not by colour.**
+  The flash is a bright violet blob and the city's own magenta light is in
+  long thin streaks, and by saturation and hue the two are close (the flash
+  at 79, the streaks at 65). What separates them is the shape: the flash
+  fills 0.35 of its own bounding box and the streaks 0.17-0.18. The
+  detector uses that, so the flash comes off and the city's light stays.
+- **The drawn sky.** The page used to carry two NASA survey photographs of
+  Andromeda — 580×498 and 550×373 px — stretched to `168vmax`, which is a
+  five- or six-fold upscale of a thumbnail and is why the sky read as a pasted
+  photograph. `scripts/build-space-backdrop.py` now draws the sky at
+  4096×2304 instead: ~46,000 stars on a power-law magnitude distribution with
+  a crowded galactic band, colour by spectral class, bloom and four-point
+  diffraction on the brightest few, the Andromeda galaxy at an inclination
+  with logarithmic arms and a dust lane, nebulae in the page's own green and
+  magenta, and a dither pass so an 8-bit gradient of that size does not band.
+  The render is deterministic (fixed seed), so the check re-draws it and
+  compares bytes. Last observed: **4096×2304, 373 KB as WebP**, and the
+  browser scales it *down* on every screen — no upscaling anywhere.
+- **One canonical stage.** Every scene — still or film — is built at
+  **1024×1024** (`CANVAS` in the pipeline): the delivery border is cropped and
+  the frame Lanczos-resized onto it, and the stills are then masked to the
+  circle inscribed in that square, so what the page carries is the globe and
+  nothing around it. The delivered frames all have the globe filling them,
+  centred, with the same framing, so staging them all onto one square is what
+  makes the globe the same size and in the same place in every scene — and
+  therefore what makes the crossing from one scene to the next a change of
+  colour and camera rather than a jump. The old alpha-extraction generator
+  (`scripts/build-orb-assets.py`) was retired: the orb is clipped to a circle
+  in CSS, so the circle is the silhouette of the globe and a second,
+  competing silhouette in the picture was a liability.
+- **The crossing is a fade, and it was measured as one.** The page cycles the
+  scenes on its own (`src/lib/useScene.ts`): a still is held for 7 s and a
+  film for its own length, and two layers sit inside the orb while the page
+  crosses — the one being left underneath and the one being arrived at over
+  the top. Measured in Chromium against the real build at 1280×720, the two
+  layers' opacities during a crossing run 0.995/0.005 → 0.894/0.106 → 0.753/
+  0.247 → 0.540/0.460 → 0.364/0.636 → 0.164/0.836 → 0.019/0.981 — they sum
+  to one the whole way. The crossing now runs over **2200 ms** and the
+  arriving scene settles as it comes in while the one being left drifts away
+  as it goes, so the crossing is a movement and not a dissolve between two
+  still pictures. The order of the scenes is drawn at random, so the page
+  does not come round the same way twice.
+  **This is a real regression test, not a restatement of intent:** before the
+  layer asked the browser for its size on mount, a picture that was ready the
+  instant it appeared had no *before* to fade out of, and the crossing was a
+  cut — the incoming layer jumped to 1 while the outgoing was still at 0.99.
+  The crossing also waits for the arriving picture to be on the page before
+  it starts, so a slow picture never leaves a hole in the globe.
+- **The scene set is fourteen scenes**: four stills (`globe-day`, `globe-dusk`,
+  `city-globe-night`, `city-spiral`), five camera moves (`city-globe-spin`,
+  `city-dive`, `city-edge`, `city-zoom`, `city-sealevel`), the storm rolling
+  over the city (`city-storm`), the red alert state (`city-alert`), and the
+  owner's three new clips (`city-scan`, `city-globe-scan`, `city-redteam`).
+  The two cloudy plates that are not scenes any more are not in it.
+- **The films are a third of the speed they were delivered at**, and the
+  mechanism is checked rather than assumed: the frames are interpolated up to
+  the rate the slowed film needs — a camera that judders is a camera that has
+  been dropped frames, not one that has been slowed — and their timestamps
+  are stretched to match, or the film would be the same length and simply
+  dropping frames. Built lengths, measured on the shipped files: the spin
+  15.17 s (delivered 5.04 s), the storm 15.13 s (5.04 s), the camera moves
+  27.13-38.25 s (9.04-12.75 s). **The owner's three new clips are slowed a
+  half speed instead** (`city-scan` 20.000 s from 10.000 s, `city-redteam`
+  20.000 s from 10.000 s, `city-globe-scan` 19.958 s from 9.983 s): they are
+  already smooth and slow, and at a third of their speed the dark beat in the
+  middle of the scan would sit on the page for three seconds, which reads as a
+  fault rather than as a cut.
+- **One delivered film does not fill its frame**, and the pipeline can crop a
+  source in before it is staged (`crop` in the scene config, a fraction of
+  the frame that is kept, centred). The clean globe scan is a glass sphere
+  sitting inside a blurred city rather than filling the frame; measured on
+  the source, the sphere runs from x=25 to x=695 of 720, so it is cropped in
+  and staged like every other scene, which is what puts its edge on the orb's
+  circle instead of showing the bokeh behind it. The owner then sent the
+  same wave on a black background at 1080x1080 and 60 fps, and that is the
+  version that ships: the blurred city was cropped away anyway, so the two
+  were the same beat with different surroundings, and the black one puts the
+  sphere's edge exactly on the orb's circle.
+- **The frame rate of a delivered clip is read, not assumed.** The pipeline
+  used to declare every clip to be 24 fps when it piped the frames to the
+  encoder, so a clip delivered at 60 fps would have been played two and a
+  half times too slow and had four frames in five thrown away by the
+  interpolation. The rate now comes from the clip itself, the interpolation
+  runs at that rate times the slow-down, and every film is delivered at
+  24 fps whatever it arrived at. Checked on the shipped files: a 599-frame
+  60 fps source slowed a half speed comes out as **479 frames at 24 fps
+  (19.958 s)**, and a 600-frame 60 fps source as **480 frames at 24 fps
+  (20.000 s)** — exactly twice the delivered length, which is what the
+  slow-down means.
+- **Two of the three clips were re-delivered at 1080x1080 and 60 fps, and
+  they replaced the 720x720 24 fps versions rather than joining them.** They
+  were measured against the ones already in the rotation before anything was
+  changed: the red scan correlates **0.83-0.92** with the shipped
+  `city-scan` and the RED TEAM HUD **0.82-0.96** with the shipped
+  `city-redteam`, and their light curves are the same arc — the scan's
+  blackout falls in the same 5.67-6.75 s window in both (27 frames at 24 fps
+  against 55 frames at 60 fps, the same 1.1 s), so they are the same beats
+  re-rendered and not new ones. Shipping them side by side would have put
+  the same beat in the cycle twice. The superseded 720x720 sources are kept
+  in the inbox as `city-scan-720.mp4` and `city-redteam-720.mp4`, the way
+  `city-globe-scan-bokeh.mp4` is kept for the globe scan. The new render is
+  framed tighter (the globe runs 96% of the frame across the shot, against
+  80-100% in the old one), which the pipeline reproduces exactly rather than
+  cropping: the delivered frame and the shipped frame show the same corner
+  readouts cut by the orb's circle.
+- **The globe is still the same size in the same place in every scene.** The
+  disc was measured on the shipped media of all fourteen scenes — the stills
+  from their alpha, the films from their first frame — and it is centred at
+  (0.498, 0.498) of the frame with a diameter of 0.945-1.000 across the
+  whole set. That is what makes a crossing change the colour and the camera
+  and nothing else.
+- **The storm is one deliberate beat, not the constant look it was.** The
+  pipeline is told per scene which of its delivered sources carried a storm
+  to take off (`repair_storm`), and the storm film is the one source that is
+  not repaired — it is the storm. The check proves the other six are clean
+  and says nothing about the storm film, which is supposed to have one.
+- **The code red beat costs nothing to ship.** `city-alert` is the city under
+  the red alert light with the laser sweeping the grid — the same visuals the
+  four-minute drill uses — and it has no media of its own: it borrows another
+  scene's picture, so the orb can go red without a second copy of anything.
+  Checked in Chromium: opening it puts `is-alert` on the orb, the alert grade
+  reads at 0.6 opacity, and the sweep is running.
+- **The cycle is shuffled, and it never repeats itself back to back.**
+  Checked in Chromium against the live site: over 95 s the page moved
+  `city-globe-spin → city-storm → city-edge → city-dive`, which is not the
+  order the scenes are declared in, and no scene was shown twice in a row.
+- **Two behaviours of the cycle, checked in the browser against the live
+  site.** With `prefers-reduced-motion: reduce` the cycle uses **only the
+  stills and the alert** — observed order `globe-day → globe-dusk → city-globe-night →
+  city-spiral` and round again, with **no film in it at all** — because the
+  camera moves are films of the camera going into the city. And a scene
+  opened directly with `?scene=city-spiral` is **pinned**: over twelve
+  seconds the picture stayed `city-spiral` and the orb held a single layer,
+  with no crossing.
+- **The film loops on itself.** The delivered clip turns one full spin in 121
+  frames and stops one frame short of where it started, so a film made by
+  slowing it down ends a whole rotation out of step with its own first frame
+  and the globe would jump forward nine degrees in a single frame at the
+  loop. The pipeline appends a copy of the opening frames and trims the
+  slowed film to end on it. Measured on the shipped `city-globe-spin.mp4`:
+  364 frames, per-frame step median 3.775 and max 5.252 with no frozen tail,
+  and the last frame against the first frame **2.111** mean absolute
+  difference — against 8.906 for the naive build.
+- Scene check after the 2026-11-23 rebuild, driven in Chromium against the
+  real build: **no wireframe** (`document.querySelectorAll('svg ellipse,
+  .orb__wire').length === 0`), **one drawn sky layer** and **no galaxy
+  plates**, **two planets**, the globe at 209 px at 360 CSS px, 278 px at 480,
+  430 px at 768 and 302 px at 1280×720; **zero horizontal overflow** at 360,
+  480 and 768 (`scrollWidth === innerWidth`), no vertical overflow, the
+  wordmark never clipped, the film playing (`currentTime` advancing,
+  `paused === false`, `readyState === 4`), and the still served at its native
+  1584×1584.
+- Scene switching check: `?scene=city-globe-night` renders the still scene
+  (no `<video>` in the orb) and `?scene=city-globe-spin` renders the film
+  scene, both from the same manifest. An unknown `?scene=` falls back to the
+  default rather than rendering nothing.
+- Browser-side phase check: the built app is served by the real production
+  server and opened in Chromium at 1280×720, which is where the phase behaviour
+  was observed rather than modelled. The schedule takes a `?t=<sec>` offset,
+  so every phase can be opened directly. Last observed: `nominal` at t=0
+  (countdown `T-04:00`), `nominal` at t=225 (`T-00:15`), `warning` at t=230
+  (`T-00:10`) and t=239 (`T-00:01`), `exercise` (the scanning class on, the
+  countdown reading `Running`, the city reading `Laser scan`) at t=240 and
+  t=263, `settle` (blue glow, `Complete`) at t=270,
+  `nominal` again at t=280 (`T-03:20`), and the whole sequence repeating 240 s
+  later — `warning` at t=470, `exercise` at t=480 — which is the drill firing
+  exactly four minutes apart. **0 console errors and 0 external requests** in
+  the same run.
+- A real bug was found by the phase check and fixed: the countdown rendered
+  `T-4:00` instead of `T-04:00`, because the minutes were only zero-padded when
+  the remaining time was under ten seconds. The padding now applies to the
+  minutes and the seconds independently, and the phase table above is the
+  post-fix observation.
+- Live-host check: **both** `https://redteam.model.tools/` and
+  `https://red.model.tools/` answer HTTP/2 200 with the same title and the
+  same headers (`strict-transport-security`, `x-frame-options: DENY`,
+  `x-content-type-options: nosniff`, `no-cache` on the document); each host
+  serves its own Let's Encrypt certificate; the video answers `206` with a
+  correct `content-range` through Caddy on both hosts; hashed assets carry
+  `immutable` caching; `/healthz` answers `ok` on both.
+  Browser-verified against the live host in a **cache-free browser context**:
+  each hostname stays on its own URL (no redirect) and renders the orb, the
+  turning wireframe, the HUD, the wordmark, the 2K backdrop video and the
+  `?t=240` drill, with 0 console errors. The cache-free context matters: the
+  first deployment redirected `red.` to `redteam.`, and a browser that had
+  already cached that 301 kept following it after the redirect was removed —
+  a cached redirect is not evidence that the server still redirects.
+  Re-run against the 2026-11-23 release `20261123-192803`: both hostnames
+  answer 200 over HTTP/2 with the new hashed assets `index-Bms17xRB.js` and
+  `index-vwvilzYV.css`, the drawn sky, the scenes and the film (206 with a
+  correct `content-range`), and `/healthz` answers `ok`. Browser-verified on
+  **both** hostnames in a fresh context: the default scene plays the film
+  (`currentTime` advancing, `paused === false`, 624x624), `?scene=
+  city-globe-original` swaps to the still (no `<video>` in the orb), and the
+  page load makes **8 requests, all to its own origin, 0 external** and
+  **0 console errors**.
+- The Caddy stanza for this site lives in the repo at
+  `apps/ai-red-team-web/deploy/redteam.caddy` and is byte-identical to the
+  live `/etc/caddy/redteam.caddy` (sha256
+  `5dc057c769ed5cfa72efa0712326c53cb64793f12c4f696cbe87ccd8f8db6dd1`), so
+  the host configuration is reviewable and restorable from the repository.
+- Scope: static-asset integrity, a real browser render and a live deployment
+  check for the model.tools AI Red Team page. It is not part of the Hermes demo
+  path and proves nothing about a device hop.
+
+
 ### T-WALKAWAY-DAT-001
 
 - Command: build/install Walkaway Bridge, start the laptop bus on `19099`,

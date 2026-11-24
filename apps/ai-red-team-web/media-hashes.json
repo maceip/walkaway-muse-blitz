@@ -1,0 +1,177 @@
+{
+  "entries": {
+    "apps/ai-red-team-web/public/media/og-ai-red-team.jpg": {
+      "output": "6a6e8583c3d22d7bfddd9f7fc2d531416657b5bbf764761a1120727ed3d5b0c1",
+      "source": "6a6e8583c3d22d7bfddd9f7fc2d531416657b5bbf764761a1120727ed3d5b0c1"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-dive.png": {
+      "output": "9f685835990cfef73e34dd62c017428bd777268f8ac32b59d4cea256ea188fc6",
+      "source": "7bb940fd5a3cf990fc133f0c8f7637e699dd2e760cce731172d5cc65b59b4702"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-dive.webp": {
+      "output": "b41c4b58ab435bb3b0877a223c793ed990a31c587fbf0148578087431787877c",
+      "source": "7bb940fd5a3cf990fc133f0c8f7637e699dd2e760cce731172d5cc65b59b4702"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-edge.png": {
+      "output": "9f685835990cfef73e34dd62c017428bd777268f8ac32b59d4cea256ea188fc6",
+      "source": "1c5c7df4632cb6322401d327722e17207f52a9bc0df32460ca63cab0182f4745"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-edge.webp": {
+      "output": "b41c4b58ab435bb3b0877a223c793ed990a31c587fbf0148578087431787877c",
+      "source": "1c5c7df4632cb6322401d327722e17207f52a9bc0df32460ca63cab0182f4745"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-grey.jpg": {
+      "output": "397ab0abc7975111f3684e18acba54c748dd9babb98d04155307212a54b9bebb",
+      "source": "b9deca69e4e96bac390ac888a04e3dab2862001580b8c545d977205232ced33e"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-grey.png": {
+      "output": "bc556d63af9f3e9c99f6dbaf6900965dce052152922f783243ded057082e623e",
+      "source": "b9deca69e4e96bac390ac888a04e3dab2862001580b8c545d977205232ced33e"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-grey.webp": {
+      "output": "c21f74a40b5d41df6c10b45ffb37656bc8e68777356f8e581cd9bdfd4a7b0433",
+      "source": "b9deca69e4e96bac390ac888a04e3dab2862001580b8c545d977205232ced33e"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-night.jpg": {
+      "output": "acd8cc38497a0b49dbaf55787695f4726fba09539599b25d4d60a07a96fbcb2e",
+      "source": "1724ad5ba5e97bb07f5a999cc93717ce0eaeb290287a8bb0057aa0eef316e385"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-night.png": {
+      "output": "ed23942b7034b39a125e93473934bff270671f9c78bbf0b3b3290b692e3a7832",
+      "source": "e1f3b0d8bdb767a8cb1484c5bbc654e7eda0836267eb2f691f676c369b389c9e"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-night.webp": {
+      "output": "247d38940d432fb36d0128dc66fcd28b72ea6a25adc414b97b9ccf4838e3249d",
+      "source": "e1f3b0d8bdb767a8cb1484c5bbc654e7eda0836267eb2f691f676c369b389c9e"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-original.jpg": {
+      "output": "8e3c0305751442d0d88244c0ec5f073ef6c33c343c23482a05be363e391ea900",
+      "source": "c1adc3c14a3c4c0ce39c6d234f1bbb636ab6007d6c93e66fcdab726928b02c6a"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-original.webp": {
+      "output": "7c7b891dc04889cc6a7176fbb1330ab4ec2b4a5e65a2be83fdb032c85759f490",
+      "source": "c1adc3c14a3c4c0ce39c6d234f1bbb636ab6007d6c93e66fcdab726928b02c6a"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-scan.png": {
+      "output": "d56fd50127db4b4764f4ee1d23a67dff9de7ddd22463d38a909eb9fe4f5d6be4",
+      "source": "56c35fa008461b9bce00de993e45c62f146ffad747552da1f7d6ae361b6dbf89"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-scan.webp": {
+      "output": "a85e73aec71c0e623bc53999cf69cc985e0e0768308b8b776b85503c205808d0",
+      "source": "56c35fa008461b9bce00de993e45c62f146ffad747552da1f7d6ae361b6dbf89"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-spin.png": {
+      "output": "1ad2cdd1c6786ba81b7433e535384fb4b90484dcd5c3a2de8dae5c833f7e3e57",
+      "source": "3ceac0b85f925749433532ce09e3a20a5ca049e0715a7be70bbeeeed88b75b62"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-globe-spin.webp": {
+      "output": "76064ebf6efd2d4d65880259134836dea047eda427c751d550a221dc8dff4160",
+      "source": "3ceac0b85f925749433532ce09e3a20a5ca049e0715a7be70bbeeeed88b75b62"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-redteam.png": {
+      "output": "f9809a465cf5042b9d9ccd3e3324ff28af74d71dcda3cc106ffb470ac2b057e3",
+      "source": "def182d4a7421933bd05f52375fe8c6293420829b00c6399541ed9493f815fe8"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-redteam.webp": {
+      "output": "f2f274c3b4113b5cd5908478bef2c97a07d0c7f1f60f8bc4dd1b2f5a32ce27cd",
+      "source": "def182d4a7421933bd05f52375fe8c6293420829b00c6399541ed9493f815fe8"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-scan.png": {
+      "output": "5c7643c71f74b16d42c5fd17d5bc36b62df384f004d54ea270eb065ea914323f",
+      "source": "dcf8bd9d0fac7c31917809df8753949161c0098e11e41d12c52fdc71b09b40a9"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-scan.webp": {
+      "output": "723f810a167294cdc11c5a13a2a10fa3fc198dd2c66d9e1ab29c4c1428db9c2c",
+      "source": "dcf8bd9d0fac7c31917809df8753949161c0098e11e41d12c52fdc71b09b40a9"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-sealevel.png": {
+      "output": "6364841bad304038ddbf487a258f9294357b125f31328aa0575407673163f77c",
+      "source": "1b5aa6943e85fa15a3af4d34a7873ef6685f0b4725314273ebb1711c993ef01e"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-sealevel.webp": {
+      "output": "568d196789ec6847fc024f5bd777a888ed67229e391c7f24dfc08b3ef247856e",
+      "source": "1b5aa6943e85fa15a3af4d34a7873ef6685f0b4725314273ebb1711c993ef01e"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-spiral.jpg": {
+      "output": "d7f1c48fcb090d65430fbb2cd6466146284a978b811007826eaced2653be8c61",
+      "source": "bdb17c86d3fea3bb184908ba1f5f4ba0072c00e3279dd51d267548846c385d0f"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-spiral.png": {
+      "output": "7b7606ac7a08ddb51e074ea8023ac9a30ba221259c01c7a02f2fc05090888fc9",
+      "source": "70b14e5104864c5cc4274004edde80af60c500e721a1117946c9900b24506798"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-spiral.webp": {
+      "output": "672eaab4a2c739321d1bd49f1cacaf3965c021bdad5792474f8aa390a14f5d29",
+      "source": "70b14e5104864c5cc4274004edde80af60c500e721a1117946c9900b24506798"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-storm.png": {
+      "output": "81604d5901c759793bd09d44e0522e8e3cb192947f9d99f713ca922b733d250d",
+      "source": "2096152213b84ae7e17bddc828a35d20721f888436990443e2504f97f940e89b"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-storm.webp": {
+      "output": "8911b7ed347c89606cbc1f248106da12eb6058daf0e7c10ad64526b70081022a",
+      "source": "2096152213b84ae7e17bddc828a35d20721f888436990443e2504f97f940e89b"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-zoom.png": {
+      "output": "9f685835990cfef73e34dd62c017428bd777268f8ac32b59d4cea256ea188fc6",
+      "source": "7497308e39c18c82cc4526fa961af427ef7e41690551a38f6c08470e535ec9f6"
+    },
+    "apps/ai-red-team-web/public/media/scenes/city-zoom.webp": {
+      "output": "b41c4b58ab435bb3b0877a223c793ed990a31c587fbf0148578087431787877c",
+      "source": "7497308e39c18c82cc4526fa961af427ef7e41690551a38f6c08470e535ec9f6"
+    },
+    "apps/ai-red-team-web/public/media/scenes/globe-day.png": {
+      "output": "ef0b2591a2059913d8990d984540e5504a207da55eb79950e1b961b67b264178",
+      "source": "aa88d2544b8475cf75a8ad88c994478cd421c1850dbdfdfbabaf4aac38de9ae9"
+    },
+    "apps/ai-red-team-web/public/media/scenes/globe-day.webp": {
+      "output": "6000dcc47f447805e2b4d6a005d78691f75569420bb1cc176e3ae28a6285844f",
+      "source": "aa88d2544b8475cf75a8ad88c994478cd421c1850dbdfdfbabaf4aac38de9ae9"
+    },
+    "apps/ai-red-team-web/public/media/scenes/globe-dusk.png": {
+      "output": "527c43b2a5914698ebc7d3be2db830575f9c3d2ee2fbc3da4399300f7ed4d719",
+      "source": "48bcb518d5717b3e312670f0ebb44c3b42641c7bcc388fb97a829b8ed85aad85"
+    },
+    "apps/ai-red-team-web/public/media/scenes/globe-dusk.webp": {
+      "output": "b2605a97843acd626c37a3f409e360151a5475113131970620845501167ee21c",
+      "source": "48bcb518d5717b3e312670f0ebb44c3b42641c7bcc388fb97a829b8ed85aad85"
+    },
+    "apps/ai-red-team-web/public/video/city-dive.mp4": {
+      "output": "fad07ef43291c4a433467a88cbfd7c050fb27a24298cfe64ebd2090a6e557cb0",
+      "source": "7bb940fd5a3cf990fc133f0c8f7637e699dd2e760cce731172d5cc65b59b4702"
+    },
+    "apps/ai-red-team-web/public/video/city-edge.mp4": {
+      "output": "52f21f6a39e89a4c34a44388c3ed143829401f04cde2bf3a9916bfb2dd843276",
+      "source": "1c5c7df4632cb6322401d327722e17207f52a9bc0df32460ca63cab0182f4745"
+    },
+    "apps/ai-red-team-web/public/video/city-globe-scan.mp4": {
+      "output": "6d59cc827f33effc80b198af16fa986fe01b6e2985ff71dd612e685d69f4736e",
+      "source": "56c35fa008461b9bce00de993e45c62f146ffad747552da1f7d6ae361b6dbf89"
+    },
+    "apps/ai-red-team-web/public/video/city-globe-spin.mp4": {
+      "output": "9c1df0312938b1080ed3d6044064c94e6d84dbe62df9e6b155ba515fcd6a7784",
+      "source": "3ceac0b85f925749433532ce09e3a20a5ca049e0715a7be70bbeeeed88b75b62"
+    },
+    "apps/ai-red-team-web/public/video/city-redteam.mp4": {
+      "output": "205831216da2023da61bc04242267bba60e8834175ee0b4cb96641ab76dcef71",
+      "source": "def182d4a7421933bd05f52375fe8c6293420829b00c6399541ed9493f815fe8"
+    },
+    "apps/ai-red-team-web/public/video/city-scan.mp4": {
+      "output": "1cac30fc0a8dc072386b1e1101e325036aedba9b96b54b587d2560d96d2d9307",
+      "source": "dcf8bd9d0fac7c31917809df8753949161c0098e11e41d12c52fdc71b09b40a9"
+    },
+    "apps/ai-red-team-web/public/video/city-sealevel.mp4": {
+      "output": "e8b1e5649b861733c1d6a8b9febfe06fc98bd97ac49b14a9d92e00b33d3c1f5c",
+      "source": "1b5aa6943e85fa15a3af4d34a7873ef6685f0b4725314273ebb1711c993ef01e"
+    },
+    "apps/ai-red-team-web/public/video/city-storm.mp4": {
+      "output": "c8c3089a7f88108330883a2c290d0ae795a89e9a6e68f1ec55a55ce50a990305",
+      "source": "2096152213b84ae7e17bddc828a35d20721f888436990443e2504f97f940e89b"
+    },
+    "apps/ai-red-team-web/public/video/city-zoom.mp4": {
+      "output": "9e7cfc27e068850e6a1ac65fb0b18c09a4c704bcf29d12c4afab20ca191fbff9",
+      "source": "7497308e39c18c82cc4526fa961af427ef7e41690551a38f6c08470e535ec9f6"
+    }
+  },
+  "version": 1
+}

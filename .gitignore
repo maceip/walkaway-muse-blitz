@@ -21,3 +21,15 @@
 *.pyc
 build/
 dist/
+
+# The cinematic backdrop is generated once into videos/ and copied into the
+# app at build time; the copy is a build artifact, not a second source of truth.
+apps/ai-red-team-web/public/video/
+
+# Transient H3 generation working state (task ids, query args, temp URLs).
+.tmp/
+
+# Intermediate H3 reference derivatives and the extracted drone: regenerable
+# from the source clips, and large. The prompt that produced the backdrop is
+# kept next to the video in videos/.
+prepared-media/

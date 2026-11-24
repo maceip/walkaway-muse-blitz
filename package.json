@@ -6,6 +6,7 @@
   "description": "Wrapper monorepo for the Walkaway supervised local browser demo",
   "license": "BSD-3-Clause",
   "workspaces": [
+    "apps/ai-red-team-web",
     "apps/glasses-web",
     "apps/phone-approval-web",
     "packages/*"

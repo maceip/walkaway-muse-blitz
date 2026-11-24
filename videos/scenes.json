@@ -1,0 +1,116 @@
+{
+  "default": "city-globe-spin",
+  "scenes": [
+    {
+      "id": "city-globe-spin",
+      "kind": "video",
+      "source": "city-globe-spin.mp4",
+      "label": "Rotating globe",
+      "loop": true,
+      "repair_storm": true,
+      "alt": "A city held inside a glass sphere, turning slowly once on its axis: grey towers lit by magenta neon, a bay of pink lights below, and a bright green rim around the globe."
+    },
+    {
+      "id": "globe-day",
+      "kind": "image",
+      "source": "globe-day.jpg",
+      "label": "City globe, daylight",
+      "holdMs": 8000,
+      "alt": "A city inside a glass sphere in daylight: a domed park with blue pools, trees and towers, a marina of white yachts along the bottom, and a bright green rim around the globe."
+    },
+    {
+      "id": "globe-dusk",
+      "kind": "image",
+      "source": "globe-dusk.jpg",
+      "label": "City globe, dusk",
+      "holdMs": 8000,
+      "alt": "A city inside a glass sphere after dark: towers lit in warm amber and cyan, a blue-lit dome and fountains, a marina of yachts below, and a bright green rim around the globe."
+    },
+    {
+      "id": "city-globe-night",
+      "kind": "image",
+      "source": "city-globe-night.jpg",
+      "label": "City globe, night",
+      "holdMs": 8000,
+      "alt": "The city at night seen from above inside a glass sphere: dark towers, a cyan-lit plaza, a gold-lit dome, a bay of pink lights below, and a bright green rim around the globe."
+    },
+    {
+      "id": "city-spiral",
+      "kind": "image",
+      "source": "city-spiral.jpg",
+      "label": "Spiral city",
+      "holdMs": 8000,
+      "repair_storm": true,
+      "alt": "A spiralling city inside a glass sphere: a tall central tower wrapped by a gold spiral ramp, glass domes and gardens, a bay of pink lights below, and a bright green rim around the globe."
+    },
+    {
+      "id": "city-alert",
+      "kind": "alert",
+      "poster": "globe-dusk",
+      "label": "Code red",
+      "holdMs": 9000,
+      "alt": "The city under red alert light: the globe floods red and a laser sweeps the city grid."
+    },
+    {
+      "id": "city-storm",
+      "kind": "video",
+      "source": "city-storm.mp4",
+      "label": "Storm front",
+      "alt": "A bank of cloud rolling over the city inside the glass sphere, swallowing the towers, and rolling away again."
+    },
+    {
+      "id": "city-dive",
+      "kind": "video",
+      "source": "city-dive.mp4",
+      "label": "Dive into the city",
+      "repair_storm": true,
+      "alt": "The camera diving through the glass sphere into the city, down between the towers and past red neon arches, and back out to the wide view."
+    },
+    {
+      "id": "city-edge",
+      "kind": "video",
+      "source": "city-edge.mp4",
+      "label": "Edge of the city",
+      "repair_storm": true,
+      "alt": "The camera running out to the edge of the city, down between the towers to street level, and back out to the wide view of the globe."
+    },
+    {
+      "id": "city-zoom",
+      "kind": "video",
+      "source": "city-zoom.mp4",
+      "label": "Cinematic zoom",
+      "repair_storm": true,
+      "alt": "A cinematic zoom out of the orb, the camera pulling back from the city until the whole globe stands in space again."
+    },
+    {
+      "id": "city-sealevel",
+      "kind": "video",
+      "source": "city-sealevel.mp4",
+      "label": "Sea level",
+      "repair_storm": true,
+      "alt": "The camera descending to street level inside the glass sphere, looking up between the towers of the city."
+    },
+    {
+      "id": "city-scan",
+      "kind": "video",
+      "source": "city-scan.mp4",
+      "label": "Scan sequence",
+      "alt": "The city inside the globe scanned in red: a wireframe of the towers with a bright red laser sweeping across it, the globe going dark and coming back blue."
+    },
+    {
+      "id": "city-globe-scan",
+      "kind": "video",
+      "source": "city-globe-scan.mp4",
+      "label": "Globe scan",
+      "crop": 0.96,
+      "alt": "A city inside a glass sphere with a bright cyan wave sweeping through the sphere and across the city, and the city settling back."
+    },
+    {
+      "id": "city-redteam",
+      "kind": "video",
+      "source": "city-redteam.mp4",
+      "label": "Red team scan",
+      "alt": "The city under red alert light with a red laser sweeping the grid and green system readouts around it."
+    }
+  ]
+}

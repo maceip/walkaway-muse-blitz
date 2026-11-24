@@ -1,0 +1,34 @@
+subject_definitions:
+<Subject 1> is the miniature neon city inside the glass sphere seen in <Video 1>, <Video 2>, and <Video 3>: a dense cluster of towers whose window grids glow in red and green neon, a magenta-lit bay glowing along the base, orange accents on the shorter blocks, and a dark curved glass shell enclosing the whole city.
+<Subject 2> is the bright green equatorial ring that arcs across the lower portion of the sphere in <Video 2> and <Video 3>.
+<Subject 3> is the lavender-grey cloud bank sitting above the towers inside the shell in <Video 2> and <Video 3>.
+<Subject 4> is the blue rim light tracing the upper edge of the glass shell in <Video 1>.
+<Video 1> is the source clip of the blue-lit globe with the red neon city grid, in which the camera moves backward while the tower lighting shifts from red toward blue.
+<Video 2> is the source clip of the green-lit city with the equatorial green ring, in which the camera moves forward toward the towers as a lightning bolt strikes through the shell.
+<Video 3> is the source clip of the green-ring globe seen in a wide orbital view, in which the city rotates slowly inside the shell.
+<Audio 1> is the low pulsing electronic drone bed carried by <Video 1>, a tonal harmonic drone with soft partials and no percussion and no voice.
+
+summary:
+[reference generation + audio reference] The target video moves through the miniature neon city inside a glass sphere in three continuous shots that read as one uninterrupted cinematic sweep: it opens on <Subject 1> as it appears in <Video 1>, transitions into the green-lit approach of <Video 2>, and settles on the wide orbital view of <Video 3>, with <Audio 1> supplying the tonal bed that carries through both transitions.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - the miniature city with its red and green neon window grids and its magenta-lit bay remains the central subject of every shot.
+<Subject 2> (appears in [Shot 2], [Shot 3]): fully_preserved - the bright green equatorial ring keeps its thickness, color, and arc across the lower frame.
+<Subject 3> (appears in [Shot 2], [Shot 3]): fully_preserved - the lavender-grey cloud bank keeps its shape and its position above the towers.
+<Subject 4> (appears in [Shot 1]): fully_preserved - the blue rim light stays along the upper edge of the glass shell.
+<Video 1> (Shot 1 subject, palette, and camera move): fully_preserved - the red neon city grid, the red-to-blue lighting shift, and the backward camera move are reproduced as the opening shot.
+<Video 2> (Shot 2 subject, palette, and camera move): fully_preserved - the green-lit towers, the green equatorial ring, the forward move toward the city, and the lightning strike are reproduced.
+<Video 3> (Shot 3 subject, palette, and camera move): fully_preserved - the wide green-ring globe view and its slow orbital drift are reproduced as the closing shot.
+<Audio 1>: reference - its low pulsing harmonic timbre guides the tonal bed of the target video without copying the original signal.
+
+detailed_description:
+The target video is a dark, high-contrast neon-city cinematic rendered inside a glass sphere in space, framed as a wide panoramic horizontal composition that keeps the whole orb visible and leaves generous empty space to the left and right of it.
+[Shot 1] The scene opens on <Subject 1>, the miniature neon city inside the glass sphere, seen as a tight cluster of towers whose window grids glow red against a deep blue interior, with a magenta-lit bay glowing along the base and <Subject 4> tracing the upper edge of the shell in blue. The camera performs a Pull Out at a moderate speed, widening the frame so that progressively more of the sphere and its surrounding darkness enters from the left and right, turning the close view into a broad panoramic composition. As the camera retreats, the red window grid cools toward blue across the towers, the bay lights come up, and the city settles into a blue-lit state with only faint red remaining on the tallest blocks.
+[Shot 2] At 00:01.600, the image cross-dissolves into the green-lit approach of <Video 2>: the same city is now lit in green, <Subject 2> arcs across the lower frame, and <Subject 3> sits above the towers. The camera performs a Push In toward the cluster, and a white lightning bolt forks down from the top of the shell and strikes through the towers, briefly blowing the surrounding cloud bank out to white before it darkens back to lavender. The green window grids grow steadily larger as the camera closes in, and the magenta ground scatter spreads across the bottom edge of the frame.
+[Shot 3] At 00:03.300, a second smooth cross-dissolve opens out to the wide orbital view of <Video 3>. The camera performs an Arc Shot around the sphere, moving the city in a slow rotation inside the shell while <Subject 2> sweeps laterally across the lower frame, carrying the magenta bay lights and the orange accents on the shorter towers past the camera. The wide panoramic framing is restored with the orb fully contained against the black of space, the green ring unbroken around its equator, and the shot ends with the city still turning slowly and the neon holding steady.
+
+overall_soundscape:
+A thin electrical buzz from the neon window grids runs through the whole piece, rising in density as the camera pushes into the towers. The lightning strike produces a sharp crack and a short sizzling hiss, and a deep hollow air movement surrounds the glass sphere as the camera pulls away and arcs around it.
+
+non_diegetic_music:
+<Audio 1> is referenced rather than copied: a low sustained electronic drone with soft harmonic partials and a steady pulsing modulation carries continuously underneath all three shots, holding a slow unchanging tempo with no percussion and no melody. Its level swells slightly through the lightning strike and eases back as the final wide shot settles.
