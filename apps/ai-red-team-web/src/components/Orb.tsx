@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { Phase } from '../lib/schedule';
+import { useOrbInteraction } from '../lib/useOrbInteraction';
 import type { Scene } from '../media/scenes';
 
 /**
@@ -120,6 +121,7 @@ export function Orb({
 }) {
   const [readyFor, setReadyFor] = useState<string | null>(null);
   const crossed = readyFor === scene.id;
+  const { spinRef, pushRef, onPointerDown } = useOrbInteraction();
 
   // The alert scene is the city under the red alert light with the laser
   // sweeping the grid, whether or not the four-minute clock is in its drill.
@@ -130,47 +132,56 @@ export function Orb({
     <div
       className={`orb${scanning ? ' is-scanning' : ''}${scene.alert ? ' is-alert' : ''}`}
       data-state={phase}
+      onPointerDown={onPointerDown}
     >
-      <div className="orb__halo" aria-hidden="true" />
-      <div className="orb__body">
-        {previous && (
-          <SceneLayer
-            key={previous.id}
-            scene={previous}
-            crossed={crossed}
-            faded
-          />
-        )}
-        <SceneLayer
-          key={scene.id}
-          scene={scene}
-          crossed={crossed}
-          faded={false}
-          onReady={() => setReadyFor(scene.id)}
-          onEnded={advance}
-        />
-        <div className="orb__grade" aria-hidden="true" />
-        <div className="orb__alert" aria-hidden="true" />
-        <div className="orb__water" aria-hidden="true" />
-        <div className="orb__water orb__water--second" aria-hidden="true" />
-        <div
-          className="orb__scan"
-          aria-hidden="true"
-          key={`${sweepPass}:${scene.alert ? scene.id : ''}`}
-          style={{ animationDelay: alert ? '0s' : undefined }}
-        >
-          <span className="orb__scan--thin" />
+      {/* The shove and the turn live on their own wrappers so that the
+          globe can be pushed about without dragging the bay of lights along
+          with it: the picture and the laser turn together, and the bay, the
+          reticle and the glass stay where they are. */}
+      <div className="orb__push" ref={pushRef}>
+        <div className="orb__halo" aria-hidden="true" />
+        <div className="orb__body">
+          <div className="orb__spin" ref={spinRef}>
+            {previous && (
+              <SceneLayer
+                key={previous.id}
+                scene={previous}
+                crossed={crossed}
+                faded
+              />
+            )}
+            <SceneLayer
+              key={scene.id}
+              scene={scene}
+              crossed={crossed}
+              faded={false}
+              onReady={() => setReadyFor(scene.id)}
+              onEnded={advance}
+            />
+            <div
+              className="orb__scan"
+              aria-hidden="true"
+              key={`${sweepPass}:${scene.alert ? scene.id : ''}`}
+              style={{ animationDelay: alert ? '0s' : undefined }}
+            >
+              <span className="orb__scan--thin" />
+            </div>
+          </div>
+          <div className="orb__grade" aria-hidden="true" />
+          <div className="orb__alert" aria-hidden="true" />
+          <div className="orb__water" aria-hidden="true" />
+          <div className="orb__water orb__water--second" aria-hidden="true" />
+          <div className="orb__flash" aria-hidden="true" />
+          <div className="orb__reticle" aria-hidden="true">
+            <span className="orb__bracket orb__bracket--tl" />
+            <span className="orb__bracket orb__bracket--tr" />
+            <span className="orb__bracket orb__bracket--bl" />
+            <span className="orb__bracket orb__bracket--br" />
+          </div>
         </div>
-        <div className="orb__flash" aria-hidden="true" />
-        <div className="orb__reticle" aria-hidden="true">
-          <span className="orb__bracket orb__bracket--tl" />
-          <span className="orb__bracket orb__bracket--tr" />
-          <span className="orb__bracket orb__bracket--bl" />
-          <span className="orb__bracket orb__bracket--br" />
-        </div>
+        <div className="orb__rim" aria-hidden="true" />
+        <div className="orb__shadow" aria-hidden="true" />
       </div>
-      <div className="orb__rim" aria-hidden="true" />
-      <div className="orb__shadow" aria-hidden="true" />
     </div>
   );
 }

@@ -1,5 +1,3 @@
-import { useRef } from 'react';
-import { useStarfield } from '../lib/useStarfield';
 import { useScene } from '../lib/useScene';
 import { Orb } from './Orb';
 import { Planets } from './Planets';
@@ -15,11 +13,8 @@ import { useExerciseClock } from '../lib/useExerciseClock';
  * lying in it. Every four minutes the city runs a red team exercise.
  */
 export function App() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const { phase, countdown, sweepPass } = useExerciseClock();
   const { current: scene, previous, advance } = useScene();
-
-  useStarfield(canvasRef);
 
   return (
     <>
@@ -28,7 +23,6 @@ export function App() {
             thousand stars on a real magnitude distribution, the galactic band
             running through it, and the Andromeda galaxy off to one side. */}
         <div className="deep-field" />
-        <canvas id="space" ref={canvasRef} />
         <div className="nebula" />
         <div className="planets">
           <Planets />

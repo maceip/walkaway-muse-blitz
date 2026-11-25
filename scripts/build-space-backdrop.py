@@ -11,14 +11,16 @@ pasted rectangle, not as space.
 So the sky is drawn here instead, at 4096x2304, from the things that actually
 make a view of space look like a view of space:
 
-  * a deep field of ~40,000 stars on a real magnitude distribution — a great
-    many faint ones and a handful of bright ones, which is the opposite of the
-    evenly-sized dots a CSS starfield gives you;
+  * a deep field of ~46,000 stars on a real magnitude distribution — a great
+    many faint ones and a handful of bright ones, which is the opposite of
+    the evenly-sized dots a CSS starfield gives you;
   * colour by spectral class, so the field is not all one white;
+  * a second, brighter tier of stars drawn wide enough to arrive at the
+    screen as points rather than as dust — see `draw_stars`;
   * bloom and four-point diffraction on the brightest stars only, because that
     is what a bright star does and it is what sells the scale;
-  * a galactic band of unresolved starlight and dust, with the dust rifts that
-    cut it into lanes;
+  * a galactic band of unresolved starlight and dust, with a bright core, a
+    dark rift running along it and the dust lanes that cut it into pieces;
   * the Andromeda galaxy itself, at an inclination, with logarithmic spiral
     arms, a warm core, blue star-forming knots along the arms and a dust lane
     running just inside each arm;
@@ -78,6 +80,30 @@ SMOOTH_SCALE = 0.5
 # of pure black with a vignette on top of it reads as an empty div.
 BASE = np.array([3.0, 4.5, 10.0], dtype=np.float32)
 
+# How much the browser shrinks the plate to fit a screen.
+#
+# The plate is 4096 wide and a screen is 1280 to 2560, so every star in it is
+# scaled down by a factor of between 1.6 and 3.2 before it reaches the eye.
+# A star drawn as a single pixel arrives smaller than a pixel and is averaged
+# down into grey dust — which is exactly what the sky looked like: a field of
+# dust with a galaxy in it, and no stars in it at all.
+#
+# So the stars are drawn in two tiers. The faint tier is left tight, because
+# faint stars *should* be dust: it is the grain that gives the field its
+# depth. The bright tier is drawn with a point-spread function wide enough
+# that it arrives at the screen as a point of about a pixel across, which is
+# what makes a star read as a star rather than as a speck.
+DISPLAY_SCALE = 1280.0 / WIDTH      # the scale the plate is usually seen at
+STAR_TIER_WIDTH = 2.15              # plate pixels across a bright star
+#
+# A bright star drawn at STAR_TIER_WIDTH arrives at the screen about a pixel
+# across, which is what a star looks like. Drawn any tighter than that — a
+# single plate pixel is the obvious mistake — it arrives smaller than a pixel
+# and the browser averages it down into the dust with everything else.
+#
+# The faint tier is deliberately tighter and much dimmer, because faint stars
+# *should* be grain: that grain is what gives the field its depth.
+
 
 # --------------------------------------------------------------------------
 # noise
@@ -100,6 +126,41 @@ def value_noise(rng: np.random.Generator, h: int, w: int, octaves: int, base: in
     return out / total
 
 
+def warped_noise(rng: np.random.Generator, h: int, w: int, octaves: int, base: int,
+                 warp: float = 0.0) -> np.ndarray:
+    """
+    Value noise whose coordinates are pushed around before it is sampled.
+
+    Straight value noise makes rounded blobs and, where it is used at a fine
+    scale, visible rings — the grid of the noise is still there, in arcs. Warp
+    the lookup with a second, coarser noise field and the grid disappears into
+    something that looks like gas.
+    """
+    if warp <= 0.0:
+        return value_noise(rng, h, w, octaves, base)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    wx = value_noise(rng, h, w, 3, base=max(2, base // 3)) - 0.5
+    wy = value_noise(rng, h, w, 3, base=max(2, base // 3)) - 0.5
+    sx = np.clip(xx + wx * warp * w, 0, w - 1)
+    sy = np.clip(yy + wy * warp * h, 0, h - 1)
+    out = np.zeros((h, w), dtype=np.float32)
+    amp = 1.0
+    total = 0.0
+    for octave in range(octaves):
+        cells = max(2, base * (2 ** octave))
+        gh = cells
+        gw = max(2, int(round(cells * w / h)))
+        grid = rng.random((gh, gw), dtype=np.float32)
+        layer = Image.fromarray((grid * 255.0).astype(np.uint8), "L").resize((w, h), Image.BICUBIC)
+        sampled = np.asarray(layer, dtype=np.float32)[
+            np.clip(sy.astype(np.int32), 0, h - 1), np.clip(sx.astype(np.int32), 0, w - 1)
+        ] / 255.0
+        out += amp * sampled
+        total += amp
+        amp *= 0.55
+    return out / total
+
+
 # --------------------------------------------------------------------------
 # layers
 # --------------------------------------------------------------------------
@@ -111,6 +172,11 @@ def galactic_band(rng: np.random.Generator, h: int, w: int) -> np.ndarray:
     A band alone is a stripe; what makes it read as the Milky Way is the
     clumping (the low-frequency noise that varies the brightness along and
     across the band) and the rifts (the dust that eats into it).
+
+    The band also has to have a *core*. A wide, even smear reads as a smudge
+    or a lens flare, which is what the first version of this looked like; a
+    bright, narrow ridge of starlight down the middle of a wider glow is what
+    reads as the Milky Way seen edge-on.
     """
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     cx, cy = w * 0.26, h * 0.58
@@ -120,17 +186,24 @@ def galactic_band(rng: np.random.Generator, h: int, w: int) -> np.ndarray:
     v = -dx * np.sin(ang) + dy * np.cos(ang)
     d = np.abs(v)
 
-    band = np.exp(-((d / (h * 0.15)) ** 2))
-    halo = np.exp(-((d / (h * 0.44)) ** 2))
+    core = np.exp(-((d / (h * 0.055)) ** 2))     # the bright ridge
+    band = np.exp(-((d / (h * 0.13)) ** 2))      # the body of the band
+    halo = np.exp(-((d / (h * 0.42)) ** 2))      # and its faint outskirts
 
-    clump = value_noise(rng, h, w, 6, base=3)
+    clump = warped_noise(rng, h, w, 6, base=3, warp=0.16)
     clump = np.clip((clump - 0.44) * 2.4, 0.0, 1.0)
 
-    dust = value_noise(rng, h, w, 5, base=4)
+    # the rift: a dark lane running along the middle of the band, which is
+    # what actually divides the Milky Way in two from this angle
+    rift = np.exp(-((np.abs(v - h * 0.012) / (h * 0.020)) ** 2))
+
+    dust = warped_noise(rng, h, w, 5, base=4, warp=0.12)
     dust = np.clip((dust - 0.50) * 3.2, 0.0, 1.0)
 
-    body = band * (0.30 + 0.95 * clump) + halo * (0.16 + 0.24 * clump)
-    body *= 1.0 - 0.72 * dust * np.maximum(band, 0.35)
+    body = core * (0.30 + 1.45 * clump) + band * (0.22 + 1.05 * clump)
+    body += halo * (0.12 + 0.22 * clump)
+    body *= 1.0 - 0.74 * dust * np.maximum(band, 0.35)
+    body *= 1.0 - 0.58 * rift * np.maximum(band, 0.2)
     return body
 
 
@@ -157,7 +230,7 @@ def andromeda(rng: np.random.Generator, h: int, w: int):
     disk = np.exp(-r / (major * 0.30))
 
     # two logarithmic spiral arms: r grows exponentially with the winding angle
-    winding = 4.4
+    winding = 5.2
     r0 = major * 0.055
     phase = phi - winding * np.log(r / r0)
     wrapped = np.mod(phase + np.pi, 2 * np.pi) - np.pi
@@ -165,17 +238,22 @@ def andromeda(rng: np.random.Generator, h: int, w: int):
     arms = np.zeros_like(r)
     for offset, weight in ((0.0, 1.0), (np.pi, 0.82)):
         dphi = np.mod(wrapped - offset + np.pi, 2 * np.pi) - np.pi
-        width = 0.26 + 0.50 * np.clip(r / major, 0.0, 1.4)
+        # The arms have to stay narrow all the way out. Letting them widen
+        # with radius merges them into concentric rings, and a galaxy made of
+        # concentric rings is not a galaxy.
+        width = 0.20 + 0.16 * np.clip(r / major, 0.0, 1.4)
         arms += weight * np.exp(-((dphi / width) ** 2)) * np.exp(-r / (major * 0.60))
     disk = disk + arms
 
     # the dust lane runs just inside each arm
     lane_phase = np.mod(phase + np.pi * 0.42 + np.pi, 2 * np.pi) - np.pi
-    lane = np.exp(-((lane_phase / 0.24) ** 2)) * np.exp(-r / (major * 0.46))
+    lane = np.exp(-((lane_phase / 0.22) ** 2)) * np.exp(-r / (major * 0.46))
 
-    # star-forming knots: small, bright, blue, and only where the arms are
-    knot_noise = value_noise(rng, h, w, 6, base=18)
-    knots = np.clip((knot_noise - 0.60) * 3.6, 0.0, 1.0) * np.clip(arms, 0.0, 2.0)
+    # star-forming knots: small, bright, blue, and only where the arms are.
+    # The noise is warped, because an unwarp one at this scale leaves its grid
+    # visible as rings around the galaxy.
+    knot_noise = warped_noise(rng, h, w, 6, base=22, warp=0.22)
+    knots = np.clip((knot_noise - 0.58) * 3.6, 0.0, 1.0) * np.clip(arms, 0.0, 2.0)
 
     # the bulge: old, warm stars piled up in the middle
     core = np.exp(-((r / (major * 0.052)) ** 1.7))
@@ -186,9 +264,11 @@ def andromeda(rng: np.random.Generator, h: int, w: int):
 
 def nebulae(rng: np.random.Generator, h: int, w: int):
     """A few soft clouds of gas, in the page's own colours."""
-    cloud = value_noise(rng, h, w, 6, base=3)
-    detail = value_noise(rng, h, w, 5, base=7)
-    shape = np.clip((cloud - 0.36) * 1.9, 0.0, 1.0) * (0.55 + 0.65 * detail)
+    cloud = warped_noise(rng, h, w, 6, base=3, warp=0.30)
+    detail = warped_noise(rng, h, w, 5, base=7, warp=0.18)
+    shape = np.clip((cloud - 0.34) * 2.1, 0.0, 1.0) * (0.45 + 0.80 * detail)
+    # filaments: the thin bright threads that run through a real nebula
+    thread = np.clip((detail - 0.62) * 3.4, 0.0, 1.0) ** 2
 
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     blobs = []
@@ -200,7 +280,8 @@ def nebulae(rng: np.random.Generator, h: int, w: int):
     ):
         d = np.sqrt(((xx / w) - cx) ** 2 + ((yy / h) - cy) ** 2)
         falloff = np.exp(-((d / rad) ** 2) * 2.4)
-        blobs.append((shape * falloff, np.array(tint, dtype=np.float32)))
+        blobs.append(((shape + 0.55 * thread) * falloff,
+                      np.array(tint, dtype=np.float32)))
     return blobs
 
 
@@ -228,8 +309,23 @@ def star_colours(rng: np.random.Generator, count: int) -> np.ndarray:
     return np.clip(colour, 0.0, 1.0)
 
 
+def _psf(sigma: float, radius: int) -> np.ndarray:
+    """A normalised Gaussian point-spread function over a square stencil."""
+    grid = np.arange(-radius, radius + 1, dtype=np.float32)
+    gy, gx = np.meshgrid(grid, grid, indexing="ij")
+    k = np.exp(-((gx ** 2 + gy ** 2) / (2.0 * sigma * sigma))).astype(np.float32)
+    return k / max(float(k.sum()), 1e-9)
+
+
 def draw_stars(rng: np.random.Generator, img: np.ndarray, count: int,
-               density: np.ndarray | None = None) -> None:
+               density: np.ndarray | None = None,
+               sigma: float = 0.95,
+               peak_base: float = 12.0,
+               peak_span: float = 110.0,
+               peak_exp: float = 0.85,
+               flux_exp: float = 3.6,
+               spikes: int = 0,
+               spike_radius: int = 34) -> None:
     """
     Scatter stars over the field, in place.
 
@@ -241,6 +337,18 @@ def draw_stars(rng: np.random.Generator, img: np.ndarray, count: int,
     `density` is a map of where stars are allowed to land. Without it the
     field is uniform and reads as noise; with it the sky has a crowded band
     and thin corners, which is what a real sky does.
+
+    `sigma` is the width of the point-spread function in plate pixels, and the
+    peak is the brightness of the star's centre pixel. Those two are separate:
+    a wide point-spread function spreads the same light over more pixels, so
+    the *total* light a star lays down is its peak divided by the fraction
+    of the profile that lands on the centre pixel. Getting that wrong is how
+    the bright tier ends up dimmer than the faint one — which is exactly what
+    happened the first time this was written.
+
+    The faint tier is drawn tight and dim, because faint stars should be grain.
+    The bright tier is drawn wide and bright, because a wide star survives the
+    browser's downscale as a point instead of being averaged into nothing.
     """
     h, w = img.shape[:2]
     if density is None:
@@ -256,27 +364,32 @@ def draw_stars(rng: np.random.Generator, img: np.ndarray, count: int,
     y = ry[keep]
 
     u = rng.random(x.size)
-    flux = u ** 3.6
+    flux = u ** flux_exp
     flux = flux / max(flux.max(), 1e-6)
 
     colour = star_colours(rng, x.size)
-    brightness = 16.0 + 225.0 * (flux ** 0.85)
+    peak = peak_base + peak_span * (flux ** peak_exp)
 
     xi = np.round(x).astype(np.int32)
     yi = np.round(y).astype(np.int32)
     inside = (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
     xi, yi = xi[inside], yi[inside]
-    brightness = brightness[inside]
+    peak = peak[inside]
     colour = colour[inside]
 
-    # a small point-spread function: the star and its immediate neighbours.
-    # Each neighbour is written with its own coordinates so a star at the very
-    # edge of the frame lights up the edge of the frame and not the far side
-    # of the buffer.
+    radius = max(2, int(np.ceil(sigma * 3.0)))
+    kernel = _psf(sigma, radius)
+    # the light the star lays down, so that its centre pixel comes out at
+    # exactly `peak`
+    w0 = max(float(kernel[radius, radius]), 1e-9)
+    total = peak / w0
+
     flat = img.reshape(-1, 3)
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            weight = 1.0 if (dx == 0 and dy == 0) else 0.38
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            weight = kernel[dy + radius, dx + radius]
+            if weight < 0.004 * w0:
+                continue
             xs = xi + dx
             ys = yi + dy
             valid = (xs >= 0) & (xs < w) & (ys >= 0) & (ys < h)
@@ -284,34 +397,39 @@ def draw_stars(rng: np.random.Generator, img: np.ndarray, count: int,
             if idx.size == 0:
                 continue
             for c in range(3):
-                vals = (brightness * weight * colour[:, c])[valid]
+                vals = (total * weight * colour[:, c])[valid]
                 np.add.at(flat[:, c], idx, vals)
 
-    # bloom and diffraction spikes on the brightest few
-    order = np.argsort(brightness)[::-1]
-    sigma = 3.4
-    radius = 13
-    grid = np.arange(-radius, radius + 1)
-    gy, gx = np.meshgrid(grid, grid, indexing="ij")
-    halo = np.exp(-((gx ** 2 + gy ** 2) / (2.0 * sigma * sigma))).astype(np.float32)
-    spike = (np.exp(-(gy.astype(np.float32) ** 2) / 2.0)
-             * np.exp(-(gx.astype(np.float32) ** 2) / (2.0 * 1.1 ** 2))
-             + np.exp(-(gx.astype(np.float32) ** 2) / 2.0)
-             * np.exp(-(gy.astype(np.float32) ** 2) / (2.0 * 1.1 ** 2)))
-    spikes = (spike * 0.16).astype(np.float32)
+    if spikes <= 0:
+        return
 
-    for i in order[:240]:
+    # bloom and diffraction spikes on the brightest few. The spikes are long
+    # and very thin: a short, wide one reads as a glow blob, and the whole
+    # point of a spike is that it is a line.
+    order = np.argsort(peak)[::-1]
+    sigma_halo = sigma * 1.6
+    grid = np.arange(-spike_radius, spike_radius + 1, dtype=np.float32)
+    gy, gx = np.meshgrid(grid, grid, indexing="ij")
+    halo = np.exp(-((gx ** 2 + gy ** 2) / (2.0 * sigma_halo * sigma_halo))).astype(np.float32)
+    thin = 0.9
+    spike = (np.exp(-(gy ** 2) / (2.0 * thin * thin))
+             * np.exp(-(gx ** 2) / (2.0 * (sigma_halo * 0.85) ** 2))
+             + np.exp(-(gx ** 2) / (2.0 * thin * thin))
+             * np.exp(-(gy ** 2) / (2.0 * (sigma_halo * 0.85) ** 2)))
+
+    for i in order[:spikes]:
         cx, cy = int(xi[i]), int(yi[i])
-        x0, x1 = max(0, cx - radius), min(w, cx + radius + 1)
-        y0, y1 = max(0, cy - radius), min(h, cy + radius + 1)
+        x0, x1 = max(0, cx - spike_radius), min(w, cx + spike_radius + 1)
+        y0, y1 = max(0, cy - spike_radius), min(h, cy + spike_radius + 1)
         if x1 <= x0 or y1 <= y0:
             continue
-        sub_halo = halo[y0 - (cy - radius):y1 - (cy - radius),
-                        x0 - (cx - radius):x1 - (cx - radius)]
-        sub_spike = spikes[y0 - (cy - radius):y1 - (cy - radius),
-                           x0 - (cx - radius):x1 - (cx - radius)]
-        weight = brightness[i] / 255.0
-        img[y0:y1, x0:x1] += (sub_halo * 0.55 + sub_spike)[:, :, None] * colour[i][None, None, :] * weight
+        sub_halo = halo[y0 - (cy - spike_radius):y1 - (cy - spike_radius),
+                        x0 - (cx - spike_radius):x1 - (cx - spike_radius)]
+        sub_spike = spike[y0 - (cy - spike_radius):y1 - (cy - spike_radius),
+                          x0 - (cx - spike_radius):x1 - (cx - spike_radius)]
+        weight = min(peak[i] / 255.0, 1.0)
+        img[y0:y1, x0:x1] += (sub_halo * 0.42 + sub_spike * 0.26)[:, :, None] \
+            * colour[i][None, None, :] * weight
 
 
 # --------------------------------------------------------------------------
@@ -333,18 +451,22 @@ def render(width: int = WIDTH, height: int = HEIGHT) -> Image.Image:
     sky = np.zeros((sh, sw, 3), dtype=np.float32)
     sky += BASE
 
-    # the galactic band: unresolved starlight, warm and slightly dusty
-    band_rgb = np.array([150.0, 146.0, 150.0], dtype=np.float32)
-    sky += (band * 0.165)[:, :, None] * band_rgb[None, None, :]
+    # the galactic band: unresolved starlight, warm and slightly dusty. It is
+    # deliberately faint — the band has to read as a lane of dust and star
+    # clouds lying behind the globe, not as a painted ribbon across the page.
+    band_rgb = np.array([156.0, 150.0, 152.0], dtype=np.float32)
+    sky += (band * 0.112)[:, :, None] * band_rgb[None, None, :]
 
-    # the nebulae
+    # the nebulae. They were there in the first version and could not be seen;
+    # the sky was a monochrome field with a galaxy in it, and the gas has to
+    # carry colour to belong to the same world as the globe.
     for shape, tint in clouds:
-        sky += (shape * 0.085)[:, :, None] * tint[None, None, :]
+        sky += (shape * 0.125)[:, :, None] * tint[None, None, :]
 
     # andromeda: the disk is blue-white, the knots are bluer, the bulge warm
     sky += (light * 0.135)[:, :, None] * np.array([150.0, 168.0, 205.0], dtype=np.float32)[None, None, :]
-    sky += (knots * 0.30)[:, :, None] * np.array([120.0, 170.0, 255.0], dtype=np.float32)[None, None, :]
-    sky += (core * 0.20)[:, :, None] * np.array([255.0, 214.0, 168.0], dtype=np.float32)[None, None, :]
+    sky += (knots * 0.34)[:, :, None] * np.array([120.0, 170.0, 255.0], dtype=np.float32)[None, None, :]
+    sky += (core * 0.22)[:, :, None] * np.array([255.0, 214.0, 168.0], dtype=np.float32)[None, None, :]
 
     smooth = Image.fromarray(np.clip(sky, 0, 255).astype(np.uint8), "RGB").resize(
         (width, height), Image.BICUBIC
@@ -359,7 +481,20 @@ def render(width: int = WIDTH, height: int = HEIGHT) -> Image.Image:
             (width, height), Image.BICUBIC),
         dtype=np.float32) / 255.0
     density = 0.16 + 1.05 * band_full
-    draw_stars(rng, img, 46000, density)
+
+    # The faint tier: tight and dim. This is the grain of the field.
+    draw_stars(rng, img, 46000, density,
+               sigma=0.95, peak_base=10.0, peak_span=95.0,
+               peak_exp=0.85, flux_exp=3.6)
+
+    # The bright tier: wide enough to arrive at the screen as a point, and
+    # bright enough to still be a point when it gets there. This is the tier
+    # that was missing, and without it the sky had no stars in it — only dust.
+    bright_density = np.clip(density * 0.60 + 0.12, 0.0, 1.0)
+    draw_stars(rng, img, 1600, bright_density,
+               sigma=STAR_TIER_WIDTH, peak_base=22.0, peak_span=233.0,
+               peak_exp=0.62, flux_exp=2.6,
+               spikes=240, spike_radius=40)
 
     # --- dither and quantise ---------------------------------------------
     dither = rng.random(img.shape).astype(np.float32) - 0.5
@@ -369,7 +504,7 @@ def render(width: int = WIDTH, height: int = HEIGHT) -> Image.Image:
 
 def encode(im: Image.Image, path: str) -> None:
     if path.endswith(".webp"):
-        im.save(path, "WEBP", quality=84, method=6)
+        im.save(path, "WEBP", quality=88, method=6)
     else:
         im.save(path, "JPEG", quality=92, optimize=True, progressive=True, subsampling=0)
 

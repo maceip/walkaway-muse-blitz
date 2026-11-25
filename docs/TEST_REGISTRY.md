@@ -471,17 +471,29 @@ hop works across devices.
      still hash to the recorded value from the same source;
   9. the shipped sky is byte-for-byte the plate
      `scripts/build-space-backdrop.py` draws;
-  10. the production server keeps resolved paths inside its dist directory,
+  10. **the sky still has stars in it once the browser has scaled it down.**
+      The plate is 4096 wide and a screen is 1280 to 2560, so the browser
+      shrinks every star before it reaches the eye. The plate is scaled to
+      1280x720 the way the browser scales it, and the distinct bright points
+      that survive are counted: the shipped plate has **407** of them, and
+      the check fails below 120. The dust-only plate that shipped before
+      this had 40 — it had kept its dust and lost its stars;
+  11. **the page carries no canvas.** There used to be a canvas over the sky
+      painting eighty-five white dots that fell downwards and wrapped around;
+      on a dark page that read as snowfall. The built document must not
+      contain a `<canvas>`, and no file under `src/` may mention
+      `useStarfield` or carry a canvas;
+  12. the production server keeps resolved paths inside its dist directory,
       exposes `/healthz`, supports HTTP Range requests for the video, and
       answers a missing asset with a 404 rather than with the page — a
       missing picture must be able to say it is missing.
-- Last observed: **PASS** 2026-11-24 15:0x — 5 local references resolved, 0
+- Last observed: **PASS** 2026-11-24 17:0x — 5 local references resolved, 0
   external requests, 3 woff2 faces resolved, brand block exact (4 checks),
   schedule exact (6 checks), scene pipeline exact (59 checks: 14 scenes, both
   kinds present, every still and every film present, every scene at 1024×1024,
   preload matching the default), **the storm is off (12 checks)**, scenes
-  matched the generator, sky matched the generator, server guard present
-  (4 checks).
+  matched the generator, sky matched the generator (2 checks), **no snowfall
+  (11 checks)**, server guard present (4 checks).
 - Mutation-tested, because a test that cannot fail proves nothing. Four
   separate mutations were applied to the 2026-11-23 build and the restored
   files re-checked:
@@ -505,6 +517,35 @@ hop works across devices.
     picture made the suite exit 1 with `the scene city-dive ships the storm
     unchanged (mean change 0.0)`.
   Both files were restored and the suite passes again.
+- **The two new checks were mutation-tested separately**, because a check that
+  cannot fail proves nothing and these two guard the two things that were
+  changed:
+  - putting a `<canvas id="space">` back into the built document made the
+    suite exit 1 with `the shipped page carries a canvas — that is where the
+    snowfall was`;
+  - regressing the *generator* so that the bright star tier is drawn tight
+    again — the bug that had left the sky as dust — and rebuilding the plate
+    with it made the suite exit 1 with `the sky has no stars in it: 16
+    distinct bright points at page size`. The plate matched its own
+    generator throughout that mutation, so the generator-drift check passed
+    it: only the star count caught it. That is the reason the star count is
+    a separate check.
+  The generator, the plate and the built document were all restored and the
+  suite passes again.
+- **The snowfall was found by measurement, not by eye.** The canvas that
+  painted the falling dots was confirmed in Chromium: 92 pixels in a
+  300x300 patch of empty sky changed between two frames 1.5 s apart, in a
+  patch where nothing should move. After the removal the same measurement on
+  the same patch gives **0** pixels, and the page carries no canvas at all.
+  The patch is not a page-relative coordinate; it is a fixed rectangle in
+  the top-left of the viewport, which is empty sky on every scene.
+- **The sky was measured before and after.** Scaled to the 1280x720 the
+  browser shows, the plate that shipped before had **40** distinct bright
+  points above luma 110 — almost none — and the one that ships now has
+  **407**. The dust-only plate's pixels above luma 160 went from 0.000% to
+  0.019%, and the mean brightness of the frame was left about where it was
+  (14.75 against 13.03), so the sky gained stars without gaining a grey
+  wash.
 - **The storm was measured before and after.** The delivered sources carry the
   cloud over 20-26% of the top band of the frame (the grey plate 25.4%, the
   spiral 25.9%, the films 20.1-20.5%); after the repair the shipped pictures
@@ -713,6 +754,60 @@ hop works across devices.
 - Scope: static-asset integrity, a real browser render and a live deployment
   check for the model.tools AI Red Team page. It is not part of the Hermes demo
   path and proves nothing about a device hop.
+
+
+### T-AI-RED-TEAM-WEB-002 — the globe answers the hand (browser)
+
+- Command: `python3 scripts/check-ai-red-team-web-browser.py` from the repo
+  root, against a server already running the build — `BASE=http://127.0.0.1:8130`
+  for the preview, `BASE=https://redteam.model.tools` for the live site.
+  Needs Playwright (`pip install playwright && playwright install chromium`).
+  It is in the repository rather than in a scratch directory, so the browser
+  evidence for this site is reproducible from a clone.
+- Real components: the real build served over HTTP, driven in Chromium by
+  Playwright — the same components `T-AI-RED-TEAM-WEB-001` checks statically
+  (the built app in `apps/ai-red-team-web/dist/`, the generated manifest
+  `src/media/scenes.ts`, the shipped scenes and films, the drawn sky) plus
+  `src/lib/useOrbInteraction.ts` and the `.orb__spin` / `.orb__push` wrappers
+  in `src/components/Orb.tsx`.
+- Asserts:
+  1. every one of the fourteen scenes opens and shows itself at opacity 1, and
+     every picture is 1024x1024;
+  2. every film is playing (`paused === false`, `readyState >= 2`);
+  3. the code red scene puts `is-alert` on the orb, the alert grade reads
+     above 0.3 and the laser sweep is running;
+  4. no scene overflows horizontally, no console error is raised and **no
+     request goes off the page's own origin**;
+  5. the crossing between two scenes is a fade and not a cut — both layers
+     take intermediate values and sum to one the whole way;
+  6. the order is not the declared order and no scene is shown twice in a row;
+  7. **the globe answers the wheel:** the orb shows a pointer, scrolling turns
+     it, it coasts on after the wheel stops, and it then genuinely stops —
+     two samples three seconds apart are the same, not merely close;
+  8. **the globe answers a click:** it is shoved aside (measured in pixels
+     against the orb's own size), it squashes as it is shoved, it is thrown
+     round, and it springs back to nothing;
+  9. no console error is raised while it is being pushed;
+  10. nothing overflows horizontally at 360, 480, 768, 1280 or 1600, and the
+      wordmark and the HUD stay inside the frame.
+- Last observed: **PASS** 2026-11-25 00:2x against the local build on
+  `http://127.0.0.1:8097` **and against the live site on
+  `https://redteam.model.tools`** (release `20261125-001548`) — all fourteen
+  scenes showing at 1024x1024, all nine films playing, the crossing fading
+  with the two layers summing to one, the order shuffled over 95 s,
+  **scrolling turned the globe -47.2 deg and it coasted on to -111.8 deg**,
+  a click **shoved it 17.8 px of a 302 px orb, squashed it to 0.952 and threw
+  it 29 deg**, and it sprang back to 0.0 px and a squash of 1.000. Zero
+  console errors and zero external requests.
+  The first run of this check **failed** one assertion — the globe was still
+  creeping 2.6 deg over four seconds after the scroll stopped — and the
+  friction and the rest threshold in `useOrbInteraction.ts` were tightened
+  until the globe actually comes to a stop rather than merely nearly stopped.
+- The reduced-motion path was checked separately in the same browser with
+  `reduced_motion="reduce"`: scrolling leaves the globe at **0 deg** and a
+  click gives a small push (5.3 px, a squash of 0.986) and no turn at all.
+- Scope: the behaviour of the page in a real browser. It is not part of the
+  Hermes demo path and proves nothing about a device hop.
 
 
 ### T-WALKAWAY-DAT-001

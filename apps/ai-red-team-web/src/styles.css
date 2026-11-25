@@ -88,14 +88,6 @@ body {
   pointer-events: none;
 }
 
-#space {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
 /* ---------- deep space ---------- */
 
 /* The sky is drawn, not photographed.
@@ -334,6 +326,9 @@ body {
   flex: 0 0 auto;
   /* A slow bob, so the globe drifts in space rather than sitting still. */
   animation: orb-float 9s ease-in-out infinite;
+  /* the globe answers the hand: a click shoves it aside and turns it */
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 @keyframes orb-float {
@@ -344,6 +339,26 @@ body {
   50% {
     transform: translateY(-18px);
   }
+}
+
+/* The shove. The orb is pushed away from the point that was clicked and
+   springs back; the numbers come from src/lib/useOrbInteraction.ts. */
+.orb__push {
+  position: absolute;
+  inset: 0;
+  transform: translate(var(--push-x, 0px), var(--push-y, 0px)) scale(var(--squash, 1));
+  will-change: transform;
+}
+
+/* The turn. The globe's own picture turns, and the laser turns with it
+   because it sweeps the city grid and the grid is what turns. The bay along
+   the bottom and the targeting brackets stay outside this, because they are
+   the apparatus around the globe and not the globe itself. */
+.orb__spin {
+  position: absolute;
+  inset: 0;
+  transform: rotate(var(--spin, 0deg));
+  will-change: transform;
 }
 
 .orb__body {

@@ -18,8 +18,11 @@ Verifies, without a browser:
      scene so the page can switch between them.
   7. The shipped orb media is the media scripts/build-redteam-media.py
      produces, and the sky is the plate scripts/build-space-backdrop.py
-     draws.
-  8. The production server rejects path traversal and answers /healthz.
+     draws — and the sky still has stars in it once the browser has scaled
+     it down to a screen.
+  8. The page carries no canvas: the falling specks that read as snowfall
+     are gone, and the sky is the drawn plate alone.
+  9. The production server rejects path traversal and answers /healthz.
 
 Usage:
     python3 scripts/verify-ai-red-team-web.py
@@ -36,7 +39,7 @@ import subprocess
 import sys
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(ROOT, "apps", "ai-red-team-web")
@@ -223,7 +226,60 @@ def check_space_backdrop() -> int:
     if proc.returncode != 0:
         fail(f"space backdrop drifted from the generator: {(proc.stdout + proc.stderr).strip()[:200]}")
         return 0
-    return 1
+    checked = 1
+
+    # ...and it must still be a sky with stars in it.
+    #
+    # The plate is 4096 wide and a screen is 1280 to 2560, so the browser
+    # shrinks every star in it before it reaches the eye. A star drawn too
+    # tight arrives smaller than a pixel and is averaged down into grey dust:
+    # the sky kept its dust and lost its stars. Counting the bright points
+    # that survive the downscale is what catches that, and it is the check
+    # that would have failed on the plate that shipped before.
+    plate = os.path.join(PUBLIC, "media", "space", "deep-field.webp")
+    if not os.path.isfile(plate):
+        fail("the sky ships no plate")
+        return checked
+    page = Image.open(plate).convert("L").resize((1280, 720), Image.LANCZOS)
+    lum = np.asarray(page, dtype=float)
+    peak = np.asarray(page.filter(ImageFilter.MaxFilter(5)), dtype=float)
+    points = int(((lum >= peak - 1e-9) & (lum >= 110)).sum())
+    if points < 120:
+        fail(f"the sky has no stars in it: {points} distinct bright points at "
+             f"page size, where the shipped plate has 407 and the dust-only "
+             f"plate that came before it had 40")
+    return checked + 1
+
+
+def check_no_snowfall() -> int:
+    """
+    The page must not carry the falling specks.
+
+    There used to be a canvas over the sky painting eighty-five white dots
+    that fell downwards and wrapped around. On a dark page that read as
+    snowfall, and nothing in the rest of the page looked like weather. The
+    sky is now the drawn plate alone, so there must be no canvas and no
+    starfield module left.
+    """
+    checked = 0
+    doc = open(shipped_document(), encoding="utf-8").read()
+    if "<canvas" in doc.lower():
+        fail("the shipped page carries a canvas — that is where the snowfall was")
+    checked += 1
+
+    src = os.path.join(APP, "src")
+    for base, _dirs, files in os.walk(src):
+        for name in files:
+            if not name.endswith((".ts", ".tsx")):
+                continue
+            path = os.path.join(base, name)
+            body = open(path, encoding="utf-8").read()
+            checked += 1
+            if "useStarfield" in body:
+                fail(f"{os.path.relpath(path, ROOT)} still paints the falling specks")
+            if "<canvas" in body:
+                fail(f"{os.path.relpath(path, ROOT)} still carries a canvas")
+    return checked
 
 
 def check_scene_pipeline() -> int:
@@ -475,6 +531,7 @@ def main() -> int:
         "no storm": check_no_storm,
         "orb media": check_orb_assets,
         "space backdrop": check_space_backdrop,
+        "no snowfall": check_no_snowfall,
         "server guard": check_server_guard,
     }
     for name, fn in checks.items():
