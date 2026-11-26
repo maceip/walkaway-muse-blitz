@@ -215,8 +215,9 @@ elements, used as textures — through WebGL, so they read as photographed:
 
 - a crossing **takes its whole time** (3.2 s, `TRANSITION_MS`): the new light
   arrives through a broad, soft front, the middle a little before the rim,
-  and each point of the globe turns over in about two seconds, so no tenth of
-  a second carries more than a few per cent of the change. The two scenes
+  and each point of the globe turns over in about two seconds, so the change
+  runs from 10% to 90% over about 1.7 s and no tenth of a second carries more
+  than about 7% of it. The two scenes
   are mixed **in OKLab**, where equal steps look equal, so a bright scene
   does not swamp a dark one and then give way all at once.
   `e2e/crossings.spec.ts` photographs crossings a tenth of a second at a time
@@ -225,6 +226,9 @@ elements, used as textures — through WebGL, so they read as photographed:
   the alert scene in the lens, so it crosses in and out with the city it
   lights; the drill's red light and the clock's colour drift are eased the
   same way, so the city never snaps to a new colour;
+- a crossing into a film **waits for the film** (up to 1.5 s) rather than
+  starting on its poster: the poster is lossless and the film a little
+  softer, and switching part way through softened the city in one frame;
 - a crossing is a **focus pull**: the lens drifts out of focus and back as the
   new scene comes in. Two different shots never line up; this is how film
   hides it. Going into a transition from the picture it opens on, there is
