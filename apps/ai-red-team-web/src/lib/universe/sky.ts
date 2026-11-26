@@ -125,11 +125,11 @@ export function layoutFor(width: number, height: number): Layout {
         star(0.4),
         star(0.8),
         { x: 0.76, y: 0.11, r: 0.3, pa: -28 * DEG, incl: 58 * DEG, parallax: 0.25 },
-        { x: 0.2, y: 0.9, r: 0.17, pa: 128 * DEG, incl: 38 * DEG, parallax: 0.25 },
+        { x: 0.24, y: 0.87, r: 0.16, pa: 128 * DEG, incl: 38 * DEG, parallax: 0.25 },
         { x: 0.15, y: 0.15, r: 0.13, pa: 24 * DEG, incl: 84 * DEG, parallax: 0.25 },
-        { x: 0.86, y: 0.52, r: 0.045, pa: 0, incl: 0, parallax: 0.3 },
+        { x: 0.86, y: 0.8, r: 0.045, pa: 0, incl: 0, parallax: 0.3 },
         { x: 0.17, y: 0.6, r: 0.13, pa: -12 * DEG, incl: 70 * DEG, parallax: 0.45 },
-        { x: 0.84, y: 0.86, r: 0.06, pa: 30 * DEG, incl: 50 * DEG, parallax: 0.4 },
+        { x: 0.78, y: 0.94, r: 0.06, pa: 30 * DEG, incl: 50 * DEG, parallax: 0.4 },
       ]
     : [
         star(0.15),
@@ -157,7 +157,7 @@ export function layoutFor(width: number, height: number): Layout {
 
   const planets: PlanetBody[] = tall
     ? [
-        { x: 0.9, y: 0.36, r: 0.045, kind: 'giant', seed: 2.3, c1: [0.78, 0.66, 0.5], c2: [0.55, 0.4, 0.3], c3: [0.9, 0.84, 0.7], spin: 0.012, ringTilt: 0.26, ringPa: -18 * DEG, parallax: 0.55 },
+        { x: 0.85, y: 0.635, r: 0.04, kind: 'giant', seed: 2.3, c1: [0.78, 0.66, 0.5], c2: [0.55, 0.4, 0.3], c3: [0.9, 0.84, 0.7], spin: 0.012, ringTilt: 0.26, ringPa: -18 * DEG, parallax: 0.55 },
         { x: 0.08, y: 0.33, r: 0.02, kind: 'rocky', seed: 7.9, c1: [0.62, 0.6, 0.58], c2: [0.36, 0.35, 0.36], c3: [0.75, 0.72, 0.68], spin: 0.006, ringTilt: 0, ringPa: 0, parallax: 0.6 },
       ]
     : [

@@ -3,13 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "AI Red Team — the redteam.model.tools surface. React + Vite, served as static build behind a dependency-free Node server.",
+  "description": "AI Red Team \u2014 the redteam.model.tools surface. React + Vite, served as static build behind a dependency-free Node server.",
   "license": "BSD-3-Clone",
   "scripts": {
     "dev": "python3 ../../scripts/build-redteam-media.py && vite",
     "build": "python3 ../../scripts/build-redteam-media.py && tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "react": "^19.2.0",
