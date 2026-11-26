@@ -161,7 +161,7 @@ export function layoutFor(width: number, height: number): Layout {
         { x: 0.08, y: 0.33, r: 0.02, kind: 'rocky', seed: 7.9, c1: [0.62, 0.6, 0.58], c2: [0.36, 0.35, 0.36], c3: [0.75, 0.72, 0.68], spin: 0.006, ringTilt: 0, ringPa: 0, parallax: 0.6 },
       ]
     : [
-        { x: 0.93, y: 0.85, r: 0.03, kind: 'giant', seed: 2.3, c1: [0.78, 0.66, 0.5], c2: [0.55, 0.4, 0.3], c3: [0.9, 0.84, 0.7], spin: 0.012, ringTilt: 0.26, ringPa: -18 * DEG, parallax: 0.55 },
+        { x: 0.93, y: 0.85, r: 0.024, kind: 'giant', seed: 2.3, c1: [0.78, 0.66, 0.5], c2: [0.55, 0.4, 0.3], c3: [0.9, 0.84, 0.7], spin: 0.012, ringTilt: 0.26, ringPa: -18 * DEG, parallax: 0.55 },
         { x: 0.06, y: 0.22, r: 0.013, kind: 'rocky', seed: 7.9, c1: [0.62, 0.6, 0.58], c2: [0.36, 0.35, 0.36], c3: [0.75, 0.72, 0.68], spin: 0.006, ringTilt: 0, ringPa: 0, parallax: 0.6 },
       ];
 
@@ -174,8 +174,8 @@ export function layoutFor(width: number, height: number): Layout {
 
 /** The galaxies' diffuse light, drawn in the nebula pass under their stars. */
 export const GALAXIES: GalaxyGlow[] = [
-  { group: G.GALAXY_A, arms: 2, pitch: 0.36, omega: (2 * Math.PI) / 1500, bar: 0, edgeOn: false, brightness: 0.55 },
-  { group: G.GALAXY_B, arms: 2, pitch: 0.3, omega: -(2 * Math.PI) / 1100, bar: 0.32, edgeOn: false, brightness: 0.45 },
+  { group: G.GALAXY_A, arms: 2, pitch: 0.36, omega: (2 * Math.PI) / 1500, bar: 0, edgeOn: false, brightness: 0.8 },
+  { group: G.GALAXY_B, arms: 2, pitch: 0.3, omega: -(2 * Math.PI) / 1100, bar: 0.32, edgeOn: false, brightness: 0.65 },
   { group: G.GALAXY_C, arms: 2, pitch: 0.4, omega: (2 * Math.PI) / 1800, bar: 0, edgeOn: true, brightness: 0.5 },
 ];
 

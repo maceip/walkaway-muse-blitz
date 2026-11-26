@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { DEFAULT_SCENE_ID, SCENE_BY_ID, SCENES, type Scene } from '../media/scenes';
+import { TRANSITION_MS } from './orbCompositor';
 
 /**
- * How long the page takes to cross from one scene to the next.
+ * How long the scene being crossed away from stays on the page.
  *
- * The stylesheet fades the two scenes over each other in exactly this time,
- * so the number lives here and the stylesheet is told to match it. When the
- * crossing is over the scene it crossed away from is taken out of the page.
+ * The globe's renderer crosses in TRANSITION_MS, and keeps drawing the
+ * outgoing film from its element for as long as the element is here, so the
+ * element outlives the crossing by a moment. The stylesheet's fallback
+ * crossfade (used without WebGL) runs for the same time.
  */
-export const FADE_MS = 2200;
+export const FADE_MS = TRANSITION_MS + 200;
 
 export interface SceneState {
   /** The scene the page is on now. */

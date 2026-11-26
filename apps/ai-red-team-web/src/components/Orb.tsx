@@ -1,7 +1,16 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Phase } from '../lib/schedule';
+import { startOrbCompositor } from '../lib/orbCompositor';
 import { useOrbInteraction } from '../lib/useOrbInteraction';
 import type { Scene } from '../media/scenes';
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
 
 /**
  * One scene of the globe: the picture, and the film of the same city when
@@ -53,6 +62,8 @@ function SceneLayer({
       ref={layerRef}
       style={style}
       aria-hidden={faded || undefined}
+      data-scene-id={scene.id}
+      data-role={faded ? 'previous' : 'current'}
     >
       <picture className="orb__picture">
         <source srcSet={scene.posterWebp} type="image/webp" />
@@ -121,7 +132,27 @@ export function Orb({
 }) {
   const [readyFor, setReadyFor] = useState<string | null>(null);
   const crossed = readyFor === scene.id;
-  const { spinRef, pushRef, onPointerDown } = useOrbInteraction();
+  const { pushRef, shieldRef, motion, onPointerDown, onPointerMove, onPointerUp } =
+    useOrbInteraction();
+  const cityRef = useRef<HTMLDivElement>(null);
+  const lensRef = useRef<HTMLCanvasElement>(null);
+  const [lens, setLens] = useState(false);
+
+  // the globe drawn through WebGL: bloom, glass, linear-light crossings
+  useEffect(() => {
+    const canvas = lensRef.current;
+    const city = cityRef.current;
+    if (!canvas || !city) return;
+    const handle = startOrbCompositor(canvas, city, motion, {
+      reducedMotion: prefersReducedMotion(),
+    });
+    if (!handle) return;
+    setLens(true);
+    return () => {
+      handle.stop();
+      setLens(false);
+    };
+  }, [motion]);
 
   // The alert scene is the city under the red alert light with the laser
   // sweeping the grid, whether or not the four-minute clock is in its drill.
@@ -130,18 +161,20 @@ export function Orb({
 
   return (
     <div
-      className={`orb${scanning ? ' is-scanning' : ''}${scene.alert ? ' is-alert' : ''}`}
+      className={`orb${scanning ? ' is-scanning' : ''}${scene.alert ? ' is-alert' : ''}${lens ? ' is-lens' : ''}`}
       data-state={phase}
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
     >
-      {/* The shove and the turn live on their own wrappers so that the
-          globe can be pushed about without dragging the bay of lights along
-          with it: the picture and the laser turn together, and the bay, the
-          reticle and the glass stay where they are. */}
+      {/* The wobble lives on its own wrapper. Nothing in it ever turns in
+          the plane of the screen: the globe tips in depth, flexes and springs
+          back, so the city always stays the right way up. */}
       <div className="orb__push" ref={pushRef}>
         <div className="orb__halo" aria-hidden="true" />
         <div className="orb__body">
-          <div className="orb__spin" ref={spinRef}>
+          <div className="orb__city" ref={cityRef}>
             {previous && (
               <SceneLayer
                 key={previous.id}
@@ -158,6 +191,10 @@ export function Orb({
               onReady={() => setReadyFor(scene.id)}
               onEnded={advance}
             />
+            {/* The same scenes, drawn again through a lens. When WebGL is
+                missing this canvas stays blank and hidden, and the layers
+                underneath are what shows. */}
+            <canvas className="orb__lens" ref={lensRef} aria-hidden="true" />
             <div
               className="orb__scan"
               aria-hidden="true"
@@ -172,6 +209,7 @@ export function Orb({
           <div className="orb__water" aria-hidden="true" />
           <div className="orb__water orb__water--second" aria-hidden="true" />
           <div className="orb__flash" aria-hidden="true" />
+          <div className="orb__glint" aria-hidden="true" />
           <div className="orb__reticle" aria-hidden="true">
             <span className="orb__bracket orb__bracket--tl" />
             <span className="orb__bracket orb__bracket--tr" />
@@ -180,6 +218,15 @@ export function Orb({
           </div>
         </div>
         <div className="orb__rim" aria-hidden="true" />
+        {/* The energy shield: invisible at rest, it flares where the globe
+            is touched — a ripple out from the point of contact across a
+            lattice of cells, and the rim lighting up. */}
+        <div className="orb__shield" aria-hidden="true">
+          <span className="orb__shield-rim" />
+          <div className="orb__shield-field" ref={shieldRef}>
+            <span className="orb__shield-cells" />
+          </div>
+        </div>
         <div className="orb__shadow" aria-hidden="true" />
       </div>
     </div>

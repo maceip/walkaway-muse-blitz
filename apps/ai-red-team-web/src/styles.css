@@ -336,9 +336,13 @@ body {
   flex: 0 0 auto;
   /* A slow bob, so the globe drifts in space rather than sitting still. */
   animation: orb-float 9s ease-in-out infinite;
-  /* the globe answers the hand: a click shoves it aside and turns it */
+  /* the globe answers the hand: a poke, a drag or the wheel wobbles it and
+     flares its shield. touch-action is off so a drag on a phone wobbles the
+     globe instead of trying to scroll a page that does not scroll. */
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
 @keyframes orb-float {
@@ -351,24 +355,48 @@ body {
   }
 }
 
-/* The shove. The orb is pushed away from the point that was clicked and
-   springs back; the numbers come from src/lib/useOrbInteraction.ts. */
+/* The wobble. The numbers come from src/lib/useOrbInteraction.ts: the
+   globe is nudged, tipped in depth (rotateX / rotateY, never more than
+   fourteen degrees), flexed along the line of the impact and squashed. There
+   is deliberately no rotate() in the plane of the screen — the flex is
+   rotate(a) scale() rotate(-a), which nets to none — so the city can never
+   end up on its side or upside down. */
 .orb__push {
   position: absolute;
   inset: 0;
-  transform: translate(var(--push-x, 0px), var(--push-y, 0px)) scale(var(--squash, 1));
+  transform:
+    translate3d(var(--push-x, 0px), var(--push-y, 0px), 0)
+    perspective(1100px)
+    rotateX(var(--tilt-x, 0deg))
+    rotateY(var(--tilt-y, 0deg))
+    rotate(var(--jelly-axis, 0rad))
+    scale(var(--jelly-a, 1), var(--jelly-b, 1))
+    rotate(calc(var(--jelly-axis, 0rad) * -1))
+    scale(var(--squash, 1));
   will-change: transform;
 }
 
-/* The turn. The globe's own picture turns, and the laser turns with it
-   because it sweeps the city grid and the grid is what turns. The bay along
-   the bottom and the targeting brackets stay outside this, because they are
-   the apparatus around the globe and not the globe itself. */
-.orb__spin {
+/* The city: the scenes, the lens that redraws them, and the laser. */
+.orb__city {
   position: absolute;
   inset: 0;
-  transform: rotate(var(--spin, 0deg));
-  will-change: transform;
+}
+
+/* The scenes drawn again through WebGL (src/lib/orbCompositor.ts). It is
+   opaque, so once it is drawing it covers the layers underneath; without
+   WebGL it is never shown. */
+.orb__lens {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  pointer-events: none;
+}
+.orb.is-lens .orb__lens {
+  opacity: 1;
 }
 
 .orb__body {
@@ -394,8 +422,8 @@ body {
   opacity: 1;
   transform: scale(1);
   transition:
-    opacity 2200ms cubic-bezier(0.45, 0, 0.25, 1),
-    transform 2200ms cubic-bezier(0.45, 0, 0.25, 1);
+    opacity 2800ms cubic-bezier(0.45, 0, 0.25, 1),
+    transform 2800ms cubic-bezier(0.45, 0, 0.25, 1);
 }
 
 .orb__picture,
@@ -615,6 +643,154 @@ body {
     transparent 60%
   );
   transition: background 1.6s linear;
+}
+
+/* A window reflection on the glass, holding still while the globe tips
+   under it. The lens draws its own, so this one is only for the page
+   without WebGL. */
+.orb__glint {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background: radial-gradient(17% 10% at 33% 25%, rgba(235, 245, 255, 0.14), transparent 70%);
+  transform: translate(var(--glint-x, 0px), var(--glint-y, 0px));
+}
+.orb.is-lens .orb__glint {
+  display: none;
+}
+
+/* ---------- the energy shield ----------
+
+   Invisible at rest. A poke flares it: the rim lights up, the lattice of
+   cells shows through, and a ripple runs out from the point of contact.
+   --shield (0..1) is the flare, written by src/lib/useOrbInteraction.ts and
+   decaying over about half a second; each ripple is its own element so
+   overlapping pokes overlap. The shield takes the page's accent colour, so
+   it is green most of the time, red in a drill and blue as it settles. */
+.orb__shield {
+  position: absolute;
+  inset: -5.5%;
+  border-radius: 50%;
+  pointer-events: none;
+  --shield-rgb: var(--accent-rgb);
+}
+
+.orb__shield-rim {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  opacity: var(--shield, 0);
+  background: radial-gradient(
+    circle closest-side,
+    transparent 78%,
+    rgba(var(--shield-rgb), 0.08) 86%,
+    rgba(var(--shield-rgb), 0.5) 95%,
+    rgba(235, 255, 245, 0.75) 98%,
+    rgba(var(--shield-rgb), 0) 100%
+  );
+  box-shadow:
+    0 0 24px 2px rgba(var(--shield-rgb), 0.45),
+    inset 0 0 30px rgba(var(--shield-rgb), 0.25);
+}
+
+.orb__shield-field {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  mix-blend-mode: screen;
+}
+
+/* The lattice: hexagonal cells, brightest toward the rim where the shield
+   is seen edge-on, the way a bubble is. */
+.orb__shield-cells,
+.orb__impact::before {
+  --hex: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='17.32' height='30' viewBox='0 0 17.32 30'%3E%3Cpath d='M8.66 0L17.32 5V15L8.66 20L0 15V5Z M8.66 20V30' fill='none' stroke='%23fff' stroke-width='0.9'/%3E%3C/svg%3E");
+}
+
+.orb__shield-cells {
+  position: absolute;
+  inset: 0;
+  background: rgb(var(--shield-rgb));
+  opacity: calc(var(--shield, 0) * 0.42);
+  -webkit-mask-image: var(--hex),
+    radial-gradient(circle closest-side, rgba(0, 0, 0, 0.1) 35%, rgba(0, 0, 0, 0.55) 80%, #000 97%, transparent 100%);
+  mask-image: var(--hex),
+    radial-gradient(circle closest-side, rgba(0, 0, 0, 0.1) 35%, rgba(0, 0, 0, 0.55) 80%, #000 97%, transparent 100%);
+  -webkit-mask-size: 14px 24.25px, 100% 100%;
+  mask-size: 14px 24.25px, 100% 100%;
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+
+@property --impact-r {
+  syntax: '<percentage>';
+  inherits: true;
+  initial-value: 0%;
+}
+
+/* One ripple: a hot flash at the point of contact, a ring running out
+   across the shield, and the cells lighting up behind the ring. The time is
+   IMPACT_MS in src/lib/useOrbInteraction.ts. */
+.orb__impact {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    radial-gradient(
+      circle at var(--x) var(--y),
+      rgba(255, 255, 255, 0.95) 0,
+      rgba(var(--shield-rgb), 0.75) 2.5%,
+      rgba(var(--shield-rgb), 0) 12%
+    ),
+    radial-gradient(
+      circle at var(--x) var(--y),
+      rgba(var(--shield-rgb), 0) calc(var(--impact-r) - 5%),
+      rgba(var(--shield-rgb), 0.55) calc(var(--impact-r) - 0.8%),
+      rgba(230, 255, 240, 0.85) var(--impact-r),
+      rgba(var(--shield-rgb), 0) calc(var(--impact-r) + 1.2%)
+    );
+  animation: shield-impact 1100ms cubic-bezier(0.15, 0.6, 0.3, 1) forwards;
+}
+
+.orb__impact::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgb(var(--shield-rgb));
+  -webkit-mask-image: var(--hex),
+    radial-gradient(circle at var(--x) var(--y), #000 0, rgba(0, 0, 0, 0.6) calc(var(--impact-r) * 0.6), transparent calc(var(--impact-r) + 2%));
+  mask-image: var(--hex),
+    radial-gradient(circle at var(--x) var(--y), #000 0, rgba(0, 0, 0, 0.6) calc(var(--impact-r) * 0.6), transparent calc(var(--impact-r) + 2%));
+  -webkit-mask-size: 14px 24.25px, 100% 100%;
+  mask-size: 14px 24.25px, 100% 100%;
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  opacity: 0.85;
+}
+
+@keyframes shield-impact {
+  0% {
+    --impact-r: 0%;
+    opacity: var(--strength, 1);
+  }
+  12% {
+    opacity: var(--strength, 1);
+  }
+  100% {
+    --impact-r: 115%;
+    opacity: 0;
+  }
+}
+
+@media (hover: hover) {
+  .orb:hover .orb__shield-rim {
+    opacity: max(var(--shield, 0), 0.12);
+  }
 }
 
 /* The sky behind the globe is a galaxy now, so the globe needs a little

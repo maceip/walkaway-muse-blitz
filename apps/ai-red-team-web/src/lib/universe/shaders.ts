@@ -187,7 +187,7 @@ void main() {
   float clouds = 0.55 + 0.9 * fbm(vec2(along * 3.2, (across + wobble) * 1.6) + t * 0.0015, 5);
   float dust = smoothstep(-0.05, 0.35, fbm(vec2(along * 4.5, (across + wobble) * 3.0) + 40.0, 5))
              * exp(-pow((across + wobble) * 1.8, 2.0));
-  vec3 band = vec3(0.62, 0.57, 0.52) * bandShape * max(clouds, 0.0) * 0.07
+  vec3 band = vec3(0.62, 0.57, 0.52) * bandShape * max(clouds, 0.0) * 0.09
             + vec3(0.3, 0.38, 0.6) * bandShape * 0.018;
   band *= 1.0 - 0.85 * dust;
   col += band;
@@ -203,11 +203,12 @@ void main() {
     float d = length(p + warp * 0.5);
     float fall = exp(-d * d * 2.6);
     if (fall < 0.002) continue;
-    float gas = smoothstep(-0.15, 0.55, fbm(p * 2.2 + warp * 1.6 + s * 3.0, 6));
-    float fil = pow(1.0 - abs(gnoise(p * 3.4 + warp * 2.2 + s) * 2.0), 6.0);
+    float gas = smoothstep(-0.2, 0.6, fbm(p * 2.2 + warp * 1.6 + s * 3.0, 6));
+    // brighter ridges in the gas, broad rather than drawn as lines
+    float fil = pow(1.0 - abs(fbm(p * 2.8 + warp * 2.0 + s, 4) * 2.0), 3.0) * gas;
     vec3 hue2 = c2.a > 0.5 ? mix(c2.rgb, u_accent, 0.55) : c2.rgb;
     vec3 tint = mix(c1.rgb, hue2, smoothstep(-0.25, 0.35, gnoise(p * 1.7 + s * 5.0)));
-    col += tint * (gas * 0.65 + fil * 0.5) * fall * c1.a;
+    col += tint * (gas * 0.8 + fil * 0.35) * fall * c1.a;
   }
 
   // the galaxies' unresolved light
@@ -263,11 +264,13 @@ vec4 ringAt(vec2 q, out float front) {
   float e = length(vec2(r.x, r.y / u_p1.y));
   if (e < 1.32 || e > 2.3) return vec4(0.0);
   front = r.y > 0.0 ? 1.0 : 0.0;
-  float bands = 0.55 + 0.45 * sin(e * 46.0 + gnoise(vec2(e * 30.0, 1.0)) * 2.0);
-  float gap = smoothstep(0.015, 0.05, abs(e - 1.86));
-  float edge = smoothstep(1.32, 1.4, e) * smoothstep(2.3, 2.18, e);
-  float a = 0.55 * bands * gap * edge;
-  vec3 col = mix(u_c3, u_c1, 0.4) * 0.8;
+  float bands = 0.72 + 0.28 * gnoise(vec2(e * 38.0, 3.0)) + 0.12 * gnoise(vec2(e * 140.0, 9.0));
+  float gap = smoothstep(0.02, 0.06, abs(e - 1.86));
+  float edge = smoothstep(1.32, 1.45, e) * smoothstep(2.3, 2.1, e);
+  // the ring is lit from the same side as the planet
+  float lit = 0.55 + 0.45 * smoothstep(0.6, -0.6, q.x);
+  float a = 0.36 * bands * gap * edge;
+  vec3 col = mix(u_c3, u_c1, 0.4) * 0.7 * lit;
   return vec4(col, a);
 }
 
@@ -290,8 +293,8 @@ void main() {
     if (u_p0.w > 0.5) {
       float turb = fbm(vec2(lon * 1.6, lat * 9.0) + u_p1.w, 4);
       float b = sin(lat * 13.0 + turb * 2.2);
-      col = mix(u_c2, u_c1, smoothstep(-0.6, 0.6, b));
-      col = mix(col, u_c3, smoothstep(0.55, 0.95, sin(lat * 5.0 + turb)) * 0.6);
+      col = mix(u_c2, u_c1, 0.35 + 0.65 * smoothstep(-0.8, 0.8, b));
+      col = mix(col, u_c3, smoothstep(0.55, 0.95, sin(lat * 5.0 + turb)) * 0.45);
     } else {
       float h = fbm(vec2(lon * 2.2, lat * 2.2) + u_p1.w, 5);
       float craters = pow(1.0 - abs(gnoise(vec2(lon * 6.0, lat * 6.0) + u_p1.w * 3.0)) , 8.0);
@@ -299,9 +302,12 @@ void main() {
       col = mix(col, u_c3, craters * 0.5);
     }
     float ndl = dot(n, L);
-    float lit = smoothstep(-0.12, 0.5, ndl);
+    float lit = smoothstep(-0.1, 0.6, ndl);
+    // limb darkening: the edge of a lit sphere is seen through more
+    // atmosphere and catches less light
+    float limb = 0.5 + 0.5 * sqrt(n.z);
     float rim = pow(1.0 - n.z, 3.0) * smoothstep(-0.2, 0.4, ndl);
-    vec3 shaded = col * (0.015 + 0.95 * lit) + mix(u_c3, vec3(0.6, 0.75, 1.0), 0.5) * rim * 0.35;
+    vec3 shaded = col * (0.012 + 0.8 * lit) * limb + mix(u_c3, vec3(0.6, 0.75, 1.0), 0.5) * rim * 0.22;
     float aa = smoothstep(1.0, 1.0 - 1.5 / u_p0.z, sqrt(rr));
     outc = vec4(mix(outc.rgb, shaded, aa), max(outc.a, aa));
   }
