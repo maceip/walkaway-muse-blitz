@@ -25,6 +25,10 @@ dist/
 # The cinematic backdrop is generated once into videos/ and copied into the
 # app at build time; the copy is a build artifact, not a second source of truth.
 apps/ai-red-team-web/public/video/
+# The films packed with their depth are derived from those films by
+# scripts/build-redteam-depth.py, so they are build artifacts too. The depth
+# stills, depth-hashes.json and src/media/depth.ts are tracked.
+apps/ai-red-team-web/public/media/depth/*.mp4
 
 # Transient H3 generation working state (task ids, query args, temp URLs).
 .tmp/
