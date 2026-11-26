@@ -1,0 +1,93 @@
+{
+  "entries": {
+    "apps/ai-red-team-web/public/media/depth/city-dive.mp4": {
+      "output": "0c6691f230d4e97557fdc072720a9123cd5546bf4e967dc860497ed558593878",
+      "source": "3b2ca5179f11b2a3526cc74dc13eaea2f408b0f683adc3d0019a644734f7e4f3"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-dive.webp": {
+      "output": "a8756cba2a21208ee89874d165cb3b2456356efe061bbbc43fd9209e11719d74",
+      "source": "89202faded669e1dbcc670b939e6dfe4b15ebf2b69c2476fc2abe220d09dea01"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-edge.mp4": {
+      "output": "d79916cf277370d9afa4a78b8035756bd654f257465c781ded4544efb212d4a5",
+      "source": "ca5f2249f065965539f18336dab2b8ca6186c4ca02148feb6436bae83f0b75ec"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-edge.webp": {
+      "output": "a8756cba2a21208ee89874d165cb3b2456356efe061bbbc43fd9209e11719d74",
+      "source": "89202faded669e1dbcc670b939e6dfe4b15ebf2b69c2476fc2abe220d09dea01"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-globe-night.webp": {
+      "output": "3958cc27a5d9e35b0fef4ed5871d9fe3e0bd6b447f5ad4ad828b2b8981501193",
+      "source": "9ef6d6738e37ef8d10e7ca8ec68f1dcbec3557da50cc85c150c581fb2951db77"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-globe-scan.mp4": {
+      "output": "eeb12d8bffc2ba9e33a86b2d40b032f1a069b5da0e815f818ec33c2e1c1f313e",
+      "source": "f2c3aa90d930cd723bcc5b85b72ef7aa7121a27e112b813a2219398b907192db"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-globe-scan.webp": {
+      "output": "2188699b3a065c086c3f934807f44acd4c8b432513de02e71292e0f49c495129",
+      "source": "830e98ed2e268ba00fafc94ec776875548cd54b858bb438dfdaa92abb5df4b61"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-globe-spin.mp4": {
+      "output": "27517ec70999868af6e318dbf7787c5a4a0f952edf0f5fb119f741b499a63bf0",
+      "source": "803474646db1cb9d7f54213acb144e6a47947f4808ff31327df7c638edcf5e56"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-globe-spin.webp": {
+      "output": "e55aa74e3f6a88d55f652e72b9256880c46219318e5f47572de4ebb585a0e1a7",
+      "source": "c47fdf9f60df5300315a581346df021d3066c758cc3453d34c482e897efbe274"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-redteam.mp4": {
+      "output": "b2e1b9e5ff9b3a68cb30466e93ad9e0dbc70b3e222e426a3c6f3b180d2d2abaf",
+      "source": "3d3b7569b50f9d1549108f8d370c2763c88d9a174664e754a61f3a523eb524ec"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-redteam.webp": {
+      "output": "145bbde1509a20e615d4a85ed8e14ad3d0b5299e8e87843b95c6e7fbc083c586",
+      "source": "42383e97342291067efe1546ff1a45aaaf77d27aa8f77091d3a10e103f348330"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-scan.mp4": {
+      "output": "00aca08347f371c4be812343881ddb2233dc433765d3560ead5125f80e131a9d",
+      "source": "adf2bbdd296d8aa24eb4e5266a41643631cc02ae30aa8f52aba9b067e75d0072"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-scan.webp": {
+      "output": "2e6cd7e82ad30d1bac35756dcd173a1e5d6fe7ac92ea1836e77f95ace2286eb1",
+      "source": "cd254792e3c4e1a8763e9b38ea0f8a495f1008376269ce2213d031c07e369e09"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-sealevel.mp4": {
+      "output": "0d91374dc08c70e0d5a4729863b506065d529be5f4454822d1056347dc86cef8",
+      "source": "09fee630aea98de983c6748142a3f9ff0f79236e61c620e7982a0baa7bcda97b"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-sealevel.webp": {
+      "output": "b26929c65a46c820c6f75b78ceea3b24c9a51a50694c175b5ebcb66b495aa770",
+      "source": "8b88d193004117cc5c04746fd24b41c7d5437818721e5de32ecd1b50a6de0da1"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-spiral.webp": {
+      "output": "f3dd4790bc418a5eae7ececc20290ec62af74d9d8b5a697c15db142b62772ce6",
+      "source": "f2c880b58cdf63815f6f8129ba7e12d06a8f4898037f7afa6e1b885884c9fd1f"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-storm.mp4": {
+      "output": "9b5fb58cd0149099bf4779d7195a2185ebcd3ea37399e4f958db97fe846bff38",
+      "source": "38080886702dac780ce5656693bae26c57deeafe990373604571ee6f8141a886"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-storm.webp": {
+      "output": "984a06d4ea36cf013aba7abc374fe0c8d3ede0ea71792d9a746eb51329184c3e",
+      "source": "15cdc2998cad9736cbbef850a46e256721aab8b4764f07e68b9aebf369e0af31"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-zoom.mp4": {
+      "output": "f5676db6f41e7ce7505cf26084f87bd5f1bf8a4e711f51895c8011db6823f078",
+      "source": "56476cdc226a7f0b8a7ce3af5cac73cf4cfd9efe2b12fc79946c26d268e133b5"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-zoom.webp": {
+      "output": "a8756cba2a21208ee89874d165cb3b2456356efe061bbbc43fd9209e11719d74",
+      "source": "89202faded669e1dbcc670b939e6dfe4b15ebf2b69c2476fc2abe220d09dea01"
+    },
+    "apps/ai-red-team-web/public/media/depth/globe-day.webp": {
+      "output": "c6cfc15f3a586285833c02b6dad4d7f233671e1676091aa44c9750830260768d",
+      "source": "15ca5fb72ed21d37f8003cf8528ea6beed24e4f59739d05f3c8c6828bd8d7228"
+    },
+    "apps/ai-red-team-web/public/media/depth/globe-dusk.webp": {
+      "output": "7a59f340df13d005c19bea50f7b82ca9ac3415321fd18a89c56728287fdcf946",
+      "source": "09aa95b324234c23094fd0261c476b21d120f39f58c90d29772758df5e1a677d"
+    }
+  },
+  "version": 1
+}
