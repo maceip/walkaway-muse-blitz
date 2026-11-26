@@ -73,6 +73,7 @@ function SceneLayer({
       data-role={faded ? 'previous' : 'current'}
       data-depth={depth?.still}
       data-packed={packed ? '1' : undefined}
+      data-alert={scene.alert ? '1' : undefined}
     >
       <picture className="orb__picture">
         <source srcSet={scene.posterWebp} type="image/webp" />
@@ -165,12 +166,16 @@ export function Orb({
 
   // The alert scene is the city under the red alert light with the laser
   // sweeping the grid, whether or not the four-minute clock is in its drill.
-  const alert = scene.alert || phase === 'exercise';
+  // The page goes on or off alert when the crossing to or from the alert
+  // scene starts — when the arriving scene is on the page — so the red around
+  // the globe moves with the red in it rather than ahead of it.
+  const alertScene = crossed || !previous ? scene.alert : previous.alert;
+  const alert = alertScene || phase === 'exercise';
   const scanning = alert;
 
   return (
     <div
-      className={`orb${scanning ? ' is-scanning' : ''}${scene.alert ? ' is-alert' : ''}${lens ? ' is-lens' : ''}`}
+      className={`orb${scanning ? ' is-scanning' : ''}${alertScene ? ' is-alert' : ''}${lens ? ' is-lens' : ''}`}
       data-state={phase}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -207,7 +212,7 @@ export function Orb({
             <div
               className="orb__scan"
               aria-hidden="true"
-              key={`${sweepPass}:${scene.alert ? scene.id : ''}`}
+              key={`${sweepPass}:${alertScene ? scene.id : ''}`}
               style={{ animationDelay: alert ? '0s' : undefined }}
             >
               <span className="orb__scan--thin" />

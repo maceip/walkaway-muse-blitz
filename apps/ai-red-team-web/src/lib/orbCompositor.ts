@@ -9,13 +9,23 @@ import { TILT_MAX } from './useOrbInteraction';
  * <video> elements in Orb.tsx — and this draws them again through WebGL so
  * they read as photographed rather than pasted:
  *
- *  - **Light is mixed as light.** The crossing between scenes is done in
- *    linear light, not on the encoded sRGB values, so two scenes crossing do
- *    not sag into a muddy, darker middle.
+ *  - **A crossing that takes its whole time.** The scenes are lit very
+ *    differently — daylight, dusk, neon, blue, the red alert — and a crossing
+ *    between two of them is a change of colour as much as of picture. The
+ *    new light arrives through a broad, soft front that spends the whole
+ *    TRANSITION_MS on the way: each point of the globe turns over well over a
+ *    second, the middle a little before the rim. The two scenes are mixed in
+ *    OKLab, where equal steps look equal, so a bright scene does not swamp a
+ *    dark one and then give way all at once at the end. (The crossing used to
+ *    mix in linear light through three stacked easings, which packed nearly
+ *    all of the change into about 0.6 s in the middle.)
+ *  - **The alert light belongs to its scene.** The red of the alert scene is
+ *    graded into that scene here, so it crosses in and out with the city it
+ *    lights, on the same front, instead of washing over the globe on a timer
+ *    of its own. The drill's red light is graded here too.
  *  - **A focus pull, not a dissolve.** As one scene crosses into the next
- *    the lens drifts out of focus and back, and the new scene comes in
- *    through a soft, uneven front rather than all at once. Two different
- *    shots never line up exactly; a rack focus is how film hides that.
+ *    the lens drifts out of focus and back. Two different shots never line
+ *    up exactly; a rack focus is how film hides that.
  *  - **Depth.** Every scene carries a depth map (scripts/build-redteam-depth.py:
  *    a picture for a still, packed beside the colour for a film). When the
  *    globe wobbles, near surfaces slide against far ones, so the towers move
@@ -47,7 +57,10 @@ uniform sampler2D u_aDepth;
 uniform sampler2D u_bDepth;
 uniform float u_aMode;    // 0: no depth, 1: a depth picture, 2: a packed film
 uniform float u_bMode;
-uniform float u_p;        // 0: all outgoing, 1: all arriving
+uniform float u_p;        // the crossing's progress, eased: drives the camera
+uniform float u_t;        // the crossing's progress in time, 0 to 1, not eased
+uniform float u_aAlert;   // how much alert light each scene is under, 0 to 1
+uniform float u_bAlert;
 uniform float u_time;
 uniform float u_still;    // 1 with reduced motion: no zoom, no focus pull
 uniform vec2 u_parallax;  // how far the nearest surface slides, from the wobble
@@ -62,6 +75,51 @@ ${NOISE_GLSL}
 const float PACK = 2.0 / 3.0;
 
 vec3 toLinear(vec3 c) { return pow(max(c, 0.0), vec3(2.2)); }
+
+// OKLab (Björn Ottosson), from and to linear sRGB: a space where equal steps
+// look like equal steps of lightness and colour
+vec3 toOklab(vec3 c) {
+  vec3 lms = vec3(
+    dot(c, vec3(0.4122214708, 0.5363325363, 0.0514459929)),
+    dot(c, vec3(0.2119034982, 0.6806995451, 0.1073969566)),
+    dot(c, vec3(0.0883024619, 0.2817188376, 0.6299787005)));
+  lms = pow(max(lms, 0.0), vec3(1.0 / 3.0));
+  return vec3(
+    dot(lms, vec3(0.2104542553, 0.7936177850, -0.0040720468)),
+    dot(lms, vec3(1.9779984951, -2.4285922050, 0.4505937099)),
+    dot(lms, vec3(0.0259040371, 0.7827717662, -0.8086757660)));
+}
+vec3 fromOklab(vec3 c) {
+  vec3 lms = vec3(
+    c.x + 0.3963377774 * c.y + 0.2158037573 * c.z,
+    c.x - 0.1055613458 * c.y - 0.0638541728 * c.z,
+    c.x - 0.0894841775 * c.y - 1.2914855480 * c.z);
+  lms = lms * lms * lms;
+  return vec3(
+    dot(lms, vec3(4.0767416621, -3.3077115913, 0.2309699292)),
+    dot(lms, vec3(-1.2684380046, 2.6097574011, -0.3413193965)),
+    dot(lms, vec3(-0.0041960863, -0.7034186147, 1.7076147010)));
+}
+
+// The alert light: the page's alert red laid over the city with the CSS
+// 'color' blend at 0.6 — the city keeps its own light and takes the red's
+// hue — exactly what .orb__alert does to the page without WebGL.
+const vec3 ALERT_RED = vec3(1.0, 0.1255, 0.1882);
+float blendLum(vec3 c) { return dot(c, vec3(0.3, 0.59, 0.11)); }
+vec3 clipColour(vec3 c) {
+  float l = blendLum(c);
+  float n = min(c.r, min(c.g, c.b));
+  float x = max(c.r, max(c.g, c.b));
+  if (n < 0.0) c = l + (c - l) * l / max(l - n, 1e-5);
+  if (x > 1.0) c = l + (c - l) * (1.0 - l) / max(x - l, 1e-5);
+  return c;
+}
+vec3 alertLight(vec3 lin, float amount) {
+  if (amount < 0.001) return lin;
+  vec3 s = pow(max(lin, 0.0), vec3(1.0 / 2.2));
+  vec3 red = clipColour(ALERT_RED + (blendLum(s) - blendLum(ALERT_RED)));
+  return toLinear(mix(s, red, 0.6 * amount));
+}
 
 vec3 grade(vec3 srgb) {
   // the page's slow colour drift, applied the way the stylesheet's
@@ -124,7 +182,8 @@ float defocus(float mode, float d, float focus) {
 void main() {
   vec2 uv = vec2(v_uv.x, 1.0 - v_uv.y);
   float p = clamp(u_p, 0.0, 1.0);
-  float bell = sin(3.14159265 * p);
+  float t = clamp(u_t, 0.0, 1.0);
+  float bell = sin(3.14159265 * t);
   float motion = 1.0 - u_still;
 
   // the arriving scene settles as it comes in, the outgoing one drifts on
@@ -142,19 +201,25 @@ void main() {
 
   float da;
   vec2 pa = lookup(u_a, u_aDepth, u_aMode, ua, shift, da);
-  vec3 a = lensed(u_a, u_aMode, pa, blur * defocus(u_aMode, da, focus));
+  vec3 a = alertLight(lensed(u_a, u_aMode, pa, blur * defocus(u_aMode, da, focus)), u_aAlert);
   vec3 col = a;
-  if (p < 0.999) {
+  if (t < 0.999) {
     float db;
     vec2 pb = lookup(u_b, u_bDepth, u_bMode, ub, shift, db);
-    vec3 b = lensed(u_b, u_bMode, pb, blur * defocus(u_bMode, db, focus));
-    // an uneven front: the new light reaches some of the city first, the
-    // middle of the globe a little before the rim
-    float n = fbm(uv * 3.2 + vec2(u_time * 0.03, -u_time * 0.02), 4);
-    float centre = 0.5 - length(uv - 0.5);
-    float m = clamp((p - 0.5) * 1.9 + 0.5 + (n * 1.1 + centre * 0.5) * bell * motion, 0.0, 1.0);
-    m = m * m * (3.0 - 2.0 * m);
-    col = mix(b, a, m);
+    vec3 b = alertLight(lensed(u_b, u_bMode, pb, blur * defocus(u_bMode, db, focus)), u_bAlert);
+    // When this point of the globe turns over: a broad, slowly moving front,
+    // the middle a little before the rim. It is low in frequency on purpose —
+    // a fine pattern between two differently lit cities reads as blotches.
+    float n = fbm(uv * 1.7 + vec2(u_time * 0.02, -u_time * 0.015), 3);
+    float r = length(uv - 0.5) * 2.0;
+    float order = clamp(0.5 + n * 1.2 + (r - 0.5) * 0.4, 0.0, 1.0);
+    // the turns start spread over the first 40% of the crossing, and each
+    // takes the remaining 60% (about 1.6 s), so the whole globe is changing
+    // for the whole crossing and no moment carries much of it
+    float spread = 0.4 * motion;
+    float u = clamp((t - order * spread) / (1.0 - spread), 0.0, 1.0);
+    float m = u * u * (3.0 - 2.0 * u);
+    col = max(fromOklab(mix(toOklab(b), toOklab(a), m)), 0.0);
   }
   if (u_encode > 0.5) col = pow(col, vec3(1.0 / 2.2));
   o = vec4(col, 1.0);
@@ -275,6 +340,8 @@ interface Slot {
   depthKey: string;
   /** 0: no depth, 1: the depth picture, 2: depth packed in the film */
   mode: number;
+  /** 1 when the scene is lit by the alert light */
+  alert: number;
 }
 
 /**
@@ -401,6 +468,7 @@ export function startOrbCompositor(
     depthTex: makeTexture(),
     depthKey: '',
     mode: 0,
+    alert: 0,
   });
 
   // depth pictures, fetched once each and kept
@@ -496,6 +564,15 @@ export function startOrbCompositor(
   let shownScene = '';
   let lastShift = NaN;
   let lastLift = NaN;
+  // The colour drift and the drill's red light as drawn. The drift jumps when
+  // the clock changes phase (warning, drill, settle) and the drill's light
+  // switches on and off; both are eased here so the city never snaps to a
+  // new colour. The stylesheet does the same for the page without WebGL.
+  let shownShift = NaN;
+  let shownLift = NaN;
+  let drill = 0;
+  let lastDrill = NaN;
+  let lastNow = 0;
   let lastMotionKey = '';
   let frame = 0;
 
@@ -519,6 +596,7 @@ export function startOrbCompositor(
       current.source = null;
       current.key = '';
       current.mode = 0;
+      current.alert = currentLayer?.getAttribute('data-alert') === '1' ? 1 : 0;
       transitionStart = -1;
       canvas.dataset.transition = 'pending';
     }
@@ -557,20 +635,34 @@ export function startOrbCompositor(
       canvas.dataset.scene = shownScene;
     }
 
-    const shift = readNumber('--shift', 0);
-    const lift = readNumber('--lift', 1);
+    const dt = lastNow ? Math.min(0.1, Math.max(0, (now - lastNow) / 1000)) : 0;
+    lastNow = now;
+    const targetShift = readNumber('--shift', 0);
+    const targetLift = readNumber('--lift', 1);
+    const ease = options.reducedMotion ? 1 : 1 - Math.exp(-dt / 0.8);
+    shownShift = Number.isFinite(shownShift) ? shownShift + (targetShift - shownShift) * ease : targetShift;
+    shownLift = Number.isFinite(shownLift) ? shownLift + (targetLift - shownLift) * ease : targetLift;
+    const shift = shownShift;
+    const lift = shownLift;
+    const drillOn = host.closest('.orb')?.getAttribute('data-state') === 'exercise';
+    drill = Math.min(1, Math.max(0, drill + (drillOn ? dt : -dt) / 0.9));
+    const drillLight = drill * drill * (3 - 2 * drill);
     const m = motion.current;
     const motionKey = m
       ? `${m.rx.toFixed(2)}|${m.ry.toFixed(2)}|${m.shield.toFixed(3)}`
       : '';
-    const graded = Math.abs(shift - lastShift) > 0.4 || Math.abs(lift - lastLift) > 0.004;
+    const graded =
+      Math.abs(shift - lastShift) > 0.4 ||
+      Math.abs(lift - lastLift) > 0.004 ||
+      Math.abs(drillLight - lastDrill) > 0.002;
     if (!(dirty || changed || crossing || graded || motionKey !== lastMotionKey)) return;
     dirty = false;
     lastShift = shift;
     lastLift = lift;
+    lastDrill = drillLight;
     lastMotionKey = motionKey;
 
-    // eased: slow out of the old scene, slow into the new one
+    // eased, for the camera: the arriving scene settles slowly into place
     const e = p * p * p * (p * (p * 6 - 15) + 10);
 
     gl.bindVertexArray(vao);
@@ -604,6 +696,9 @@ export function startOrbCompositor(
     const parallaxLabel = `${sx.toFixed(4)},${sy.toFixed(4)}`;
     if (canvas.dataset.parallax !== parallaxLabel) canvas.dataset.parallax = parallaxLabel;
     gl.uniform1f(scene.uniform('u_p'), current.ready ? e : 1);
+    gl.uniform1f(scene.uniform('u_t'), current.ready ? p : 1);
+    gl.uniform1f(scene.uniform('u_aAlert'), Math.max(a.alert, drillLight));
+    gl.uniform1f(scene.uniform('u_bAlert'), Math.max(outgoing.alert, drillLight));
     gl.uniform1f(scene.uniform('u_time'), now / 1000);
     gl.uniform1f(scene.uniform('u_still'), options.reducedMotion ? 1 : 0);
     gl.uniformMatrix3fv(scene.uniform('u_hue'), true, hueMatrix(shift));

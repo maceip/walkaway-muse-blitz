@@ -484,7 +484,9 @@ body {
   opacity: 0.9;
 }
 
-/* the alert grade, on during a drill */
+/* the alert grade, on during a drill. The lens grades the alert light into
+   the scene it belongs to, so it crosses with that scene; this overlay is
+   for the page without WebGL. */
 .orb__alert {
   position: absolute;
   inset: 0;
@@ -493,6 +495,9 @@ body {
   mix-blend-mode: color;
   opacity: 0;
   transition: opacity 0.9s ease;
+}
+.orb.is-lens .orb__alert {
+  display: none;
 }
 
 /* the bay, moving */
@@ -590,7 +595,7 @@ body {
   position: absolute;
   inset: 0;
   opacity: 0;
-  transition: opacity 0.4s ease;
+  transition: opacity 1.6s ease-in-out;
 }
 
 .orb__bracket {
@@ -653,6 +658,24 @@ body {
     transparent 60%
   );
   transition: background 1.6s linear;
+}
+
+/* The red glow of the alert and the drill. A gradient cannot be faded into
+   another, so swapping the halo's background snapped it red in one frame;
+   the red is its own layer, faded over the length of a scene crossing. */
+.orb__halo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 45, 60, 0.24) 0%,
+    rgba(255, 45, 60, 0.08) 42%,
+    transparent 70%
+  );
+  opacity: 0;
+  transition: opacity 2.6s ease-in-out;
 }
 
 /* A window reflection on the glass, holding still while the globe tips
@@ -874,14 +897,9 @@ body {
     transparent 92%
   );
 }
-.orb[data-state='exercise'] .orb__halo,
-.orb.is-alert .orb__halo {
-  background: radial-gradient(
-    circle,
-    rgba(255, 45, 60, 0.24) 0%,
-    rgba(255, 45, 60, 0.08) 42%,
-    transparent 70%
-  );
+.orb[data-state='exercise'] .orb__halo::after,
+.orb.is-alert .orb__halo::after {
+  opacity: 1;
 }
 .orb[data-state='exercise'] .orb__reticle,
 .orb.is-alert .orb__reticle {
