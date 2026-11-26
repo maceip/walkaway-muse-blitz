@@ -125,6 +125,16 @@ body {
   }
 }
 
+/* The live sky. src/lib/universe/renderer.ts draws it; the canvas only has
+   to fill the frame. */
+.universe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 /* A wash of gas in the page's own colours, drifting against the drawn sky.
    It is what ties the sky to the globe: the accent follows the globe's own
    colour drift. */
@@ -132,7 +142,7 @@ body {
   position: absolute;
   inset: -20%;
   pointer-events: none;
-  opacity: 0.34;
+  opacity: 0.22;
   mix-blend-mode: screen;
   background:
     radial-gradient(46% 38% at 22% 30%, rgba(var(--accent-rgb), 0.14), transparent 70%),

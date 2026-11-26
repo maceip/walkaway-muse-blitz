@@ -1,6 +1,6 @@
 import { useScene } from '../lib/useScene';
 import { Orb } from './Orb';
-import { Planets } from './Planets';
+import { Universe } from './Universe';
 import { Hud } from './Hud';
 import { useExerciseClock } from '../lib/useExerciseClock';
 
@@ -9,8 +9,8 @@ import { useExerciseClock } from '../lib/useExerciseClock';
  *
  * A city is held inside a glass globe at the centre of the frame: towers
  * traced in red neon, a bay of lights below, a blue atmosphere around the
- * rim. Behind it, deep space: a drawn star field with the Andromeda galaxy
- * lying in it. Every four minutes the city runs a red team exercise.
+ * rim. Behind it, a live universe: drifting stars, turning galaxies and a
+ * planetary system. Every four minutes the city runs a red team exercise.
  */
 export function App() {
   const { phase, countdown, sweepPass } = useExerciseClock();
@@ -19,14 +19,11 @@ export function App() {
   return (
     <>
       <div className="space-clip" aria-hidden="true">
-        {/* Deep space, drawn rather than photographed: a field of forty
-            thousand stars on a real magnitude distribution, the galactic band
-            running through it, and the Andromeda galaxy off to one side. */}
-        <div className="deep-field" />
+        {/* Deep space, live: drifting star layers on a real magnitude
+            distribution, galaxies turning on periods of twenty to thirty
+            minutes, a planetary system on Kepler's clock, gas and dust. */}
+        <Universe />
         <div className="nebula" />
-        <div className="planets">
-          <Planets />
-        </div>
       </div>
       <div className="vignette" aria-hidden="true" />
 
