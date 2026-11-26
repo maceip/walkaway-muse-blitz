@@ -7,7 +7,7 @@
   "license": "BSD-3-Clone",
   "scripts": {
     "dev": "python3 ../../scripts/build-redteam-media.py && vite",
-    "build": "python3 ../../scripts/build-redteam-media.py && tsc --noEmit && vite build",
+    "build": "python3 ../../scripts/build-redteam-media.py && python3 ../../scripts/build-redteam-depth.py --check && tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test"

@@ -95,6 +95,7 @@ test.beforeEach(async ({ page }) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   await page.goto('/');
+  if (test.info().titlePath.includes('without WebGL')) return;
   await expect(page.locator('.orb.is-lens')).toBeVisible();
   // let the springs and the first scene settle
   await page.waitForTimeout(800);
@@ -242,5 +243,100 @@ test.describe('with reduced motion', () => {
     expectUpright(samples);
     expect(Math.max(...samples.map((s) => s.shield))).toBeGreaterThan(0.5);
     expect(Math.max(...samples.map((s) => Math.abs(s.tiltY)))).toBeLessThan(6);
+  });
+});
+
+/** Share of pixels in a region that changed by more than `threshold` levels. */
+async function changedShare(
+  page: Page,
+  a: Buffer,
+  b: Buffer,
+  threshold: number,
+): Promise<number> {
+  return page.evaluate(
+    async ([x, y, t]) => {
+      const load = async (b64: string) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${b64}`;
+        await img.decode();
+        const c = document.createElement('canvas');
+        c.width = img.width;
+        c.height = img.height;
+        const ctx = c.getContext('2d')!;
+        ctx.drawImage(img, 0, 0);
+        return ctx.getImageData(0, 0, c.width, c.height).data;
+      };
+      const da = await load(x);
+      const db = await load(y);
+      let changed = 0;
+      for (let i = 0; i < da.length; i += 4) {
+        const d = Math.max(Math.abs(da[i] - db[i]), Math.abs(da[i + 1] - db[i + 1]), Math.abs(da[i + 2] - db[i + 2]));
+        if (d > t) changed += 1;
+      }
+      return changed / (da.length / 4);
+    },
+    [a.toString('base64'), b.toString('base64'), threshold] as const,
+  );
+}
+
+test.describe('depth', () => {
+  test('the default film plays packed with its depth', async ({ page }) => {
+    const lens = page.locator('.orb__lens');
+    await expect(lens).toHaveAttribute('data-depth', 'film', { timeout: 10_000 });
+    const video = page.locator('[data-role="current"] video');
+    await expect(video).toHaveClass(/orb__video--packed/);
+    const size = await video.evaluate((v: HTMLVideoElement) => [v.videoWidth, v.videoHeight]);
+    expect(size).toEqual([1536, 1024]);
+  });
+
+  test('tipping the globe slides near surfaces against far ones', async ({ page }) => {
+    // a still scene, held, so the only thing that can move the city is depth
+    await page.goto('/?scene=globe-day');
+    const lens = page.locator('.orb__lens');
+    await expect(lens).toHaveAttribute('data-depth', 'still', { timeout: 10_000 });
+    // take the page's own motion out of the picture: no CSS tilt, no float,
+    // no shield, no glass highlight — only what the lens draws
+    await page.addStyleTag({
+      content:
+        '.orb{animation:none!important}.orb__push{transform:none!important}' +
+        '.orb__shield,.orb__glint,.orb__reticle{display:none!important}',
+    });
+    await page.waitForTimeout(600);
+    const box = await orbBox(page);
+    const clip = { x: box.cx - box.width * 0.3, y: box.cy - box.height * 0.3, width: box.width * 0.6, height: box.height * 0.6 };
+    const rest = await page.screenshot({ clip });
+
+    await page.mouse.move(box.cx, box.cy);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i += 1) await page.mouse.move(box.cx + i * 15, box.cy);
+    await page.waitForTimeout(900);
+    const parallax = (await lens.getAttribute('data-parallax'))!.split(',').map(Number);
+    expect(parallax[0]).toBeGreaterThan(0.02);
+    const tipped = await page.screenshot({ clip });
+    await page.mouse.up();
+
+    // edges of towers move by several pixels: well past the film grain
+    const share = await changedShare(page, rest, tipped, 28);
+    expect(share).toBeGreaterThan(0.02);
+
+    // and it all comes back when the globe settles
+    await page.waitForTimeout(2200);
+    await expect(lens).toHaveAttribute('data-parallax', /^-?0\.000\d,-?0\.000\d$/);
+    const settled = await page.screenshot({ clip });
+    expect(await changedShare(page, rest, settled, 28)).toBeLessThan(0.002);
+  });
+});
+
+test.describe('without WebGL', () => {
+  test.use({ launchOptions: { args: ['--disable-3d-apis', '--disable-webgl'] } });
+
+  test('the page falls back to the drawn sky and the plain scenes', async ({ page }) => {
+    await expect(page.locator('.deep-field')).toHaveCount(1);
+    await expect(page.locator('canvas.universe')).toHaveCount(0);
+    await expect(page.locator('.orb')).not.toHaveClass(/is-lens/);
+    // the packed film shows only its colour square
+    const video = page.locator('[data-role="current"] video');
+    await expect(video).toHaveClass(/orb__video--packed/);
+    expect(await video.evaluate((v) => getComputedStyle(v).objectPosition)).toBe('0% 50%');
   });
 });

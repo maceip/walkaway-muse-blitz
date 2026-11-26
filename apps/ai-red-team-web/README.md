@@ -68,10 +68,11 @@ directly: `?t=240` is the red team exercise, `?t=258` the blue settle.
         lib/useOrbInteraction.ts the globe under the hand: it wobbles and
                                  flares its shield, and never turns over
         lib/orbCompositor.ts     the globe redrawn through a WebGL lens:
-                                 bloom, glass, linear-light crossings
+                                 depth parallax, bloom, glass, crossings
         lib/universe/            the live sky: layout, shaders, renderer
         lib/gl.ts                shared WebGL plumbing
         media/scenes.ts          the scene manifest (GENERATED)
+        media/depth.ts           the scenes' depth (GENERATED)
         styles.css               the design system
       public/
         media/    the scenes, the drawn sky, favicon, social card (GENERATED)
@@ -217,6 +218,36 @@ It draws only when something changed — a new film frame (counted with
 `requestVideoFrameCallback`, so films upload at their own 24 fps), a crossing,
 a wobble or the colour drift — so a still scene costs nothing. Without WebGL2
 the elements underneath show, crossfaded by the stylesheet, as before.
+
+### Depth
+
+Every scene has a depth map, so the lens can treat the city as a solid
+object: when the globe wobbles, near surfaces slide against far ones (the
+towers move against the streets, up to about 2.5% of the globe at the 14°
+limit, fading out toward the glass), and a crossing's focus pull travels from
+the far city to the near one instead of blurring evenly.
+
+`scripts/build-redteam-depth.py` makes the depth from the media the page
+already ships, with Depth Anything V2 Small (Apache-2.0 — Base and Large are
+non-commercial and are not used):
+
+    public/media/depth/<id>.webp   512x512 grey depth for a still / a film's first frame
+    public/media/depth/<id>.mp4    the film packed with its depth, 1536x1024
+    src/media/depth.ts             which scenes have what (GENERATED)
+    depth-hashes.json              what was built from what
+
+A film's depth is packed beside its colour in one video — colour square on the
+left, depth square at the top right — because two `<video>` elements never
+stay on the same frame. Without WebGL the stylesheet shows only the colour
+square. The film's depth is steadied over time (a smoothed normalisation range
+and a centred five-frame average, wrapped for the looping film).
+
+It runs after the media pipeline and needs torch and transformers; the check
+needs neither, and fails if the shipped media has changed since the depth was
+made:
+
+    python3 scripts/build-redteam-depth.py           # with torch + transformers
+    python3 scripts/build-redteam-depth.py --check
 
 `docs/orb-realism.md` is the longer look at what else would make the city
 read as real, and what each step would cost.

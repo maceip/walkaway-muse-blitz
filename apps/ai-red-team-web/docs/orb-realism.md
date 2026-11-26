@@ -33,14 +33,11 @@ is not in the sources.
 
 ## Next steps, by payoff
 
-1. **Depth maps for each scene** (offline, in `build-redteam-media.py`, with
-   a monocular depth model such as Depth Anything V2). One small greyscale
-   texture per still, or a depth film per film. That unlocks, in the lens:
-   parallax when the globe wobbles (the towers shift against the ground —
-   the strongest "this is a real object" cue there is), focus pulls with real
-   depth instead of a flat blur, and haze that thickens with distance.
-   Cost: a model run in the pipeline, ~100–300 KB per still, a second video
-   stream per film.
+1. **Depth maps for each scene — done** (`scripts/build-redteam-depth.py`,
+   Depth Anything V2 Small). Wobble parallax and depth-focused crossings are
+   in the lens. Still open on this step: haze that thickens with distance,
+   and per-scene tuning of the parallax strength (the generated art bakes
+   its own atmosphere, so haze needs care not to double it).
 2. **Higher-resolution, higher-range sources.** Re-render or upscale to
    2048×2048, ideally kept as 16-bit/HDR through the pipeline, so bloom
    thresholds sit on real light levels and the orb is sharp at 2× on large
@@ -66,5 +63,5 @@ is not in the sources.
    for the tiles (or a capture for splats), a much heavier bundle, and a GPU
    budget phones may not meet without a lighter fallback.
 
-Steps 1 and 4 fit the current pipeline and lens directly; 2 and 3 are media
-work; 5 is a different architecture.
+Step 4 fits the current lens directly; 2 and 3 are media work; 5 is a
+different architecture.

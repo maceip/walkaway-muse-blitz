@@ -463,6 +463,14 @@ body {
   opacity: 1;
 }
 
+/* A film packed with its depth is 1536x1024: the colour square on the left
+   and the depth beside it. Covering the square box and pinning it left shows
+   exactly the colour square, so without WebGL the film looks as it always
+   did; the lens reads the depth from the right-hand third. */
+.orb__video--packed {
+  object-position: 0% 50%;
+}
+
 /* haze on the glass */
 .orb__grade {
   position: absolute;

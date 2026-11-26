@@ -3,6 +3,7 @@ import type { Phase } from '../lib/schedule';
 import { startOrbCompositor } from '../lib/orbCompositor';
 import { useOrbInteraction } from '../lib/useOrbInteraction';
 import type { Scene } from '../media/scenes';
+import { SCENE_DEPTH } from '../media/depth';
 
 function prefersReducedMotion(): boolean {
   return (
@@ -39,6 +40,12 @@ function SceneLayer({
   const [playing, setPlaying] = useState(false);
   const isFilm = scene.kind === 'video';
   const layerRef = useRef<HTMLDivElement>(null);
+  // A film with depth ships packed: colour on the left, depth at the top
+  // right. The page plays that one film, and without WebGL the stylesheet
+  // shows only its left square, which is the film as it always was.
+  const depth = SCENE_DEPTH[scene.id];
+  const filmSrc = depth?.film ?? scene.src;
+  const packed = isFilm && !!depth?.film;
 
   useLayoutEffect(() => {
     // The layer is on the page with its old opacity. Asking the browser for
@@ -64,6 +71,8 @@ function SceneLayer({
       aria-hidden={faded || undefined}
       data-scene-id={scene.id}
       data-role={faded ? 'previous' : 'current'}
+      data-depth={depth?.still}
+      data-packed={packed ? '1' : undefined}
     >
       <picture className="orb__picture">
         <source srcSet={scene.posterWebp} type="image/webp" />
@@ -78,8 +87,8 @@ function SceneLayer({
       </picture>
       {isFilm && (
         <video
-          className={`orb__video${playing ? ' is-playing' : ''}`}
-          src={scene.src}
+          className={`orb__video${packed ? ' orb__video--packed' : ''}${playing ? ' is-playing' : ''}`}
+          src={filmSrc}
           poster={scene.poster}
           autoPlay
           muted

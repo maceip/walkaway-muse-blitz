@@ -16,6 +16,11 @@ import { TILT_MAX } from './useOrbInteraction';
  *    the lens drifts out of focus and back, and the new scene comes in
  *    through a soft, uneven front rather than all at once. Two different
  *    shots never line up exactly; a rack focus is how film hides that.
+ *  - **Depth.** Every scene carries a depth map (scripts/build-redteam-depth.py:
+ *    a picture for a still, packed beside the colour for a film). When the
+ *    globe wobbles, near surfaces slide against far ones, so the towers move
+ *    against the streets like a real object; and a crossing's focus pull is
+ *    focused at a depth, travelling from the far city to the near one.
  *  - **Bloom.** The neon and the lit glass glow into their surroundings the
  *    way bright light does through a real lens.
  *  - **The glass.** A little dispersion toward the rim of the sphere, and a
@@ -38,14 +43,23 @@ precision highp float;
 in vec2 v_uv;
 uniform sampler2D u_a;
 uniform sampler2D u_b;
+uniform sampler2D u_aDepth;
+uniform sampler2D u_bDepth;
+uniform float u_aMode;    // 0: no depth, 1: a depth picture, 2: a packed film
+uniform float u_bMode;
 uniform float u_p;        // 0: all outgoing, 1: all arriving
 uniform float u_time;
 uniform float u_still;    // 1 with reduced motion: no zoom, no focus pull
+uniform vec2 u_parallax;  // how far the nearest surface slides, from the wobble
 uniform mat3 u_hue;
 uniform float u_lift;
 uniform float u_encode;   // 1 when the target is 8-bit and must stay encoded
 out vec4 o;
 ${NOISE_GLSL}
+
+// a packed film: the colour square is the left two thirds of the frame, the
+// depth square the top right third
+const float PACK = 2.0 / 3.0;
 
 vec3 toLinear(vec3 c) { return pow(max(c, 0.0), vec3(2.2)); }
 
@@ -55,12 +69,36 @@ vec3 grade(vec3 srgb) {
   return clamp(u_hue * srgb, 0.0, 1.0) * u_lift;
 }
 
-vec3 tap(sampler2D t, vec2 uv) {
-  return toLinear(grade(texture(t, uv).rgb));
+vec2 colourUv(vec2 uv, float mode) {
+  return mode > 1.5 ? vec2(clamp(uv.x, 0.0, 0.998) * PACK, uv.y) : uv;
 }
 
-vec3 lensed(sampler2D t, vec2 uv, float blur) {
-  vec3 c = tap(t, uv);
+float depthOf(sampler2D col, sampler2D dep, float mode, vec2 uv) {
+  if (mode > 1.5) {
+    vec2 q = clamp(uv, vec2(0.004), vec2(0.996));
+    return texture(col, vec2(PACK + q.x / 3.0, q.y * 0.5)).r;
+  }
+  if (mode > 0.5) return texture(dep, uv).r;
+  return 0.5;
+}
+
+// Where to look in the picture once the globe has tipped: nearer surfaces
+// (bigger depth) slide further than far ones, so the towers move against the
+// streets. The shift is a few pixels, so two refinement steps are plenty.
+vec2 lookup(sampler2D col, sampler2D dep, float mode, vec2 uv, vec2 shift, out float d) {
+  d = depthOf(col, dep, mode, uv);
+  if (mode < 0.5) return uv;
+  vec2 q = uv - shift * (d - 0.5);
+  d = depthOf(col, dep, mode, q);
+  return uv - shift * (d - 0.5);
+}
+
+vec3 tap(sampler2D t, float mode, vec2 uv) {
+  return toLinear(grade(texture(t, colourUv(uv, mode)).rgb));
+}
+
+vec3 lensed(sampler2D t, float mode, vec2 uv, float blur) {
+  vec3 c = tap(t, mode, uv);
   if (blur < 0.0002) return c;
   // a small disc of taps on a golden-angle spiral: the out-of-focus blur of
   // a lens, in linear light so highlights spread the way light does
@@ -70,10 +108,17 @@ vec3 lensed(sampler2D t, vec2 uv, float blur) {
     float fi = float(i);
     float r = sqrt(fi / 8.0) * blur;
     float a = fi * 2.39996;
-    sum += tap(t, uv + vec2(cos(a), sin(a)) * r);
+    sum += tap(t, mode, uv + vec2(cos(a), sin(a)) * r);
     wsum += 1.0;
   }
   return sum / wsum;
+}
+
+// Depth of field across a crossing: the focus travels from the far city to
+// the near one, and the further a surface is from the focus the softer it is.
+// Without depth the whole picture softens evenly.
+float defocus(float mode, float d, float focus) {
+  return mode < 0.5 ? 1.0 : 0.45 + 1.6 * abs(d - focus);
 }
 
 void main() {
@@ -88,11 +133,21 @@ void main() {
   vec2 ua = 0.5 + (uv - 0.5) / sa;
   vec2 ub = 0.5 + (uv - 0.5) / sb;
   float blur = 0.0042 * bell * motion;
+  float focus = mix(0.3, 0.75, p);
 
-  vec3 a = lensed(u_a, ua, blur);
+  // the parallax fades out toward the glass, which is the shell and does
+  // not move against the city inside it
+  float shell = smoothstep(0.98, 0.62, length(uv - 0.5) * 2.0);
+  vec2 shift = u_parallax * shell;
+
+  float da;
+  vec2 pa = lookup(u_a, u_aDepth, u_aMode, ua, shift, da);
+  vec3 a = lensed(u_a, u_aMode, pa, blur * defocus(u_aMode, da, focus));
   vec3 col = a;
   if (p < 0.999) {
-    vec3 b = lensed(u_b, ub, blur);
+    float db;
+    vec2 pb = lookup(u_b, u_bDepth, u_bMode, ub, shift, db);
+    vec3 b = lensed(u_b, u_bMode, pb, blur * defocus(u_bMode, db, focus));
     // an uneven front: the new light reaches some of the city first, the
     // middle of the globe a little before the rim
     float n = fbm(uv * 3.2 + vec2(u_time * 0.03, -u_time * 0.02), 4);
@@ -214,7 +269,20 @@ interface Slot {
   /** the image URL or film time last uploaded */
   key: string;
   ready: boolean;
+  /** the scene's depth picture, when it has one */
+  depthTex: WebGLTexture;
+  /** which depth picture is in depthTex */
+  depthKey: string;
+  /** 0: no depth, 1: the depth picture, 2: depth packed in the film */
+  mode: number;
 }
+
+/**
+ * How far the nearest surface slides, as a share of the globe's width, per
+ * degree the globe tips. At the 14-degree limit the towers move about two and
+ * a half per cent of the globe against the streets.
+ */
+const PARALLAX_PER_DEG = 0.06 / TILT_MAX;
 
 export interface OrbCompositor {
   stop(): void;
@@ -313,16 +381,69 @@ export function startOrbCompositor(
   const float = canRenderFloat(gl);
   const vao = gl.createVertexArray();
 
-  const makeSlot = (): Slot => {
+  const makeTexture = (): WebGLTexture => {
     const tex = gl.createTexture();
     if (!tex) throw new Error('createTexture failed');
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    return { tex, sceneId: null, source: null, key: '', ready: false };
+    return tex;
+  };
+  const makeSlot = (): Slot => ({
+    tex: makeTexture(),
+    sceneId: null,
+    source: null,
+    key: '',
+    ready: false,
+    depthTex: makeTexture(),
+    depthKey: '',
+    mode: 0,
+  });
+
+  // depth pictures, fetched once each and kept
+  const depthPictures = new Map<string, HTMLImageElement>();
+  const depthPicture = (url: string): HTMLImageElement | null => {
+    let img = depthPictures.get(url);
+    if (!img) {
+      img = new Image();
+      img.decoding = 'async';
+      img.src = url;
+      depthPictures.set(url, img);
+    }
+    return img.complete && img.naturalWidth > 0 ? img : null;
+  };
+
+  /**
+   * Work out what depth a slot has: packed in the film it is drawing, its
+   * depth picture, or none yet. Returns true if that changed.
+   */
+  const updateDepth = (slot: Slot, layer: Element | null): boolean => {
+    if (!layer || !slot.ready) return false;
+    let mode = 0;
+    if (slot.source instanceof HTMLVideoElement && layer.getAttribute('data-packed') === '1') {
+      mode = 2;
+    } else {
+      const url = layer.getAttribute('data-depth');
+      const img = url ? depthPicture(url) : null;
+      if (url && img) {
+        if (slot.depthKey !== url) {
+          try {
+            gl.bindTexture(gl.TEXTURE_2D, slot.depthTex);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+            slot.depthKey = url;
+          } catch {
+            slot.depthKey = '';
+          }
+        }
+        if (slot.depthKey === url) mode = 1;
+      }
+    }
+    if (mode === slot.mode) return false;
+    slot.mode = mode;
+    return true;
   };
   let current = makeSlot();
   let outgoing = makeSlot();
@@ -397,6 +518,7 @@ export function startOrbCompositor(
       current.ready = false;
       current.source = null;
       current.key = '';
+      current.mode = 0;
       transitionStart = -1;
       canvas.dataset.transition = 'pending';
     }
@@ -409,6 +531,12 @@ export function startOrbCompositor(
     }
     const wasReady = current.ready;
     changed = upload(current, sourceOf(currentLayer)) || changed;
+    changed = updateDepth(current, currentLayer) || changed;
+    if (previousLayer?.getAttribute('data-scene-id') === outgoing.sceneId) {
+      changed = updateDepth(outgoing, previousLayer) || changed;
+    }
+    const depthLabel = !current.ready ? 'none' : current.mode === 2 ? 'film' : current.mode === 1 ? 'still' : 'none';
+    if (canvas.dataset.depth !== depthLabel) canvas.dataset.depth = depthLabel;
     if (!wasReady && current.ready) {
       // the arriving scene is on the page: the crossing starts now, or not
       // at all if there was nothing showing before it
@@ -456,8 +584,25 @@ export function startOrbCompositor(
     gl.bindTexture(gl.TEXTURE_2D, current.ready ? current.tex : outgoing.tex);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, outgoing.tex);
+    const a = current.ready ? current : outgoing;
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, a.depthTex);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, outgoing.depthTex);
     gl.uniform1i(scene.uniform('u_a'), 0);
     gl.uniform1i(scene.uniform('u_b'), 1);
+    gl.uniform1i(scene.uniform('u_aDepth'), 2);
+    gl.uniform1i(scene.uniform('u_bDepth'), 3);
+    gl.uniform1f(scene.uniform('u_aMode'), a.mode);
+    gl.uniform1f(scene.uniform('u_bMode'), outgoing.mode);
+    // the globe tipping: right side away (ry > 0) brings the near surfaces
+    // to the right; top away (rx > 0) brings them up
+    const reach = options.reducedMotion ? 0.5 : 1;
+    const sx = m ? m.ry * PARALLAX_PER_DEG * reach : 0;
+    const sy = m ? -m.rx * PARALLAX_PER_DEG * reach : 0;
+    gl.uniform2f(scene.uniform('u_parallax'), sx, sy);
+    const parallaxLabel = `${sx.toFixed(4)},${sy.toFixed(4)}`;
+    if (canvas.dataset.parallax !== parallaxLabel) canvas.dataset.parallax = parallaxLabel;
     gl.uniform1f(scene.uniform('u_p'), current.ready ? e : 1);
     gl.uniform1f(scene.uniform('u_time'), now / 1000);
     gl.uniform1f(scene.uniform('u_still'), options.reducedMotion ? 1 : 0);
@@ -539,8 +684,10 @@ export function startOrbCompositor(
       freeTarget(gl, sceneTarget);
       freeTarget(gl, bloomA);
       freeTarget(gl, bloomB);
-      gl.deleteTexture(current.tex);
-      gl.deleteTexture(outgoing.tex);
+      for (const slot of [current, outgoing]) {
+        gl.deleteTexture(slot.tex);
+        gl.deleteTexture(slot.depthTex);
+      }
       gl.deleteVertexArray(vao);
       for (const p of [scene, bright, blur, final]) gl.deleteProgram(p.program);
     },
