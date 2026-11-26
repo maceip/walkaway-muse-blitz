@@ -27,6 +27,13 @@ globe jumping: the geometry is identical and only the colour and the camera
 move. The stills are cut down to a mask of the globe itself, so what the page
 carries is the globe and nothing around it.
 
+Some films are transitions: a time-lapse that starts on one scene's picture
+and carries the same city into a different light, the way a day turns into
+night. A scene's `after` names the scenes a transition starts from — the page
+goes into it from those, and from nowhere else — and `then` names the scene
+it ends on, which the page always goes on to. Between the rest the page
+drifts at random.
+
 The films carry a storm: a bank of cloud lying across the top of the globe,
 lit from inside by the city. The storm is not an object drawn on the frame,
 it is light added on top of the sky, so it comes off by taking that light off
@@ -639,6 +646,10 @@ def write_manifest(config: dict, scenes: list[dict]) -> None:
         "  width: number;",
         "  height: number;",
         "  durationMs: number;",
+        "  /** A transition is entered only from these scenes, and always from them. */",
+        "  after: string[];",
+        "  /** The scene a transition ends on, which always comes next; null to drift. */",
+        "  then: string | null;",
         "}",
         "",
         "export const DEFAULT_SCENE_ID = %s;" % json.dumps(config["default"]),
@@ -659,6 +670,8 @@ def write_manifest(config: dict, scenes: list[dict]) -> None:
         lines.append("    width: %d," % scene["width"])
         lines.append("    height: %d," % scene["height"])
         lines.append("    durationMs: %d," % scene["durationMs"])
+        lines.append("    after: %s," % json.dumps(scene["after"]))
+        lines.append("    then: %s," % json.dumps(scene["then"]))
         lines.append("  },")
     lines.append("];")
     lines.append("")
@@ -699,9 +712,15 @@ def write_og(poster_png: str) -> str:
 
 def resolve_scenes(config: dict) -> list[dict]:
     """Work out what each scene ships, and where."""
+    known = {scene["id"] for scene in config["scenes"]}
     resolved = []
     for scene in config["scenes"]:
         sid = scene["id"]
+        after = list(scene.get("after", []))
+        then = scene.get("then")
+        for ref in after + ([then] if then else []):
+            if ref not in known or ref == sid:
+                raise SystemExit("scene %s names %r as a neighbour, which is not another scene" % (sid, ref))
         alert = scene["kind"] == "alert"
         if scene["kind"] == "image":
             src = "/media/scenes/%s.png" % sid
@@ -741,6 +760,8 @@ def resolve_scenes(config: dict) -> list[dict]:
             "width": CANVAS,
             "height": CANVAS,
             "durationMs": int(duration),
+            "after": after,
+            "then": then,
         })
     return resolved
 

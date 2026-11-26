@@ -111,6 +111,29 @@
       "source": "city-redteam.mp4",
       "label": "Red team scan",
       "alt": "The city under red alert light with a red laser sweeping the grid and green system readouts around it."
+    },
+    {
+      "id": "globe-nightfall",
+      "kind": "video",
+      "source": "globe-nightfall.mp4",
+      "label": "Nightfall, garden city",
+      "after": [
+        "globe-day"
+      ],
+      "then": "globe-dusk",
+      "alt": "The daylight city inside the glass sphere going into night: the sky behind the glass darkens through sunset, and the lights of the towers, the dome and the marina come on one by one."
+    },
+    {
+      "id": "city-nightfall",
+      "kind": "video",
+      "source": "city-nightfall.mp4",
+      "label": "Nightfall, grey city",
+      "repair_storm": true,
+      "after": [
+        "city-globe-spin"
+      ],
+      "then": "city-globe-night",
+      "alt": "The grey city inside the glass sphere going into night as the camera drifts in: the sky turns violet and then dark, and the towers light up amber and cyan around glowing blue pools."
     }
   ]
 }
