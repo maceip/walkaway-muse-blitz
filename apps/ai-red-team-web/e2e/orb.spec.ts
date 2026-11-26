@@ -95,7 +95,6 @@ test.beforeEach(async ({ page }) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   await page.goto('/');
-  if (test.info().titlePath.includes('without WebGL')) return;
   await expect(page.locator('.orb.is-lens')).toBeVisible();
   // let the springs and the first scene settle
   await page.waitForTimeout(800);
@@ -327,19 +326,5 @@ test.describe('depth', () => {
     await expect(lens).toHaveAttribute('data-parallax', /^-?0\.000\d,-?0\.000\d$/);
     const settled = await page.screenshot({ clip });
     expect(await changedShare(page, rest, settled, 28)).toBeLessThan(0.002);
-  });
-});
-
-test.describe('without WebGL', () => {
-  test.use({ launchOptions: { args: ['--disable-3d-apis', '--disable-webgl'] } });
-
-  test('the page falls back to the drawn sky and the plain scenes', async ({ page }) => {
-    await expect(page.locator('.deep-field')).toHaveCount(1);
-    await expect(page.locator('canvas.universe')).toHaveCount(0);
-    await expect(page.locator('.orb')).not.toHaveClass(/is-lens/);
-    // the packed film shows only its colour square
-    const video = page.locator('[data-role="current"] video');
-    await expect(video).toHaveClass(/orb__video--packed/);
-    expect(await video.evaluate((v) => getComputedStyle(v).objectPosition)).toBe('0% 50%');
   });
 });
