@@ -209,6 +209,25 @@ def normalise(d: np.ndarray, lo: float, hi: float) -> np.ndarray:
     return np.clip((d - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
 
 
+def _inside() -> np.ndarray:
+    y, x = np.mgrid[0:DEPTH, 0:DEPTH]
+    c = (DEPTH - 1) / 2.0
+    return np.hypot(x - c, y - c) <= 0.88 * DEPTH / 2.0
+
+
+# The range is measured inside the globe only. The model sees the glass ball
+# as one near object against far corners; measured over the whole frame, the
+# city inside gets a sliver of the range, and at street level almost none.
+# Measured inside, the city gets all of it. The glass beyond is clipped, and
+# the lens fades the parallax out over it anyway.
+INSIDE = _inside()
+
+
+def depth_range(d: np.ndarray) -> tuple[float, float]:
+    v = d[INSIDE]
+    return float(np.percentile(v, 2)), float(np.percentile(v, 98))
+
+
 # --------------------------------------------------------------------------
 # stills
 # --------------------------------------------------------------------------
@@ -216,7 +235,7 @@ def normalise(d: np.ndarray, lo: float, hi: float) -> np.ndarray:
 def build_still(est: Estimator, media: str, out: str) -> None:
     rgb = np.asarray(Image.open(media).convert("RGB"))
     d = est.raw(rgb)
-    lo, hi = np.percentile(d, 1), np.percentile(d, 99)
+    lo, hi = depth_range(d)
     d = est.finish(normalise(d, lo, hi))
     Image.fromarray((d * 255 + 0.5).astype(np.uint8), "L").save(out, "WEBP", lossless=True)
 
@@ -265,7 +284,7 @@ def build_film(est: Estimator, media: str, out: str, loop: bool) -> None:
                 break
             d = est.raw(rgb)
             raw[i] = d.astype(np.float16)
-            lows[i], highs[i] = np.percentile(d, 1), np.percentile(d, 99)
+            lows[i], highs[i] = depth_range(d)
             n = i + 1
             if n % 100 == 0:
                 print("    %s: %d/%d frames" % (os.path.basename(media), n, count), flush=True)
