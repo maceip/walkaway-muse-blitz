@@ -22,6 +22,7 @@ export const SCENE_DEPTH: Record<string, SceneDepth> = {
   "globe-day": { still: "/media/depth/globe-day.webp" },
   "globe-dusk": { still: "/media/depth/globe-dusk.webp" },
   "city-globe-night": { still: "/media/depth/city-globe-night.webp" },
+  "city-globe-grey": { still: "/media/depth/city-globe-grey.webp" },
   "city-spiral": { still: "/media/depth/city-spiral.webp" },
   "city-alert": { still: "/media/depth/globe-dusk.webp" },
   "city-storm": { still: "/media/depth/city-storm.webp", film: "/media/depth/city-storm.mp4" },

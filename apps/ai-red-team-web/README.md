@@ -13,9 +13,9 @@ Both hostnames serve the same page — they are peers, not a redirect pair.
 A city is held inside a glass globe at the centre of the frame, with drifting
 outspace behind it and a red team exercise every four minutes.
 
-**The globe drifts through sixteen scenes, on its own.** Four are pictures of
+**The globe drifts through seventeen scenes, on its own.** Five are pictures of
 the city in the different lights it was drawn in — the daylight sphere, the
-dusk sphere, the night city, the spiral city — five are camera moves that take
+dusk sphere, the night city, the grey city, the spiral city — five are camera moves that take
 the camera down into the city and back out, one is a storm rolling over the
 city, one is the red alert state with the laser sweeping the grid, and three
 are the scanning clips.

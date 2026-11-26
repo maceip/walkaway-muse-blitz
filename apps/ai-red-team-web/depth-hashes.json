@@ -16,6 +16,10 @@
       "output": "a8756cba2a21208ee89874d165cb3b2456356efe061bbbc43fd9209e11719d74",
       "source": "89202faded669e1dbcc670b939e6dfe4b15ebf2b69c2476fc2abe220d09dea01"
     },
+    "apps/ai-red-team-web/public/media/depth/city-globe-grey.webp": {
+      "output": "c8f15dbcde98337c8d9fc90866ee46c9da84e21d9e58446af3be074f16c8102f",
+      "source": "e614e029a38bd6eac3a566074ae5c0740f17a72296d7c3fad1ba9900e46cc1d7"
+    },
     "apps/ai-red-team-web/public/media/depth/city-globe-night.webp": {
       "output": "3958cc27a5d9e35b0fef4ed5871d9fe3e0bd6b447f5ad4ad828b2b8981501193",
       "source": "9ef6d6738e37ef8d10e7ca8ec68f1dcbec3557da50cc85c150c581fb2951db77"

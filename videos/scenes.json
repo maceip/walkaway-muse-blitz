@@ -35,6 +35,15 @@
       "alt": "The city at night seen from above inside a glass sphere: dark towers, a cyan-lit plaza, a gold-lit dome, a bay of pink lights below, and a bright green rim around the globe."
     },
     {
+      "id": "city-globe-grey",
+      "kind": "image",
+      "source": "city-globe-grey.jpg",
+      "label": "City globe, grey day",
+      "holdMs": 8000,
+      "repair_storm": true,
+      "alt": "The city inside a glass sphere by a grey daylight: pale towers and glass domes, a cyan-lit plaza and blue pools, a bay of pink lights below, and a bright green rim around the globe."
+    },
+    {
       "id": "city-spiral",
       "kind": "image",
       "source": "city-spiral.jpg",
@@ -130,7 +139,7 @@
       "label": "Nightfall, grey city",
       "repair_storm": true,
       "after": [
-        "city-globe-spin"
+        "city-globe-grey"
       ],
       "then": "city-globe-night",
       "alt": "The grey city inside the glass sphere going into night as the camera drifts in: the sky turns violet and then dark, and the towers light up amber and cyan around glowing blue pools."
