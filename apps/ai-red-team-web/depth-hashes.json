@@ -36,6 +36,14 @@
       "output": "e55aa74e3f6a88d55f652e72b9256880c46219318e5f47572de4ebb585a0e1a7",
       "source": "c47fdf9f60df5300315a581346df021d3066c758cc3453d34c482e897efbe274"
     },
+    "apps/ai-red-team-web/public/media/depth/city-nightfall.mp4": {
+      "output": "d7a1e05c1ee972b6511ecca6356afdfe307be9912dbf28de0c59d11ff9a7fe53",
+      "source": "338bf0afe7160e8bbe96c9105613e8c9637d0a5474ada71d10eb87e945a37d9b"
+    },
+    "apps/ai-red-team-web/public/media/depth/city-nightfall.webp": {
+      "output": "20f9fa330282c035ec1997ac28e07cb34676cf4cb2b90a8459659ce7ad8aa39b",
+      "source": "ed95475f1ca90ed60c685b52ac710099a15ea4513d31a7da71b6d063d1d5b8d1"
+    },
     "apps/ai-red-team-web/public/media/depth/city-redteam.mp4": {
       "output": "b2e1b9e5ff9b3a68cb30466e93ad9e0dbc70b3e222e426a3c6f3b180d2d2abaf",
       "source": "3d3b7569b50f9d1549108f8d370c2763c88d9a174664e754a61f3a523eb524ec"
@@ -87,6 +95,14 @@
     "apps/ai-red-team-web/public/media/depth/globe-dusk.webp": {
       "output": "7a59f340df13d005c19bea50f7b82ca9ac3415321fd18a89c56728287fdcf946",
       "source": "09aa95b324234c23094fd0261c476b21d120f39f58c90d29772758df5e1a677d"
+    },
+    "apps/ai-red-team-web/public/media/depth/globe-nightfall.mp4": {
+      "output": "ac168aa1f3b7b27cb4488e4b3d7b5d7c6deeae7772c2a89b5d96ac737ca5e0e6",
+      "source": "779b2c02d8756b0f2f445d4aae091af5294c2d4daf13dec1a12cb0ec0338e93e"
+    },
+    "apps/ai-red-team-web/public/media/depth/globe-nightfall.webp": {
+      "output": "e39f8df7cf59e439c68c8c98240830137ef8bdc778db0fc0bfdd96b6bfa60289",
+      "source": "db499fd28f28a115693344c6ea7ee8073ff4b4d25508094bba72b74d5369c77d"
     }
   },
   "version": 1

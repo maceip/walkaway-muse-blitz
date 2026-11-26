@@ -32,4 +32,6 @@ export const SCENE_DEPTH: Record<string, SceneDepth> = {
   "city-scan": { still: "/media/depth/city-scan.webp", film: "/media/depth/city-scan.mp4" },
   "city-globe-scan": { still: "/media/depth/city-globe-scan.webp", film: "/media/depth/city-globe-scan.mp4" },
   "city-redteam": { still: "/media/depth/city-redteam.webp", film: "/media/depth/city-redteam.mp4" },
+  "globe-nightfall": { still: "/media/depth/globe-nightfall.webp", film: "/media/depth/globe-nightfall.mp4" },
+  "city-nightfall": { still: "/media/depth/city-nightfall.webp", film: "/media/depth/city-nightfall.mp4" },
 };
