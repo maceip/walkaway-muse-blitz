@@ -90,7 +90,9 @@ body {
 
 /* ---------- deep space ---------- */
 
-/* The sky is drawn, not photographed.
+/* The fallback sky, for a browser without WebGL2 (the live sky is the
+ * .universe canvas, drawn by src/lib/universe/). It is drawn, not
+ * photographed.
  *
  * The page used to carry two NASA survey photographs of the Andromeda
  * galaxy and stretch them across the frame. They were 580 and 550 pixels

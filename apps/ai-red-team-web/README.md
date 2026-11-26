@@ -60,18 +60,24 @@ directly: `?t=240` is the red team exercise, `?t=258` the blue settle.
         components/App.tsx       the page
         components/Orb.tsx       the globe, the laser, the bay, the crossfade
         components/Hud.tsx       the corner readouts
-        components/Planets.tsx   the distant planets
+        components/Universe.tsx  the live sky (WebGL), with the drawn plate as fallback
+        components/Planets.tsx   the fallback sky's two CSS planets
         lib/schedule.ts          the exercise clock (pure, and unit-testable)
         lib/useExerciseClock.ts  the clock driving React
         lib/useScene.ts          the scene cycle and the crossfade
-        lib/useOrbInteraction.ts the globe under the hand: scroll turns it,
-                                 a click shoves it
+        lib/useOrbInteraction.ts the globe under the hand: it wobbles and
+                                 flares its shield, and never turns over
+        lib/orbCompositor.ts     the globe redrawn through a WebGL lens:
+                                 bloom, glass, linear-light crossings
+        lib/universe/            the live sky: layout, shaders, renderer
+        lib/gl.ts                shared WebGL plumbing
         media/scenes.ts          the scene manifest (GENERATED)
         styles.css               the design system
       public/
         media/    the scenes, the drawn sky, favicon, social card (GENERATED)
         fonts/    Michroma (wordmark) + IBM Plex Mono (HUD)
         video/    the camera moves (GENERATED)
+      e2e/orb.spec.ts            end-to-end checks (Playwright, real GPU path)
       server/index.mjs           the production server (no dependencies)
       deploy/redteam.caddy       the Caddy stanza for this site (tracked copy
                                  of the live /etc/caddy/redteam.caddy)
@@ -132,64 +138,88 @@ old media in place.
 
 ## The sky
 
-`scripts/build-space-backdrop.py` draws the sky, at 4096×2304, and writes it
-to `public/media/space/deep-field.webp` (with a `.jpg` beside it for anything
-that cannot take webp). It is a separate generator from the orb media and a
-separate capability: the sky is one plate, not a scene.
+The sky is live: `src/lib/universe/` draws it in one WebGL2 canvas behind the
+page, at thirty frames a second.
+
+- **Stars** in three depth layers drift slowly sideways and wrap round the
+  frame, nearer layers faster (about 0.7, 1.6 and 3.2 CSS px a second). Their
+  brightnesses follow a counts-per-magnitude law, so there are a few bright
+  stars and a great many faint ones; a star smaller than a pixel and a half
+  is drawn at that size and dimmed to match, so it glides instead of crawling.
+- **Systems** turn about their own centres: three galaxies (a spiral, a
+  barred spiral, an edge-on one with a dust lane) on periods of eighteen to
+  thirty minutes, a planetary system whose four worlds go round on Kepler's
+  clock (periods as a^1.5, the inner one in 75 s), a binary, and a globular
+  cluster. The galaxies' arms turn as a rigid pattern, so they never wind up.
+- **Gas and dust**: the galactic band with dust eating into it and three
+  emission nebulae, one tinted by the page's accent. This is rendered small,
+  every eighth frame, into a texture the composite slides with the camera.
+- **Two planets**, lit from one side with limb darkening, one ringed, and
+  **a comet** now and then on a seeded timetable, taking most of a minute to
+  cross.
+- A slow, bounded camera drift slides everything with parallax.
+
+Everything comes from one fixed seed, so it is the same sky on every visit.
+Phones get a different arrangement of the same bodies, clear of the globe and
+the wordmark, and draw fewer stars so the density per inch matches. With
+`prefers-reduced-motion: reduce` the sky draws one still frame.
+
+A browser without WebGL2 gets the drawn plate instead.
+`scripts/build-space-backdrop.py` draws that plate at 4096×2304 and writes it
+to `public/media/space/deep-field.webp` (with a `.jpg` beside it); it is only
+loaded when the live sky cannot run.
 
     python3 scripts/build-space-backdrop.py            # redraw and ship it
     python3 scripts/build-space-backdrop.py --check    # the shipped plate is the one this draws
-    python3 scripts/build-space-backdrop.py --width 1024 --out /tmp/sky.webp
-
-Two things about it are worth knowing before changing it:
-
-- **A star has to survive the downscale.** The plate is 4096 wide and a screen
-  is 1280 to 2560, so the browser shrinks every star before it reaches the eye.
-  A star drawn as a single pixel arrives smaller than a pixel and is averaged
-  down into grey dust — the sky keeps its dust and loses its stars. So the
-  stars are drawn in two tiers: a faint tier, drawn tight and dim, which is
-  the grain of the field, and a bright tier drawn wide enough (`STAR_TIER_WIDTH`)
-  to arrive at the screen as a point of about a pixel across. The check counts
-  the distinct bright points that survive the downscale and fails if the sky
-  has fallen back to dust.
-- **The peak and the width are separate.** A wide point-spread function spreads
-  the same light over more pixels, so the total light a star lays down is its
-  peak divided by the fraction of the profile that lands on the centre pixel.
-  Getting that wrong makes the bright tier dimmer than the faint one, which is
-  exactly what happened the first time this was written.
-
-There is no canvas over the sky. There used to be — eighty-five white dots
-falling downwards and wrapping around, which on a dark page read as snowfall.
-The sky is the drawn plate alone, and the check fails if a canvas comes back.
 
 ## The orb under the hand
 
-The page drifts through its scenes on its own, but the globe also answers the
-mouse. `src/lib/useOrbInteraction.ts` is the whole of it:
+`src/lib/useOrbInteraction.ts` is the whole of it. A click, a tap, a drag or
+the wheel never spins the globe: it **wobbles**, and its **energy shield
+flares**.
 
-- **the wheel turns the globe at the speed you scroll**, and it coasts on
-  afterwards and settles;
-- **a click shoves it aside** — away from the point that was clicked — and
-  throws it round, in the direction a globe would roll if you pushed it that
-  way. The shove and the squash are springs, so the globe springs back
-  instead of stopping dead.
+- **A poke** tips the touched side away from you, nudges the globe away from
+  the touch, squashes it and flexes it along the line of the impact; then it
+  rings down over a second or so. The shield's rim lights up and a ripple
+  runs out across a lattice of cells from the point of contact.
+- **A drag** leans the globe toward the pointer and tips it the way the front
+  would roll, with the shield held faintly lit; let go and it springs home.
+- **The wheel** rocks it, top away on a scroll down, and a hard flick flares
+  the shield on the leading edge.
 
-Two things about it are worth knowing before changing it:
+**Why it can never go upside down.** Nothing rotates the globe in the plane of
+the screen. The only rotations are rotateX / rotateY, each clamped to 14°
+(`TILT_MAX`) with a bounce off the stop, and sprung back to zero. The flex is
+`rotate(a) scale() rotate(-a)`, which nets to no rotation. The end-to-end
+tests check, every frame, that the globe's "up" still points up.
 
-- **What turns and what does not.** The turn is the globe's own picture
-  turning. The bay of lights along the bottom and the targeting brackets are
-  the *apparatus* around the globe, so they stay put; the laser is the
-  exception, because it sweeps the city grid and the grid is what turns. That
-  is why `Orb.tsx` has a `.orb__spin` wrapper around the picture and the
-  laser, and a `.orb__push` wrapper around the whole orb.
-- **It sleeps.** The animation loop only runs while the globe is moving, so a
-  page that is sitting still is not burning a frame every 16 ms drawing
-  nothing.
+Everything is an underdamped spring, so a second poke adds to the first, and
+the loop sleeps the moment the globe settles. With reduced motion the wobble
+is a quarter as large; the shield still answers, because that is a response
+to something the person did.
 
-With `prefers-reduced-motion: reduce` the globe does not turn at all — not on
-the wheel and not on the click — but a click still gives a small push, because
-that is an answer to something the person did rather than motion the page
-decided on for itself.
+## The lens
+
+`src/lib/orbCompositor.ts` redraws the scenes — the same `<img>` and `<video>`
+elements, used as textures — through WebGL, so they read as photographed:
+
+- crossings between scenes are mixed **in linear light**, so two scenes do not
+  sag into a darker, muddy middle;
+- a crossing is a **focus pull**: the lens drifts out of focus and back as an
+  uneven front brings the new scene in, centre first (2.6 s,
+  `TRANSITION_MS`). Two different shots never line up; this is how film
+  hides it;
+- **bloom** on the neon and the lit glass, rolled off with a soft shoulder;
+- **dispersion** toward the glass rim, a **reflection** that holds still while
+  the globe tips under it, and very fine **grain**.
+
+It draws only when something changed — a new film frame (counted with
+`requestVideoFrameCallback`, so films upload at their own 24 fps), a crossing,
+a wobble or the colour drift — so a still scene costs nothing. Without WebGL2
+the elements underneath show, crossfaded by the stylesheet, as before.
+
+`docs/orb-realism.md` is the longer look at what else would make the city
+read as real, and what each step would cost.
 
 ## Working on it
 
@@ -197,6 +227,7 @@ decided on for itself.
     npm run dev        # http://127.0.0.1:5180
     npm run build      # -> dist/
     npm run typecheck
+    npm run test:e2e   # Playwright, against the dev server
 
 The static check proves the build is internally consistent; the browser check
 drives a real browser against a real build and proves the page behaves:
