@@ -244,7 +244,12 @@ and a centred five-frame average, wrapped for the looping film).
 
 It runs after the media pipeline and needs torch and transformers; the check
 needs neither, and fails if the shipped media has changed since the depth was
-made:
+made. `npm run build` runs the check, so a build never ships a film whose
+depth was made from a different film. The packed films are build artifacts
+and are not committed (like `public/video/`); the depth stills,
+`depth-hashes.json` and `src/media/depth.ts` are. A machine that builds the
+site needs the packed films present, which means running the depth script
+there once (the model is ~99 MB, fetched into the Hugging Face cache):
 
     python3 scripts/build-redteam-depth.py           # with torch + transformers
     python3 scripts/build-redteam-depth.py --check
