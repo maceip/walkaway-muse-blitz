@@ -247,10 +247,12 @@ test.describe('with reduced motion', () => {
 });
 
 /** Share of pixels in a region that changed by more than `threshold` levels. */
+type Shot = Awaited<ReturnType<Page['screenshot']>>;
+
 async function changedShare(
   page: Page,
-  a: Buffer,
-  b: Buffer,
+  a: Shot,
+  b: Shot,
   threshold: number,
 ): Promise<number> {
   return page.evaluate(
@@ -303,7 +305,8 @@ test.describe('depth', () => {
     });
     await page.waitForTimeout(600);
     const box = await orbBox(page);
-    const clip = { x: box.cx - box.width * 0.3, y: box.cy - box.height * 0.3, width: box.width * 0.6, height: box.height * 0.6 };
+    // the middle of the city, clear of the rim where the held shield glows
+    const clip = { x: box.cx - box.width * 0.2, y: box.cy - box.height * 0.2, width: box.width * 0.4, height: box.height * 0.4 };
     const rest = await page.screenshot({ clip });
 
     await page.mouse.move(box.cx, box.cy);
