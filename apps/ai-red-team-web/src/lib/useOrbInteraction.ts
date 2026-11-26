@@ -33,7 +33,7 @@ const TILT_KICK = 240;
 const JELLY_STIFFNESS = 260;
 const JELLY_DAMPING = 4.4;
 const JELLY_KICK = 1.25;
-const JELLY_MAX = 0.06;
+const JELLY_MAX = 0.05;
 /** The shove: the globe nudged away from where it was touched. */
 const PUSH_STIFFNESS = 160;
 const PUSH_DAMPING = 9;
@@ -52,7 +52,7 @@ const DRAG_LEAN = 0.12;
 /** The longest step the springs take at once, so a long frame cannot throw it. */
 const MAX_STEP = 0.05;
 /** How long a shield impact ripple lives, in ms (matches styles.css). */
-export const IMPACT_MS = 1100;
+export const IMPACT_MS = 1300;
 
 export interface Motion {
   /** tip about the horizontal axis, degrees (positive: top tips away) */
