@@ -20,6 +20,10 @@ export interface Scene {
   width: number;
   height: number;
   durationMs: number;
+  /** A transition is entered only from these scenes, and always from them. */
+  after: string[];
+  /** The scene a transition ends on, which always comes next; null to drift. */
+  then: string | null;
 }
 
 export const DEFAULT_SCENE_ID = "city-globe-spin";
@@ -38,6 +42,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 15667,
+    after: [],
+    then: null,
   },
   {
     id: "globe-day",
@@ -52,6 +58,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 8000,
+    after: [],
+    then: null,
   },
   {
     id: "globe-dusk",
@@ -66,6 +74,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 8000,
+    after: [],
+    then: null,
   },
   {
     id: "city-globe-night",
@@ -80,6 +90,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 8000,
+    after: [],
+    then: null,
   },
   {
     id: "city-spiral",
@@ -94,6 +106,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 8000,
+    after: [],
+    then: null,
   },
   {
     id: "city-alert",
@@ -108,6 +122,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 9000,
+    after: [],
+    then: null,
   },
   {
     id: "city-storm",
@@ -122,6 +138,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 15625,
+    after: [],
+    then: null,
   },
   {
     id: "city-dive",
@@ -136,6 +154,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 38750,
+    after: [],
+    then: null,
   },
   {
     id: "city-edge",
@@ -150,6 +170,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 38750,
+    after: [],
+    then: null,
   },
   {
     id: "city-zoom",
@@ -164,6 +186,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 38750,
+    after: [],
+    then: null,
   },
   {
     id: "city-sealevel",
@@ -178,6 +202,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 27625,
+    after: [],
+    then: null,
   },
   {
     id: "city-scan",
@@ -192,6 +218,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 20500,
+    after: [],
+    then: null,
   },
   {
     id: "city-globe-scan",
@@ -206,6 +234,8 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 20458,
+    after: [],
+    then: null,
   },
   {
     id: "city-redteam",
@@ -220,6 +250,40 @@ export const SCENES: Scene[] = [
     width: 1024,
     height: 1024,
     durationMs: 20500,
+    after: [],
+    then: null,
+  },
+  {
+    id: "globe-nightfall",
+    kind: "video",
+    label: "Nightfall, garden city",
+    alt: "The daylight city inside the glass sphere going into night: the sky behind the glass darkens through sunset, and the lights of the towers, the dome and the marina come on one by one.",
+    src: "/video/globe-nightfall.mp4",
+    poster: "/media/scenes/globe-nightfall.png",
+    posterWebp: "/media/scenes/globe-nightfall.webp",
+    loop: false,
+    alert: false,
+    width: 1024,
+    height: 1024,
+    durationMs: 8000,
+    after: ["globe-day"],
+    then: "globe-dusk",
+  },
+  {
+    id: "city-nightfall",
+    kind: "video",
+    label: "Nightfall, grey city",
+    alt: "The grey city inside the glass sphere going into night as the camera drifts in: the sky turns violet and then dark, and the towers light up amber and cyan around glowing blue pools.",
+    src: "/video/city-nightfall.mp4",
+    poster: "/media/scenes/city-nightfall.png",
+    posterWebp: "/media/scenes/city-nightfall.webp",
+    loop: false,
+    alert: false,
+    width: 1024,
+    height: 1024,
+    durationMs: 8000,
+    after: ["city-globe-spin"],
+    then: "city-globe-night",
   },
 ];
 

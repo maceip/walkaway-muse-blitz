@@ -46,7 +46,7 @@ import { TILT_MAX } from './useOrbInteraction';
  */
 
 /** How long a crossing takes, in ms. useScene keeps the old scene this long. */
-export const TRANSITION_MS = 2600;
+export const TRANSITION_MS = 3200;
 
 const SCENE_FS = /* glsl */ `#version 300 es
 precision highp float;
@@ -63,6 +63,7 @@ uniform float u_aAlert;   // how much alert light each scene is under, 0 to 1
 uniform float u_bAlert;
 uniform float u_time;
 uniform float u_still;    // 1 with reduced motion: no zoom, no focus pull
+uniform float u_matched;  // 1 going into a transition from the picture it opens on
 uniform vec2 u_parallax;  // how far the nearest surface slides, from the wobble
 uniform mat3 u_hue;
 uniform float u_lift;
@@ -185,13 +186,16 @@ void main() {
   float t = clamp(u_t, 0.0, 1.0);
   float bell = sin(3.14159265 * t);
   float motion = 1.0 - u_still;
+  // a transition opens on the very picture the page is showing: there is
+  // nothing to hide, so no focus pull and no settling of the camera
+  float camera = motion * (1.0 - u_matched);
 
   // the arriving scene settles as it comes in, the outgoing one drifts on
-  float sa = 1.0 + 0.03 * (1.0 - p) * motion;
-  float sb = 1.0 + 0.03 * p * motion;
+  float sa = 1.0 + 0.03 * (1.0 - p) * camera;
+  float sb = 1.0 + 0.03 * p * camera;
   vec2 ua = 0.5 + (uv - 0.5) / sa;
   vec2 ub = 0.5 + (uv - 0.5) / sb;
-  float blur = 0.0042 * bell * motion;
+  float blur = 0.0042 * bell * camera;
   float focus = mix(0.3, 0.75, p);
 
   // the parallax fades out toward the glass, which is the shell and does
@@ -342,6 +346,8 @@ interface Slot {
   mode: number;
   /** 1 when the scene is lit by the alert light */
   alert: number;
+  /** the scenes this one is a transition from */
+  after: string[];
 }
 
 /**
@@ -469,6 +475,7 @@ export function startOrbCompositor(
     depthKey: '',
     mode: 0,
     alert: 0,
+    after: [],
   });
 
   // depth pictures, fetched once each and kept
@@ -597,6 +604,7 @@ export function startOrbCompositor(
       current.key = '';
       current.mode = 0;
       current.alert = currentLayer?.getAttribute('data-alert') === '1' ? 1 : 0;
+      current.after = (currentLayer?.getAttribute('data-after') ?? '').split(' ').filter(Boolean);
       transitionStart = -1;
       canvas.dataset.transition = 'pending';
     }
@@ -701,6 +709,8 @@ export function startOrbCompositor(
     gl.uniform1f(scene.uniform('u_bAlert'), Math.max(outgoing.alert, drillLight));
     gl.uniform1f(scene.uniform('u_time'), now / 1000);
     gl.uniform1f(scene.uniform('u_still'), options.reducedMotion ? 1 : 0);
+    const matched = current.ready && outgoing.sceneId !== null && current.after.includes(outgoing.sceneId);
+    gl.uniform1f(scene.uniform('u_matched'), matched ? 1 : 0);
     gl.uniformMatrix3fv(scene.uniform('u_hue'), true, hueMatrix(shift));
     gl.uniform1f(scene.uniform('u_lift'), lift);
     gl.uniform1f(scene.uniform('u_encode'), float ? 0 : 1);

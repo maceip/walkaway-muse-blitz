@@ -74,6 +74,7 @@ function SceneLayer({
       data-depth={depth?.still}
       data-packed={packed ? '1' : undefined}
       data-alert={scene.alert ? '1' : undefined}
+      data-after={scene.after.length ? scene.after.join(' ') : undefined}
     >
       <picture className="orb__picture">
         <source srcSet={scene.posterWebp} type="image/webp" />

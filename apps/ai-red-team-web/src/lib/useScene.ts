@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { DEFAULT_SCENE_ID, SCENE_BY_ID, SCENES, type Scene } from '../media/scenes';
 import { TRANSITION_MS } from './orbCompositor';
+import { nextScene } from './sequence';
 
 /**
  * How long the scene being crossed away from stays on the page.
@@ -75,21 +76,6 @@ function sceneFromLocation(): { scene: Scene; pinned: boolean } {
 }
 
 /**
- * The next scene, chosen at random out of the ones that are not this one.
- *
- * The page is not a showreel with a running order: it drifts from one thing
- * to another, and it does not come round the same way twice. The one thing
- * it will not do is show the same scene twice in a row, which would read as
- * a hitch rather than a drift.
- */
-function nextScene(current: Scene): Scene {
-  const list = cycleScenes();
-  const others = list.filter((scene) => scene.id !== current.id);
-  const pool = others.length ? others : list;
-  return pool[Math.floor(Math.random() * pool.length)];
-}
-
-/**
  * Which scene the page shows, and when it moves on.
  *
  * The scenes are the ones the media pipeline built: the city-globe in any of
@@ -113,7 +99,7 @@ export function useScene(): SceneState {
     setState((s) => {
       if (s.pinned) return s;
       return {
-        current: nextScene(s.current),
+        current: nextScene(s.current, cycleScenes()),
         previous: s.current,
         pinned: false,
       };
