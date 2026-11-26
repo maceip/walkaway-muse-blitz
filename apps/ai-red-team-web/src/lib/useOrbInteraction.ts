@@ -4,9 +4,16 @@ import { useCallback, useEffect, useRef } from 'react';
  * The orb under the hand.
  *
  * A click, a tap, a drag or a turn of the wheel never spins the globe. It
- * wobbles: the globe tips a little in depth, squashes, springs back and rings
- * down, and its energy shield flares where it was touched. The city inside
- * always stays the right way up.
+ * wobbles: the globe tips a little in depth, springs back and rings down, and
+ * its energy shield flares where it was touched. The city inside always
+ * stays the right way up.
+ *
+ * **Why a click is small.** The globe is a glass ball with a city in it. A
+ * big tip foreshortens its round outline into an ellipse, and a squash or a
+ * flex bends the city like a picture on a sheet of rubber: both give away
+ * that the city is flat. So a click tips it a few degrees, nudges it a few
+ * pixels and barely flexes it, and the shield's flare carries the hit. A
+ * drag can still lean it further, because there the hand is holding it.
  *
  * **Why it can never go upside down.** Nothing here rotates the globe in the
  * plane of the screen. The only rotations are a tip toward and away from the
@@ -27,22 +34,30 @@ export const TILT_MAX = 14;
 /** Tip spring: ~1.5 Hz with a damping ratio near 0.3 — a few visible wobbles. */
 const TILT_STIFFNESS = 90;
 const TILT_DAMPING = 5.6;
-/** Degrees per second of tip a poke at the very edge gives. */
-const TILT_KICK = 240;
+/**
+ * Degrees per second of tip a poke at the very edge gives: about 4° at the
+ * peak of the first swing, well short of TILT_MAX.
+ */
+const TILT_KICK = 60;
 /** The jelly: the globe flexing along the line of the impact. */
 const JELLY_STIFFNESS = 260;
 const JELLY_DAMPING = 4.4;
-const JELLY_KICK = 1.25;
+/** A poke's flex: well under 1%, a shiver rather than a bend. */
+const JELLY_KICK = 0.15;
+/** The flex when a drag is let go. */
+const JELLY_RELEASE_KICK = 0.75;
 const JELLY_MAX = 0.05;
 /** The shove: the globe nudged away from where it was touched. */
 const PUSH_STIFFNESS = 160;
 const PUSH_DAMPING = 9;
-const PUSH_KICK = 230;
+/** A poke at the very edge shoves the globe about 3.5 px. */
+const PUSH_KICK = 70;
 const PUSH_MAX = 26;
 /** The squash: the globe pressed in by a poke, springing back out. */
 const SQUASH_STIFFNESS = 220;
 const SQUASH_DAMPING = 12;
-const SQUASH_KICK = 0.9;
+/** A poke presses the globe in by under 1%. */
+const SQUASH_KICK = 0.2;
 /** The shield's flare decays with this time constant, in seconds. */
 const SHIELD_DECAY = 0.42;
 /** How much a drag tips the globe, degrees per pixel. */
@@ -330,7 +345,7 @@ export function useOrbInteraction(): OrbInteraction {
       if (wasDragged) {
         // let go: it springs home and rings down, with a little flare
         m.jellyAxis = Math.atan2(m.py, m.px || 0.0001);
-        m.jellyV += JELLY_KICK * 0.6;
+        m.jellyV += JELLY_RELEASE_KICK;
         m.shield = Math.min(1.25, m.shield + 0.35);
       }
       wake();

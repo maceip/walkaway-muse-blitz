@@ -13,6 +13,9 @@ interface Sample {
   tiltX: number;
   tiltY: number;
   pushX: number;
+  /** the flex and the squash as scale factors, 1 at rest */
+  jelly: number;
+  squash: number;
   shield: number;
   /** where the orb's "up" points after its transform: y < 0 is up */
   upX: number;
@@ -28,7 +31,10 @@ async function sampleOrb(page: Page, ms: number): Promise<Sample[]> {
         const push = document.querySelector<HTMLElement>('.orb__push')!;
         const out: Sample[] = [];
         const start = performance.now();
-        const num = (name: string) => parseFloat(push.style.getPropertyValue(name)) || 0;
+        const num = (name: string, rest = 0) => {
+          const v = parseFloat(push.style.getPropertyValue(name));
+          return Number.isFinite(v) ? v : rest;
+        };
         const frame = (now: number) => {
           const m = new DOMMatrix(getComputedStyle(push).transform);
           const o = m.transformPoint(new DOMPoint(0, 0, 0, 1));
@@ -38,6 +44,8 @@ async function sampleOrb(page: Page, ms: number): Promise<Sample[]> {
             tiltX: num('--tilt-x'),
             tiltY: num('--tilt-y'),
             pushX: num('--push-x'),
+            jelly: num('--jelly-a', 1),
+            squash: num('--squash', 1),
             shield: num('--shield'),
             upX: u.x / u.w - o.x / o.w,
             upY: u.y / u.w - o.y / o.w,
@@ -50,6 +58,18 @@ async function sampleOrb(page: Page, ms: number): Promise<Sample[]> {
       }),
     ms,
   );
+}
+
+/**
+ * A click is a small hit: a few degrees of tip, a few pixels of shove and
+ * almost no flex. Anything bigger makes the city read as a flat picture.
+ */
+function expectSmallHit(samples: Sample[]) {
+  expect(Math.max(...samples.map((s) => Math.abs(s.tiltX)))).toBeLessThan(5.5);
+  expect(Math.max(...samples.map((s) => Math.abs(s.tiltY)))).toBeLessThan(5.5);
+  expect(Math.max(...samples.map((s) => Math.abs(s.pushX)))).toBeLessThan(6);
+  expect(Math.max(...samples.map((s) => Math.abs(1 - s.jelly)))).toBeLessThan(0.015);
+  expect(Math.max(...samples.map((s) => Math.abs(1 - s.squash)))).toBeLessThan(0.015);
 }
 
 function expectUpright(samples: Sample[]) {
@@ -127,7 +147,7 @@ test('the globe is drawn through the WebGL lens', async ({ page }) => {
   expect(stats.mean).toBeGreaterThan(20);
 });
 
-test('a click wobbles the orb, flares the shield, and never turns it over', async ({ page }) => {
+test('a click wobbles the orb a little, flares the shield, and never turns it over', async ({ page }) => {
   const box = await orbBox(page);
   const before = await sampleOrb(page, 50);
   expect(before.at(-1)!.shield).toBeLessThan(0.02);
@@ -135,16 +155,17 @@ test('a click wobbles the orb, flares the shield, and never turns it over', asyn
   await page.mouse.click(box.cx + box.width * 0.35, box.cy - box.height * 0.1);
   const samples = await sampleOrb(page, 1500);
   expectUpright(samples);
+  expectSmallHit(samples);
 
   // the shield flares and a ripple starts at the point of contact
   expect(Math.max(...samples.map((s) => s.shield))).toBeGreaterThan(0.5);
   expect(samples[0].impacts).toBeGreaterThanOrEqual(1);
   // the touched (right) side tips away, then the globe rocks back past zero
   const tiltY = samples.map((s) => s.tiltY);
-  expect(Math.max(...tiltY)).toBeGreaterThan(3);
+  expect(Math.max(...tiltY)).toBeGreaterThan(1.5);
   expect(Math.min(...tiltY)).toBeLessThan(0);
   // it is nudged away from the touch: to the left
-  expect(Math.min(...samples.map((s) => s.pushX))).toBeLessThan(-2);
+  expect(Math.min(...samples.map((s) => s.pushX))).toBeLessThan(-1);
 
   // and it settles: shield out, tilt home, ripple gone
   await page.waitForTimeout(1500);
@@ -225,8 +246,9 @@ test.describe('on a touch screen', () => {
     await page.touchscreen.tap(box.cx - box.width * 0.3, box.cy + box.height * 0.2);
     const samples = await sampleOrb(page, 1000);
     expectUpright(samples);
+    expectSmallHit(samples);
     expect(Math.max(...samples.map((s) => s.shield))).toBeGreaterThan(0.5);
-    expect(Math.max(...samples.map((s) => Math.abs(s.tiltY)))).toBeGreaterThan(3);
+    expect(Math.max(...samples.map((s) => Math.abs(s.tiltY)))).toBeGreaterThan(1);
     await expect(page.locator('canvas.universe')).toHaveAttribute('data-renderer', 'webgl2');
   });
 });
@@ -241,7 +263,7 @@ test.describe('with reduced motion', () => {
     const samples = await sampleOrb(page, 1000);
     expectUpright(samples);
     expect(Math.max(...samples.map((s) => s.shield))).toBeGreaterThan(0.5);
-    expect(Math.max(...samples.map((s) => Math.abs(s.tiltY)))).toBeLessThan(6);
+    expect(Math.max(...samples.map((s) => Math.abs(s.tiltY)))).toBeLessThan(1.5);
   });
 });
 
