@@ -108,15 +108,15 @@ export function useScene(): SceneState {
 
   // move on when this scene has had its time. A film that does not loop says
   // when it has finished and the page moves on then; the timer is only the
-  // backstop for a film that never gets to say.
+  // backstop for a film that never gets to say. A picture says nothing, so
+  // its timer is its time: eight seconds, not eight plus the film's backstop.
+  const waitsForEnd = state.current.kind === 'video' && !state.current.loop;
   useEffect(() => {
     if (state.pinned) return;
-    const wait = state.current.loop
-      ? state.current.durationMs
-      : state.current.durationMs + 5000;
+    const wait = waitsForEnd ? state.current.durationMs + 5000 : state.current.durationMs;
     const timer = window.setTimeout(advance, wait);
     return () => window.clearTimeout(timer);
-  }, [state.current.id, state.current.loop, state.current.durationMs, state.pinned, advance]);
+  }, [state.current.id, waitsForEnd, state.current.durationMs, state.pinned, advance]);
 
   // and let the scene that was crossed away from go once the crossing is over
   useEffect(() => {

@@ -218,11 +218,13 @@ void main() {
     float r = length(uv - 0.5) * 2.0;
     float order = clamp(0.5 + n * 1.2 + (r - 0.5) * 0.4, 0.0, 1.0);
     // the turns start spread over the first 40% of the crossing, and each
-    // takes the remaining 60% (about 1.6 s), so the whole globe is changing
+    // takes the remaining 60% (about 1.9 s), so the whole globe is changing
     // for the whole crossing and no moment carries much of it
     float spread = 0.4 * motion;
     float u = clamp((t - order * spread) / (1.0 - spread), 0.0, 1.0);
-    float m = u * u * (3.0 - 2.0 * u);
+    // half a plain fade, half eased: each point eases in and out of its turn
+    // without the steep middle a full smoothstep has
+    float m = 0.5 * (u + u * u * (3.0 - 2.0 * u));
     col = max(fromOklab(mix(toOklab(b), toOklab(a), m)), 0.0);
   }
   if (u_encode > 0.5) col = pow(col, vec3(1.0 / 2.2));
@@ -410,13 +412,28 @@ function filmKey(video: HTMLVideoElement): string {
 }
 
 /**
- * Which element to draw a scene layer from: the film once it has a frame,
- * otherwise the picture once it has loaded, otherwise nothing yet.
+ * How long a crossing into a film waits for the film's first frame before it
+ * starts on the film's poster instead.
+ *
+ * The poster is the film's first frame, but as a lossless picture, and the
+ * film is a compressed one: a little softer. A crossing that started on the
+ * poster and switched to the film when it arrived softened the city in one
+ * frame, part way through. Waiting for the film — usually a fraction of a
+ * second, while the scene being left is still on the globe — means the
+ * crossing goes straight to the film.
  */
-function sourceOf(layer: Element | null): HTMLImageElement | HTMLVideoElement | null {
+const FILM_WAIT_MS = 1500;
+
+/**
+ * Which element to draw a scene layer from: the film once it has a frame,
+ * otherwise the picture once it has loaded (if `poster` allows it), otherwise
+ * nothing yet.
+ */
+function sourceOf(layer: Element | null, poster = true): HTMLImageElement | HTMLVideoElement | null {
   if (!layer) return null;
   const video = layer.querySelector('video');
   if (video && video.readyState >= 2 && video.videoWidth > 0) return video;
+  if (video && !poster) return null;
   const img = layer.querySelector('img');
   if (img && img.complete && img.naturalWidth > 0) return img;
   return null;
@@ -568,6 +585,8 @@ export function startOrbCompositor(
   };
 
   let transitionStart = -1;
+  /** when the scene now arriving first appeared on the page */
+  let arrivedAt = 0;
   let shownScene = '';
   let lastShift = NaN;
   let lastLift = NaN;
@@ -606,6 +625,7 @@ export function startOrbCompositor(
       current.alert = currentLayer?.getAttribute('data-alert') === '1' ? 1 : 0;
       current.after = (currentLayer?.getAttribute('data-after') ?? '').split(' ').filter(Boolean);
       transitionStart = -1;
+      arrivedAt = now;
       canvas.dataset.transition = 'pending';
     }
 
@@ -616,7 +636,10 @@ export function startOrbCompositor(
       changed = upload(outgoing, sourceOf(previousLayer)) || changed;
     }
     const wasReady = current.ready;
-    changed = upload(current, sourceOf(currentLayer)) || changed;
+    // with nothing on the globe yet the poster is better than nothing; with a
+    // scene showing, a film is waited for (up to FILM_WAIT_MS)
+    const posterOk = !outgoing.ready || now - arrivedAt > FILM_WAIT_MS;
+    changed = upload(current, sourceOf(currentLayer, posterOk)) || changed;
     changed = updateDepth(current, currentLayer) || changed;
     if (previousLayer?.getAttribute('data-scene-id') === outgoing.sceneId) {
       changed = updateDepth(outgoing, previousLayer) || changed;

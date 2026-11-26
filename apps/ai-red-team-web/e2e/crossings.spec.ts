@@ -13,9 +13,9 @@ import { TRANSITION_MS } from '../src/lib/orbCompositor';
  *
  * A crossing is smooth when the change is spread over its time instead of
  * bunched into a moment: from 10% to 90% of the way it takes well over a
- * second, and no tenth of a second carries more than a tenth of it. The
- * crossing this replaced packed most of the change into about 0.6 s, with
- * steps of 13–18% of the whole.
+ * second and a half, and no tenth of a second carries more than 9% of it
+ * (they measure about 1.7 s and 6–7%). The crossing this replaced packed
+ * most of the change into 0.6–1.0 s, with steps of 13–18% of the whole.
  */
 
 const STEP_MS = 100;
@@ -81,16 +81,17 @@ async function advanceTo(page: Page, to: string) {
     w.__random ??= Math.random;
     Math.random = () => r;
   }, draw);
-  // a film plays to its end and says so; a still waits out its time
-  const film = await page.evaluate(() => {
+  // a film plays to its end and says so; a still waits out its time, which
+  // is stepped through rather than jumped over: the page's slow colour drift
+  // runs on the same clock, and a jump of a minute would jump the drift too
+  await page.evaluate(() => {
     const v = document.querySelector<HTMLVideoElement>('[data-role="current"] video');
-    if (v && !v.loop && v.duration) {
-      v.currentTime = Math.max(0, v.duration - 0.06);
-      return true;
-    }
-    return false;
+    if (v && !v.loop && v.duration) v.currentTime = Math.max(0, v.duration - 0.06);
   });
-  if (!film) await page.clock.fastForward(60_000);
+  for (let i = 0; i < 120 && (await currentScene(page)) !== to; i += 1) {
+    await page.clock.runFor(200);
+    await page.waitForTimeout(5);
+  }
   await expect.poll(() => currentScene(page), { timeout: 20_000 }).toBe(to);
   await page.evaluate(() => {
     const w = window as unknown as { __random?: () => number };
@@ -102,7 +103,9 @@ async function openPage(page: Page) {
   await page.clock.install({ time: new Date('2026-11-26T12:00:00Z') });
   // far from any drill, so the clock's phases stay out of the measurement
   await page.goto('/?t=-1000000');
-  await page.addStyleTag({ content: '.orb{animation:none!important}' });
+  // the float and the alert's laser sweep run on the stylesheet's own clock,
+  // not the page's, and neither is part of a crossing
+  await page.addStyleTag({ content: '.orb{animation:none!important}.orb__scan{display:none!important}' });
   await expect(page.locator('.orb.is-lens')).toBeVisible();
   await expect(page.locator('.orb__lens')).toHaveAttribute('data-scene', /.+/, { timeout: 15_000 });
   await page.clock.pauseAt(new Date('2026-11-26T12:00:05Z'));
@@ -242,8 +245,14 @@ test.describe('crossings', () => {
     await page.clock.runFor(600);
     await advanceTo(page, transition!.id);
     const c = await measureCrossing(page);
-    // the film opens on the picture the page is already showing: no focus
-    // pull, no change of scale, only the faintest settling of the two
-    expect(c.peak).toBeLessThan(10);
+    // The film opens on the picture the page is already showing. What is left
+    // to cross is the film being a little softer than the still, and it is
+    // crossed as gently as anything else; there is no focus pull, which would
+    // carry the picture further from where it started than where it ends.
+    let largest = 0;
+    for (let i = 1; i < c.progress.length; i += 1) largest = Math.max(largest, c.progress[i] - c.progress[i - 1]);
+    expect(c.total).toBeLessThan(30);
+    expect(c.peak).toBeLessThanOrEqual(c.total * 1.05 + 0.5);
+    expect(largest).toBeLessThanOrEqual(0.09);
   });
 });
