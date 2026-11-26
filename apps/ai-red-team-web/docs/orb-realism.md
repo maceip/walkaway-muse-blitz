@@ -19,9 +19,12 @@ it, and what else would help, roughly in order of payoff for the work.
 
 ## Done in this change (`src/lib/orbCompositor.ts`)
 
-- Crossings mixed in linear light, not on sRGB values (no muddy middle).
 - Crossings as a focus pull: defocus, an uneven centre-first front, a slight
   settle in scale — the way film hides two shots that do not match.
+- Later: crossings spread over their whole 3.2 s and mixed in OKLab. The first
+  version mixed in linear light through three stacked easings, which packed
+  most of the change into about 0.6 s; a bright scene also swamped a dark one
+  until the very end. The alert's red light now crosses with its scene.
 - Bloom on the neon and the glass, with a soft shoulder instead of clipping.
 - Dispersion toward the rim of the glass, a reflection that holds still while
   the globe tips, fine grain.
@@ -43,7 +46,11 @@ is not in the sources.
    thresholds sit on real light levels and the orb is sharp at 2× on large
    screens. Cost: about four times the media weight; films would want HEVC
    or AV1 to stay reasonable.
-3. **Matched cuts instead of crossfades.** Author the cycle so each film ends
+3. **Matched cuts instead of crossfades — begun.** The owner's two nightfall
+   time-lapses are transitions: each opens on a scene's own picture and ends
+   near another's, and the page goes into and out of them in that order, so
+   day turns into night continuously. Still open: transitions for the other
+   scenes. Author the cycle so each film ends
    on the frame the next begins with (the pipeline already uses each film's
    first frame as its poster), and fill the gaps with short generated
    bridging clips, or with an optical-flow morph computed offline between the

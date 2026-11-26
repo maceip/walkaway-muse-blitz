@@ -13,25 +13,34 @@ Both hostnames serve the same page — they are peers, not a redirect pair.
 A city is held inside a glass globe at the centre of the frame, with drifting
 outspace behind it and a red team exercise every four minutes.
 
-**The globe drifts through fourteen scenes, on its own.** Four are pictures of
+**The globe drifts through sixteen scenes, on its own.** Four are pictures of
 the city in the different lights it was drawn in — the daylight sphere, the
 dusk sphere, the night city, the spiral city — five are camera moves that take
 the camera down into the city and back out, one is a storm rolling over the
 city, one is the red alert state with the laser sweeping the grid, and three
-are the scanning clips. The order is drawn at random, so the page does not come
-round the same way twice.
+are the scanning clips.
+
+The last two are **transitions**: time-lapses of nightfall, each opening on
+one of the scenes and carrying that same city into night as its lights come
+on. One opens on the daylight sphere and arrives at the dusk sphere; the other
+opens on the grey city and arrives at the night city. The page goes into a
+transition from the scene it opens on — always, and from nowhere else — and on
+to the scene it ends on (`after` and `then` in `videos/scenes.json`; the rule
+is `src/lib/sequence.ts`). Between the other scenes the order is drawn at
+random, so the page does not come round the same way twice.
 
 Every film runs at a third of the speed it was delivered at — the camera was
 flying, and a globe that is drifting is the point. The three scanning clips are
-already smooth and slow, so they are slowed a half speed rather than a third.
+already smooth and slow, so they are slowed a half speed rather than a third,
+and the two nightfall time-lapses play at the speed they were made.
 A picture is held for eight
 seconds, the alert for nine, and a film for its own length — the film says
 when it has finished, so the page never crosses away from one that has not.
 
-The crossing itself is a real crossfade over 2.2 seconds, with the arriving
-scene settling as it comes in and the one being left drifting away as it goes.
-Every scene is built at the same size with the globe in the same place, which
-is what keeps the globe from jumping at the crossing.
+The crossing itself takes 3.2 seconds, and the change of light is spread over
+all of it rather than bunched into a moment (see the lens, below). Every scene
+is built at the same size with the globe in the same place, which is what
+keeps the globe from jumping at the crossing.
 
     ?scene=<id>     open one scene and stay there (globe-day, city-dive, ...)
 
@@ -204,12 +213,22 @@ to something the person did.
 `src/lib/orbCompositor.ts` redraws the scenes — the same `<img>` and `<video>`
 elements, used as textures — through WebGL, so they read as photographed:
 
-- crossings between scenes are mixed **in linear light**, so two scenes do not
-  sag into a darker, muddy middle;
-- a crossing is a **focus pull**: the lens drifts out of focus and back as an
-  uneven front brings the new scene in, centre first (2.6 s,
-  `TRANSITION_MS`). Two different shots never line up; this is how film
-  hides it;
+- a crossing **takes its whole time** (3.2 s, `TRANSITION_MS`): the new light
+  arrives through a broad, soft front, the middle a little before the rim,
+  and each point of the globe turns over in about two seconds, so no tenth of
+  a second carries more than a few per cent of the change. The two scenes
+  are mixed **in OKLab**, where equal steps look equal, so a bright scene
+  does not swamp a dark one and then give way all at once.
+  `e2e/crossings.spec.ts` photographs crossings a tenth of a second at a time
+  and holds them to that;
+- the **alert light belongs to its scene**: the alert's red is graded into
+  the alert scene in the lens, so it crosses in and out with the city it
+  lights; the drill's red light and the clock's colour drift are eased the
+  same way, so the city never snaps to a new colour;
+- a crossing is a **focus pull**: the lens drifts out of focus and back as the
+  new scene comes in. Two different shots never line up; this is how film
+  hides it. Going into a transition from the picture it opens on, there is
+  nothing to hide, so there is no focus pull at all;
 - **bloom** on the neon and the lit glass, rolled off with a soft shoulder;
 - **dispersion** toward the glass rim, a **reflection** that holds still while
   the globe tips under it, and very fine **grain**.
